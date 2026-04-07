@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>teb — Task Execution Bridge</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <div id="app">
+    <!-- Landing screen -->
+    <section id="screen-landing" class="screen active">
+      <header class="hero">
+        <h1>teb</h1>
+        <p class="tagline">Turn your vague goals into focused, actionable tasks.</p>
+      </header>
+      <div class="card">
+        <label for="goal-title">What do you want to achieve?</label>
+        <input id="goal-title" type="text" placeholder="e.g. earn money online, learn Python, get fit…" autocomplete="off" />
+        <label for="goal-desc" class="mt">A bit more detail (optional)</label>
+        <textarea id="goal-desc" rows="3" placeholder="Any context that might help narrow things down…"></textarea>
+        <button id="btn-create-goal" class="btn-primary">Get my action plan →</button>
+        <div class="error" id="error-landing"></div>
+      </div>
+      <div id="goal-list-section" class="mt">
+        <h3>Previous goals</h3>
+        <ul id="goal-list" class="goal-list"></ul>
+      </div>
+    </section>
+
+    <!-- Clarifying questions screen -->
+    <section id="screen-clarify" class="screen">
+      <div class="card">
+        <a class="back-link" id="back-from-clarify">← Back</a>
+        <h2 id="clarify-heading">Let's narrow this down</h2>
+        <p class="sub" id="clarify-goal-title"></p>
+        <div class="question-block">
+          <label id="clarify-question-text"></label>
+          <input id="clarify-answer" type="text" placeholder="" autocomplete="off" />
+        </div>
+        <button id="btn-clarify-next" class="btn-primary">Next →</button>
+        <button id="btn-skip-clarify" class="btn-secondary">Skip questions &amp; decompose now</button>
+        <div class="error" id="error-clarify"></div>
+      </div>
+    </section>
+
+    <!-- Tasks screen -->
+    <section id="screen-tasks" class="screen">
+      <div class="tasks-header">
+        <a class="back-link" id="back-from-tasks">← Back</a>
+        <h2 id="tasks-goal-title"></h2>
+        <div class="progress-bar-wrap">
+          <div class="progress-bar-bg">
+            <div class="progress-bar-fill" id="progress-fill"></div>
+          </div>
+          <span class="progress-label" id="progress-label">0% complete</span>
+        </div>
+      </div>
+      <div id="task-list" class="task-list"></div>
+      <button id="btn-redecompose" class="btn-secondary mt">↻ Re-generate tasks</button>
+      <div class="error" id="error-tasks"></div>
+    </section>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
