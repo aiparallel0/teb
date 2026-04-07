@@ -33,7 +33,7 @@ class Task:
     estimated_minutes: int = 30
     id: Optional[int] = None
     parent_id: Optional[int] = None
-    status: str = "todo"              # todo | in_progress | done | skipped
+    status: str = "todo"              # todo | in_progress | done | skipped | executing | failed
     order_index: int = 0
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
@@ -54,71 +54,48 @@ class Task:
 
 
 @dataclass
-class CheckIn:
-    """Daily check-in record for a goal."""
-    goal_id: int
-    done_summary: str               # What the user accomplished
-    blockers: str = ""               # What's blocking progress
-    mood: str = "neutral"            # positive | neutral | frustrated | stuck
+class ApiCredential:
+    """An external API registered by the user for automated task execution."""
+    name: str                          # human-readable name, e.g. "Namecheap", "Stripe"
+    base_url: str                      # e.g. "https://api.namecheap.com"
+    auth_header: str = "Authorization" # header name for auth
+    auth_value: str = ""               # the credential (Bearer token, API key, etc.)
+    description: str = ""              # what this API can do
     id: Optional[int] = None
     created_at: Optional[datetime] = None
 
     def to_dict(self) -> dict:
         return {
             "id": self.id,
-            "goal_id": self.goal_id,
-            "done_summary": self.done_summary,
-            "blockers": self.blockers,
-            "mood": self.mood,
+            "name": self.name,
+            "base_url": self.base_url,
+            "auth_header": self.auth_header,
+            "auth_value_set": bool(self.auth_value),  # never expose the raw secret
+            "description": self.description,
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }
 
 
 @dataclass
-class OutcomeMetric:
-    """Tracks measurable outcome for a goal (e.g. '$50 earned', '3 chapters read')."""
-    goal_id: int
-    label: str                       # e.g. "Revenue earned", "Chapters completed"
-    current_value: float = 0.0
-    target_value: float = 0.0
-    unit: str = ""                   # e.g. "$", "chapters", "kg"
+class ExecutionLog:
+    """A record of an automated action performed on behalf of the user."""
+    task_id: int
+    credential_id: Optional[int]       # which API credential was used (None for non-API actions)
+    action: str                        # short description of what was done
+    request_summary: str = ""          # summary of the outgoing request (no secrets)
+    response_summary: str = ""         # summary of the API response
+    status: str = "success"            # success | error
     id: Optional[int] = None
-    created_at: Optional[datetime] = None
-    updated_at: Optional[datetime] = None
-
-    def to_dict(self) -> dict:
-        pct = 0
-        if self.target_value > 0:
-            pct = min(100, round(self.current_value / self.target_value * 100))
-        return {
-            "id": self.id,
-            "goal_id": self.goal_id,
-            "label": self.label,
-            "current_value": self.current_value,
-            "target_value": self.target_value,
-            "unit": self.unit,
-            "achievement_pct": pct,
-            "created_at": self.created_at.isoformat() if self.created_at else None,
-            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
-        }
-
-
-@dataclass
-class NudgeEvent:
-    """System-generated nudge when stagnation is detected."""
-    goal_id: int
-    nudge_type: str                  # stagnation | reminder | encouragement | blocker_help
-    message: str
-    id: Optional[int] = None
-    acknowledged: bool = False
     created_at: Optional[datetime] = None
 
     def to_dict(self) -> dict:
         return {
             "id": self.id,
-            "goal_id": self.goal_id,
-            "nudge_type": self.nudge_type,
-            "message": self.message,
-            "acknowledged": self.acknowledged,
+            "task_id": self.task_id,
+            "credential_id": self.credential_id,
+            "action": self.action,
+            "request_summary": self.request_summary,
+            "response_summary": self.response_summary,
+            "status": self.status,
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }

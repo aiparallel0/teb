@@ -10,8 +10,8 @@ from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from teb import decomposer, storage
-from teb.models import CheckIn, Goal, NudgeEvent, OutcomeMetric, Task
+from teb import decomposer, executor, storage
+from teb.models import ApiCredential, ExecutionLog, Goal, Task
 
 
 # ─── Startup / lifespan ───────────────────────────────────────────────────────
@@ -58,21 +58,12 @@ class ClarifyAnswer(BaseModel):
     answer: str
 
 
-class CheckInCreate(BaseModel):
-    done_summary: str
-    blockers: str = ""
-
-
-class OutcomeMetricCreate(BaseModel):
-    label: str
-    target_value: float = 0.0
-    unit: str = ""
-
-
-class OutcomeMetricPatch(BaseModel):
-    current_value: Optional[float] = None
-    target_value: Optional[float] = None
-    label: Optional[str] = None
+class CredentialCreate(BaseModel):
+    name: str
+    base_url: str
+    auth_header: str = "Authorization"
+    auth_value: str = ""
+    description: str = ""
 
 
 # ─── Frontend ─────────────────────────────────────────────────────────────────
@@ -310,7 +301,7 @@ async def update_task(task_id: int, body: TaskPatch):
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
 
-    valid_statuses = {"todo", "in_progress", "done", "skipped"}
+    valid_statuses = {"todo", "in_progress", "done", "skipped", "executing", "failed"}
     if body.status is not None:
         if body.status not in valid_statuses:
             raise HTTPException(status_code=422, detail=f"status must be one of {valid_statuses}")
@@ -356,135 +347,110 @@ async def delete_task(task_id: int):
     return {"deleted": task_id}
 
 
-# ─── Daily Check-ins ──────────────────────────────────────────────────────────
+# ─── API Credentials ─────────────────────────────────────────────────────────
 
-@app.post("/api/goals/{goal_id}/checkin", status_code=201)
-async def create_checkin(goal_id: int, body: CheckInCreate):
-    goal = storage.get_goal(goal_id)
-    if not goal:
-        raise HTTPException(status_code=404, detail="Goal not found")
-    if not body.done_summary.strip() and not body.blockers.strip():
-        raise HTTPException(status_code=422, detail="Provide at least a summary or blockers")
-
-    # Analyze the check-in and detect mood
-    analysis = decomposer.analyze_checkin(body.done_summary, body.blockers)
-
-    ci = CheckIn(
-        goal_id=goal_id,
-        done_summary=body.done_summary.strip(),
-        blockers=body.blockers.strip(),
-        mood=analysis["mood_detected"],
+@app.post("/api/credentials", status_code=201)
+async def create_credential(body: CredentialCreate):
+    name = body.name.strip()
+    base_url = body.base_url.strip()
+    if not name:
+        raise HTTPException(status_code=422, detail="name must not be empty")
+    if not base_url:
+        raise HTTPException(status_code=422, detail="base_url must not be empty")
+    cred = ApiCredential(
+        name=name,
+        base_url=base_url,
+        auth_header=body.auth_header.strip() or "Authorization",
+        auth_value=body.auth_value,
+        description=body.description.strip(),
     )
-    ci = storage.create_checkin(ci)
+    cred = storage.create_credential(cred)
+    return cred.to_dict()
+
+
+@app.get("/api/credentials")
+async def list_credentials():
+    return [c.to_dict() for c in storage.list_credentials()]
+
+
+@app.delete("/api/credentials/{cred_id}", status_code=200)
+async def delete_credential(cred_id: int):
+    cred = storage.get_credential(cred_id)
+    if not cred:
+        raise HTTPException(status_code=404, detail="Credential not found")
+    storage.delete_credential(cred_id)
+    return {"deleted": cred_id}
+
+
+# ─── Task execution ──────────────────────────────────────────────────────────
+
+@app.post("/api/tasks/{task_id}/execute")
+async def execute_task(task_id: int):
+    """Ask teb to autonomously execute a task via registered APIs."""
+    task = storage.get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    if task.status in ("done", "skipped"):
+        raise HTTPException(status_code=409, detail="Task is already completed")
+
+    credentials = storage.list_credentials()
+
+    # Generate execution plan
+    plan = executor.generate_plan(task, credentials)
+
+    if not plan.can_execute:
+        return {
+            "task_id": task_id,
+            "executed": False,
+            "reason": plan.reason,
+            "plan": plan.to_dict(),
+            "logs": [],
+        }
+
+    # Mark task as executing
+    task.status = "executing"
+    storage.update_task(task)
+
+    # Execute the plan
+    creds_by_id = {c.id: c for c in credentials if c.id is not None}
+    results = executor.execute_plan(plan, creds_by_id)
+
+    # Log each step
+    logs: list[dict] = []
+    all_success = True
+    for result in results:
+        cred = creds_by_id.get(result.step.credential_id)
+        log = ExecutionLog(
+            task_id=task_id,
+            credential_id=result.step.credential_id,
+            action=result.step.description,
+            request_summary=executor.build_request_summary(result.step, cred),
+            response_summary=executor.build_response_summary(result),
+            status="success" if result.success else "error",
+        )
+        saved_log = storage.create_execution_log(log)
+        logs.append(saved_log.to_dict())
+        if not result.success:
+            all_success = False
+
+    # Update task status
+    task.status = "done" if all_success else "failed"
+    storage.update_task(task)
 
     return {
-        "checkin": ci.to_dict(),
-        "coaching": analysis["feedback"],
+        "task_id": task_id,
+        "executed": True,
+        "success": all_success,
+        "plan": plan.to_dict(),
+        "logs": logs,
     }
 
 
-@app.get("/api/goals/{goal_id}/checkins")
-async def list_checkins(goal_id: int, limit: int = Query(default=30)):
-    goal = storage.get_goal(goal_id)
-    if not goal:
-        raise HTTPException(status_code=404, detail="Goal not found")
-    return [ci.to_dict() for ci in storage.list_checkins(goal_id, limit=limit)]
-
-
-# ─── Active Nudges (stagnation detection) ─────────────────────────────────────
-
-@app.get("/api/goals/{goal_id}/nudge")
-async def get_nudge(goal_id: int):
-    """Check for stagnation and return an active nudge if needed."""
-    goal = storage.get_goal(goal_id)
-    if not goal:
-        raise HTTPException(status_code=404, detail="Goal not found")
-
-    tasks = storage.list_tasks(goal_id=goal_id)
-    last_ci = storage.get_last_checkin(goal_id)
-
-    last_checkin_age_hours: Optional[float] = None
-    if last_ci and last_ci.created_at:
-        from datetime import timezone as _tz
-        delta = datetime.now(_tz.utc) - last_ci.created_at
-        last_checkin_age_hours = delta.total_seconds() / 3600
-
-    nudge_data = decomposer.detect_stagnation(tasks, last_checkin_age_hours, goal.status)
-    if nudge_data is None:
-        # Also check for unacknowledged nudges
-        pending = storage.list_nudges(goal_id, unacknowledged_only=True)
-        if pending:
-            return {"nudge": pending[0].to_dict()}
-        return {"nudge": None, "message": "You're on track!"}
-
-    # Persist the nudge
-    ne = NudgeEvent(
-        goal_id=goal_id,
-        nudge_type=nudge_data["nudge_type"],
-        message=nudge_data["message"],
-    )
-    ne = storage.create_nudge(ne)
-    return {"nudge": ne.to_dict()}
-
-
-@app.post("/api/nudges/{nudge_id}/acknowledge")
-async def acknowledge_nudge(nudge_id: int):
-    ne = storage.acknowledge_nudge(nudge_id)
-    if not ne:
-        raise HTTPException(status_code=404, detail="Nudge not found")
-    return ne.to_dict()
-
-
-# ─── Outcome Metrics ──────────────────────────────────────────────────────────
-
-@app.post("/api/goals/{goal_id}/outcomes", status_code=201)
-async def create_outcome(goal_id: int, body: OutcomeMetricCreate):
-    goal = storage.get_goal(goal_id)
-    if not goal:
-        raise HTTPException(status_code=404, detail="Goal not found")
-    if not body.label.strip():
-        raise HTTPException(status_code=422, detail="label must not be empty")
-    om = OutcomeMetric(
-        goal_id=goal_id,
-        label=body.label.strip(),
-        target_value=body.target_value,
-        unit=body.unit.strip(),
-    )
-    om = storage.create_outcome_metric(om)
-    return om.to_dict()
-
-
-@app.get("/api/goals/{goal_id}/outcomes")
-async def list_outcomes(goal_id: int):
-    goal = storage.get_goal(goal_id)
-    if not goal:
-        raise HTTPException(status_code=404, detail="Goal not found")
-    metrics = storage.list_outcome_metrics(goal_id)
-    return [m.to_dict() for m in metrics]
-
-
-@app.patch("/api/outcomes/{metric_id}")
-async def update_outcome(metric_id: int, body: OutcomeMetricPatch):
-    om = storage.get_outcome_metric(metric_id)
-    if not om:
-        raise HTTPException(status_code=404, detail="Outcome metric not found")
-    if body.current_value is not None:
-        om.current_value = body.current_value
-    if body.target_value is not None:
-        om.target_value = body.target_value
-    if body.label is not None:
-        stripped = body.label.strip()
-        if not stripped:
-            raise HTTPException(status_code=422, detail="label must not be empty")
-        om.label = stripped
-    om = storage.update_outcome_metric(om)
-    return om.to_dict()
-
-
-@app.get("/api/goals/{goal_id}/outcome_suggestions")
-async def suggest_outcomes(goal_id: int):
-    """Suggest measurable outcomes for a goal based on its vertical."""
-    goal = storage.get_goal(goal_id)
-    if not goal:
-        raise HTTPException(status_code=404, detail="Goal not found")
-    return decomposer.suggest_outcome_metrics(goal.title, goal.description)
+@app.get("/api/tasks/{task_id}/executions")
+async def get_task_executions(task_id: int):
+    task = storage.get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    logs = storage.list_execution_logs(task_id)
+    return {"task_id": task_id, "logs": [log.to_dict() for log in logs]}

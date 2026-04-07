@@ -7,6 +7,11 @@ MODEL: str = os.getenv("TEB_MODEL", "gpt-4o-mini")
 DATABASE_URL: str = os.getenv("DATABASE_URL", "sqlite:///teb.db")
 MAX_TASKS_PER_GOAL: int = int(os.getenv("MAX_TASKS_PER_GOAL", "20"))
 
+# Executor settings
+EXECUTOR_TIMEOUT: int = int(os.getenv("TEB_EXECUTOR_TIMEOUT", "30"))  # HTTP timeout in seconds
+EXECUTOR_MAX_RETRIES: int = int(os.getenv("TEB_EXECUTOR_MAX_RETRIES", "2"))
+
+
 # Derive the SQLite file path from DATABASE_URL
 def get_db_path() -> str:
     url = DATABASE_URL

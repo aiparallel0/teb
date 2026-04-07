@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from typing import Generator, List, Optional
 
 from teb.config import get_db_path
-from teb.models import CheckIn, Goal, NudgeEvent, OutcomeMetric, Task
+from teb.models import ApiCredential, ExecutionLog, Goal, Task
 
 _DB_PATH: Optional[str] = None
 
@@ -62,33 +62,25 @@ def init_db() -> None:
                 updated_at         TEXT    NOT NULL
             );
 
-            CREATE TABLE IF NOT EXISTS check_ins (
+            CREATE TABLE IF NOT EXISTS api_credentials (
                 id           INTEGER PRIMARY KEY AUTOINCREMENT,
-                goal_id      INTEGER NOT NULL REFERENCES goals(id) ON DELETE CASCADE,
-                done_summary TEXT    NOT NULL DEFAULT '',
-                blockers     TEXT    NOT NULL DEFAULT '',
-                mood         TEXT    NOT NULL DEFAULT 'neutral',
+                name         TEXT    NOT NULL,
+                base_url     TEXT    NOT NULL,
+                auth_header  TEXT    NOT NULL DEFAULT 'Authorization',
+                auth_value   TEXT    NOT NULL DEFAULT '',
+                description  TEXT    NOT NULL DEFAULT '',
                 created_at   TEXT    NOT NULL
             );
 
-            CREATE TABLE IF NOT EXISTS outcome_metrics (
-                id            INTEGER PRIMARY KEY AUTOINCREMENT,
-                goal_id       INTEGER NOT NULL REFERENCES goals(id) ON DELETE CASCADE,
-                label         TEXT    NOT NULL,
-                current_value REAL    NOT NULL DEFAULT 0,
-                target_value  REAL    NOT NULL DEFAULT 0,
-                unit          TEXT    NOT NULL DEFAULT '',
-                created_at    TEXT    NOT NULL,
-                updated_at    TEXT    NOT NULL
-            );
-
-            CREATE TABLE IF NOT EXISTS nudge_events (
-                id           INTEGER PRIMARY KEY AUTOINCREMENT,
-                goal_id      INTEGER NOT NULL REFERENCES goals(id) ON DELETE CASCADE,
-                nudge_type   TEXT    NOT NULL,
-                message      TEXT    NOT NULL,
-                acknowledged INTEGER NOT NULL DEFAULT 0,
-                created_at   TEXT    NOT NULL
+            CREATE TABLE IF NOT EXISTS execution_logs (
+                id               INTEGER PRIMARY KEY AUTOINCREMENT,
+                task_id          INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+                credential_id    INTEGER REFERENCES api_credentials(id) ON DELETE SET NULL,
+                action           TEXT    NOT NULL,
+                request_summary  TEXT    NOT NULL DEFAULT '',
+                response_summary TEXT    NOT NULL DEFAULT '',
+                status           TEXT    NOT NULL DEFAULT 'success',
+                created_at       TEXT    NOT NULL
             );
         """)
 
@@ -227,148 +219,83 @@ def delete_task(task_id: int) -> None:
         con.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
 
 
-# ─── Check-ins ────────────────────────────────────────────────────────────────
+# ─── API Credentials ─────────────────────────────────────────────────────────
 
-def _row_to_checkin(row: sqlite3.Row) -> CheckIn:
-    ci = CheckIn(
+def _row_to_credential(row: sqlite3.Row) -> ApiCredential:
+    return ApiCredential(
         id=row["id"],
-        goal_id=row["goal_id"],
-        done_summary=row["done_summary"],
-        blockers=row["blockers"],
-        mood=row["mood"],
+        name=row["name"],
+        base_url=row["base_url"],
+        auth_header=row["auth_header"],
+        auth_value=row["auth_value"],
+        description=row["description"],
+        created_at=datetime.fromisoformat(row["created_at"]),
     )
-    ci.created_at = datetime.fromisoformat(row["created_at"])
-    return ci
 
 
-def create_checkin(ci: CheckIn) -> CheckIn:
+def create_credential(cred: ApiCredential) -> ApiCredential:
     now = datetime.now(timezone.utc).isoformat()
     with _conn() as con:
         cur = con.execute(
-            "INSERT INTO check_ins (goal_id, done_summary, blockers, mood, created_at) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (ci.goal_id, ci.done_summary, ci.blockers, ci.mood, now),
+            "INSERT INTO api_credentials (name, base_url, auth_header, auth_value, description, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (cred.name, cred.base_url, cred.auth_header, cred.auth_value, cred.description, now),
         )
-        ci.id = cur.lastrowid
-        ci.created_at = datetime.fromisoformat(now)
-    return ci
+        cred.id = cur.lastrowid
+        cred.created_at = datetime.fromisoformat(now)
+    return cred
 
 
-def list_checkins(goal_id: int, limit: int = 30) -> List[CheckIn]:
+def get_credential(cred_id: int) -> Optional[ApiCredential]:
+    with _conn() as con:
+        row = con.execute("SELECT * FROM api_credentials WHERE id = ?", (cred_id,)).fetchone()
+    return _row_to_credential(row) if row else None
+
+
+def list_credentials() -> List[ApiCredential]:
+    with _conn() as con:
+        rows = con.execute("SELECT * FROM api_credentials ORDER BY created_at DESC").fetchall()
+    return [_row_to_credential(r) for r in rows]
+
+
+def delete_credential(cred_id: int) -> None:
+    with _conn() as con:
+        con.execute("DELETE FROM api_credentials WHERE id = ?", (cred_id,))
+
+
+# ─── Execution Logs ──────────────────────────────────────────────────────────
+
+def _row_to_execution_log(row: sqlite3.Row) -> ExecutionLog:
+    return ExecutionLog(
+        id=row["id"],
+        task_id=row["task_id"],
+        credential_id=row["credential_id"],
+        action=row["action"],
+        request_summary=row["request_summary"],
+        response_summary=row["response_summary"],
+        status=row["status"],
+        created_at=datetime.fromisoformat(row["created_at"]),
+    )
+
+
+def create_execution_log(log: ExecutionLog) -> ExecutionLog:
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        cur = con.execute(
+            "INSERT INTO execution_logs (task_id, credential_id, action, request_summary, "
+            "response_summary, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (log.task_id, log.credential_id, log.action, log.request_summary,
+             log.response_summary, log.status, now),
+        )
+        log.id = cur.lastrowid
+        log.created_at = datetime.fromisoformat(now)
+    return log
+
+
+def list_execution_logs(task_id: int) -> List[ExecutionLog]:
     with _conn() as con:
         rows = con.execute(
-            "SELECT * FROM check_ins WHERE goal_id = ? ORDER BY created_at DESC LIMIT ?",
-            (goal_id, limit),
+            "SELECT * FROM execution_logs WHERE task_id = ? ORDER BY created_at ASC",
+            (task_id,),
         ).fetchall()
-    return [_row_to_checkin(r) for r in rows]
-
-
-def get_last_checkin(goal_id: int) -> Optional[CheckIn]:
-    with _conn() as con:
-        row = con.execute(
-            "SELECT * FROM check_ins WHERE goal_id = ? ORDER BY created_at DESC LIMIT 1",
-            (goal_id,),
-        ).fetchone()
-    return _row_to_checkin(row) if row else None
-
-
-# ─── Outcome Metrics ──────────────────────────────────────────────────────────
-
-def _row_to_outcome(row: sqlite3.Row) -> OutcomeMetric:
-    om = OutcomeMetric(
-        id=row["id"],
-        goal_id=row["goal_id"],
-        label=row["label"],
-        current_value=row["current_value"],
-        target_value=row["target_value"],
-        unit=row["unit"],
-    )
-    om.created_at = datetime.fromisoformat(row["created_at"])
-    om.updated_at = datetime.fromisoformat(row["updated_at"])
-    return om
-
-
-def create_outcome_metric(om: OutcomeMetric) -> OutcomeMetric:
-    now = datetime.now(timezone.utc).isoformat()
-    with _conn() as con:
-        cur = con.execute(
-            "INSERT INTO outcome_metrics (goal_id, label, current_value, target_value, unit, "
-            "created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (om.goal_id, om.label, om.current_value, om.target_value, om.unit, now, now),
-        )
-        om.id = cur.lastrowid
-        om.created_at = datetime.fromisoformat(now)
-        om.updated_at = datetime.fromisoformat(now)
-    return om
-
-
-def get_outcome_metric(metric_id: int) -> Optional[OutcomeMetric]:
-    with _conn() as con:
-        row = con.execute("SELECT * FROM outcome_metrics WHERE id = ?", (metric_id,)).fetchone()
-    return _row_to_outcome(row) if row else None
-
-
-def list_outcome_metrics(goal_id: int) -> List[OutcomeMetric]:
-    with _conn() as con:
-        rows = con.execute(
-            "SELECT * FROM outcome_metrics WHERE goal_id = ? ORDER BY id ASC",
-            (goal_id,),
-        ).fetchall()
-    return [_row_to_outcome(r) for r in rows]
-
-
-def update_outcome_metric(om: OutcomeMetric) -> OutcomeMetric:
-    now = datetime.now(timezone.utc).isoformat()
-    with _conn() as con:
-        con.execute(
-            "UPDATE outcome_metrics SET label=?, current_value=?, target_value=?, unit=?, "
-            "updated_at=? WHERE id=?",
-            (om.label, om.current_value, om.target_value, om.unit, now, om.id),
-        )
-    om.updated_at = datetime.fromisoformat(now)
-    return om
-
-
-# ─── Nudge Events ─────────────────────────────────────────────────────────────
-
-def _row_to_nudge(row: sqlite3.Row) -> NudgeEvent:
-    ne = NudgeEvent(
-        id=row["id"],
-        goal_id=row["goal_id"],
-        nudge_type=row["nudge_type"],
-        message=row["message"],
-        acknowledged=bool(row["acknowledged"]),
-    )
-    ne.created_at = datetime.fromisoformat(row["created_at"])
-    return ne
-
-
-def create_nudge(ne: NudgeEvent) -> NudgeEvent:
-    now = datetime.now(timezone.utc).isoformat()
-    with _conn() as con:
-        cur = con.execute(
-            "INSERT INTO nudge_events (goal_id, nudge_type, message, acknowledged, created_at) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (ne.goal_id, ne.nudge_type, ne.message, int(ne.acknowledged), now),
-        )
-        ne.id = cur.lastrowid
-        ne.created_at = datetime.fromisoformat(now)
-    return ne
-
-
-def list_nudges(goal_id: int, unacknowledged_only: bool = False) -> List[NudgeEvent]:
-    query = "SELECT * FROM nudge_events WHERE goal_id = ?"
-    params: list = [goal_id]
-    if unacknowledged_only:
-        query += " AND acknowledged = 0"
-    query += " ORDER BY created_at DESC"
-    with _conn() as con:
-        rows = con.execute(query, params).fetchall()
-    return [_row_to_nudge(r) for r in rows]
-
-
-def acknowledge_nudge(nudge_id: int) -> Optional[NudgeEvent]:
-    with _conn() as con:
-        con.execute("UPDATE nudge_events SET acknowledged = 1 WHERE id = ?", (nudge_id,))
-        row = con.execute("SELECT * FROM nudge_events WHERE id = ?", (nudge_id,)).fetchone()
-    return _row_to_nudge(row) if row else None
+    return [_row_to_execution_log(r) for r in rows]
