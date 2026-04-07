@@ -44,6 +44,14 @@ class TaskPatch(BaseModel):
     order_index: Optional[int] = None
 
 
+class TaskCreate(BaseModel):
+    goal_id: int
+    title: str
+    description: str = ""
+    estimated_minutes: int = 30
+    parent_id: Optional[int] = None
+
+
 class ClarifyAnswer(BaseModel):
     key: str
     answer: str
@@ -245,6 +253,37 @@ async def list_tasks(
     status: Optional[str] = Query(default=None),
 ):
     return [t.to_dict() for t in storage.list_tasks(goal_id=goal_id, status=status)]
+
+
+@app.post("/api/tasks", status_code=201)
+async def create_task_manual(body: TaskCreate):
+    """Create a custom user task (not from decomposition)."""
+    goal = storage.get_goal(body.goal_id)
+    if not goal:
+        raise HTTPException(status_code=404, detail="Goal not found")
+    title = body.title.strip()
+    if not title:
+        raise HTTPException(status_code=422, detail="title must not be empty")
+    if body.parent_id is not None:
+        parent = storage.get_task(body.parent_id)
+        if not parent:
+            raise HTTPException(status_code=404, detail="Parent task not found")
+        if parent.goal_id != body.goal_id:
+            raise HTTPException(status_code=422, detail="Parent task belongs to a different goal")
+    # Determine order_index: append after existing siblings
+    existing = storage.list_tasks(goal_id=body.goal_id)
+    siblings = [t for t in existing if t.parent_id == body.parent_id]
+    next_order = max((s.order_index for s in siblings), default=-1) + 1
+    task = Task(
+        goal_id=body.goal_id,
+        parent_id=body.parent_id,
+        title=title,
+        description=body.description.strip(),
+        estimated_minutes=max(1, body.estimated_minutes),
+        order_index=next_order,
+    )
+    task = storage.create_task(task)
+    return task.to_dict()
 
 
 @app.patch("/api/tasks/{task_id}")

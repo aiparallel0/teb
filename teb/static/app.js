@@ -358,6 +358,7 @@ async function decomposeTask(taskId) {
 }
 
 async function deleteTask(taskId) {
+  if (!confirm('Delete this task and all its sub-tasks? This cannot be undone.')) return;
   showError('error-tasks', '');
   try {
     await api.del(`/api/tasks/${taskId}`);
@@ -459,6 +460,24 @@ document.getElementById('btn-redecompose').addEventListener('click', async () =>
     showError('error-tasks', e.message);
   } finally {
     btn.disabled = false;
+  }
+});
+
+document.getElementById('btn-add-task').addEventListener('click', async () => {
+  if (!currentGoalId) return;
+  const title = prompt('Task title:');
+  if (!title || !title.trim()) return;
+  showError('error-tasks', '');
+  try {
+    await api.post('/api/tasks', {
+      goal_id: currentGoalId,
+      title: title.trim(),
+      description: '',
+      estimated_minutes: 30,
+    });
+    await refreshGoalView();
+  } catch (e) {
+    showError('error-tasks', e.message);
   }
 });
 

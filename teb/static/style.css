@@ -297,6 +297,9 @@ button:disabled { opacity: .5; cursor: not-allowed; }
   margin-top: .3rem;
 }
 
+/* ─── Task list actions ─────────────────────────────────────────────────────── */
+.task-list-actions { display: flex; gap: .75rem; flex-wrap: wrap; }
+
 /* ─── Break-down button ─────────────────────────────────────────────────────── */
 .btn-break-down {
   background: none;

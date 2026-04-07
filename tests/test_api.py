@@ -506,3 +506,73 @@ async def test_decompose_with_answers_adapts_tasks(client):
     # Descriptions should contain context-specific adaptations
     all_descs = " ".join(t["description"] for t in top_level)
     assert "starting out" in all_descs.lower() or "30 min" in all_descs or "tight" in all_descs.lower()
+
+
+# ─── POST /api/tasks (manual creation) ───────────────────────────────────────
+
+@pytest.mark.anyio
+async def test_create_manual_task(client):
+    create = await client.post("/api/goals", json={"title": "manual task test"})
+    gid = create.json()["id"]
+    await client.post(f"/api/goals/{gid}/decompose", json={})
+
+    r = await client.post("/api/tasks", json={
+        "goal_id": gid,
+        "title": "My custom task",
+        "description": "Something the decomposer missed",
+        "estimated_minutes": 15,
+    })
+    assert r.status_code == 201
+    data = r.json()
+    assert data["title"] == "My custom task"
+    assert data["goal_id"] == gid
+    assert data["parent_id"] is None
+    assert data["estimated_minutes"] == 15
+
+    # Should appear in task list
+    tasks = await client.get(f"/api/tasks?goal_id={gid}")
+    titles = [t["title"] for t in tasks.json()]
+    assert "My custom task" in titles
+
+
+@pytest.mark.anyio
+async def test_create_manual_subtask(client):
+    """Can create a custom sub-task under an existing task."""
+    create = await client.post("/api/goals", json={"title": "subtask creation test"})
+    gid = create.json()["id"]
+    decomp = await client.post(f"/api/goals/{gid}/decompose", json={})
+    parent_id = decomp.json()["tasks"][0]["id"]
+
+    r = await client.post("/api/tasks", json={
+        "goal_id": gid,
+        "title": "My custom sub-task",
+        "parent_id": parent_id,
+    })
+    assert r.status_code == 201
+    assert r.json()["parent_id"] == parent_id
+
+
+@pytest.mark.anyio
+async def test_create_manual_task_empty_title(client):
+    create = await client.post("/api/goals", json={"title": "empty title manual"})
+    gid = create.json()["id"]
+    r = await client.post("/api/tasks", json={"goal_id": gid, "title": "  "})
+    assert r.status_code == 422
+
+
+@pytest.mark.anyio
+async def test_create_manual_task_goal_not_found(client):
+    r = await client.post("/api/tasks", json={"goal_id": 999999, "title": "orphan"})
+    assert r.status_code == 404
+
+
+@pytest.mark.anyio
+async def test_create_manual_task_parent_not_found(client):
+    create = await client.post("/api/goals", json={"title": "bad parent test"})
+    gid = create.json()["id"]
+    r = await client.post("/api/tasks", json={
+        "goal_id": gid,
+        "title": "child",
+        "parent_id": 999999,
+    })
+    assert r.status_code == 404

@@ -368,3 +368,75 @@ class TestParseMinutes:
         from teb.decomposer import _parse_minutes
         assert _parse_minutes("") == 0
         assert _parse_minutes("no idea") == 0
+
+
+# ─── Context-aware task decomposition ─────────────────────────────────────────
+
+class TestContextAwareTaskDecomposition:
+    """Subtask decomposition should produce context-specific titles, not generic
+    Research/Execute/Verify for every task."""
+
+    def test_research_task_gets_research_specific_subtasks(self):
+        from teb.decomposer import decompose_task
+        parent = Task(goal_id=1, title="Research income options",
+                      description="Look into ways to earn", estimated_minutes=60)
+        parent.id = 10
+        subtasks = decompose_task(parent)
+        titles = [s.title.lower() for s in subtasks]
+        # Should NOT have "Research: Research income options" stuttering
+        assert not any(t.startswith("research:") for t in titles)
+        # Should have meaningful research-specific steps
+        assert any("define" in t or "looking for" in t for t in titles)
+
+    def test_creation_task_gets_creation_subtasks(self):
+        from teb.decomposer import decompose_task
+        parent = Task(goal_id=1, title="Write your bio and service description",
+                      description="Craft a benefit-driven description", estimated_minutes=45)
+        parent.id = 11
+        subtasks = decompose_task(parent)
+        titles = [s.title.lower() for s in subtasks]
+        assert any("outline" in t or "draft" in t for t in titles)
+
+    def test_setup_task_gets_setup_subtasks(self):
+        from teb.decomposer import decompose_task
+        parent = Task(goal_id=1, title="Set up the development environment",
+                      description="Initialize the repository", estimated_minutes=60)
+        parent.id = 12
+        subtasks = decompose_task(parent)
+        titles = [s.title.lower() for s in subtasks]
+        assert any("gather" in t or "requirement" in t or "credential" in t for t in titles)
+
+    def test_outreach_task_gets_outreach_subtasks(self):
+        from teb.decomposer import decompose_task
+        parent = Task(goal_id=1, title="Reach out and get your first customer",
+                      description="Send personalized messages", estimated_minutes=60)
+        parent.id = 13
+        subtasks = decompose_task(parent)
+        titles = [s.title.lower() for s in subtasks]
+        assert any("target" in t or "list" in t for t in titles)
+
+    def test_generic_task_no_stuttering_prefix(self):
+        """No subtask title should just be 'Research: <parent title>'."""
+        from teb.decomposer import decompose_task
+        parent = Task(goal_id=1, title="Pick one niche and commit",
+                      description="Choose the best-fit path", estimated_minutes=30)
+        parent.id = 14
+        subtasks = decompose_task(parent)
+        for s in subtasks:
+            assert not s.title.startswith("Research:")
+            assert not s.title.startswith("Execute:")
+            assert not s.title.startswith("Verify:")
+
+    def test_all_subtasks_have_valid_time(self):
+        from teb.decomposer import decompose_task
+        for title in [
+            "Research income options",
+            "Build the MVP core feature",
+            "Set up your platform",
+            "Schedule workouts",
+            "Track your first week and reflect",
+        ]:
+            parent = Task(goal_id=1, title=title, description="", estimated_minutes=60)
+            parent.id = 99
+            for s in decompose_task(parent):
+                assert 5 <= s.estimated_minutes <= 25, f"{s.title}: {s.estimated_minutes}min"
