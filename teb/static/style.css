@@ -369,3 +369,119 @@ button:disabled { opacity: .5; cursor: not-allowed; }
   .card { padding: 1rem .75rem; }
   .focus-banner .btn-sm { display: block; margin-top: .4rem; margin-right: 0; width: 100%; text-align: center; }
 }
+
+/* ─── Check-in section ──────────────────────────────────────────────────────── */
+.checkin-section {
+  margin-top: 2rem;
+  background: var(--surface);
+  border: 1.5px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1.25rem 1.5rem;
+}
+.checkin-section h3 { font-size: 1.05rem; margin-bottom: .35rem; }
+.checkin-form { display: flex; flex-direction: column; gap: .5rem; margin-top: .75rem; }
+.checkin-form textarea {
+  width: 100%;
+  padding: .5rem .7rem;
+  border: 1.5px solid var(--border);
+  border-radius: 8px;
+  font-size: .9rem;
+  font-family: inherit;
+  color: var(--text);
+  background: var(--bg);
+  resize: vertical;
+  min-height: 48px;
+  outline: none;
+}
+.checkin-form textarea:focus { border-color: var(--primary); background: #fff; }
+.checkin-feedback {
+  margin-top: .75rem;
+  padding: .75rem 1rem;
+  background: linear-gradient(135deg, #f0fdf4 0%, #ecfdf5 100%);
+  border: 1.5px solid #86efac;
+  border-radius: 8px;
+  font-size: .875rem;
+  line-height: 1.5;
+  color: #166534;
+}
+.checkin-history { margin-top: 1rem; }
+.checkin-history-item {
+  padding: .5rem 0;
+  border-bottom: 1px solid var(--border);
+  font-size: .825rem;
+}
+.checkin-history-item:last-child { border-bottom: none; }
+.checkin-history-date { color: var(--muted); font-size: .75rem; }
+.checkin-history-mood {
+  display: inline-block;
+  font-size: .7rem;
+  font-weight: 700;
+  padding: .1rem .4rem;
+  border-radius: 10px;
+  margin-left: .3rem;
+}
+.mood-positive { background: #d1fae5; color: #065f46; }
+.mood-neutral { background: #f3f4f6; color: var(--muted); }
+.mood-frustrated { background: #fef3c7; color: #92400e; }
+.mood-stuck { background: #fee2e2; color: #991b1b; }
+
+/* ─── Outcome metrics ──────────────────────────────────────────────────────── */
+.outcome-section {
+  margin-top: 1.5rem;
+  background: var(--surface);
+  border: 1.5px solid var(--border);
+  border-radius: var(--radius);
+  padding: 1.25rem 1.5rem;
+}
+.outcome-section h3 { font-size: 1.05rem; margin-bottom: .35rem; }
+.outcome-metrics-list { display: flex; flex-direction: column; gap: .75rem; margin: .75rem 0; }
+.outcome-metric-card {
+  display: flex;
+  align-items: center;
+  gap: .75rem;
+  padding: .6rem .75rem;
+  background: var(--bg);
+  border-radius: 8px;
+  border: 1px solid var(--border);
+}
+.outcome-metric-info { flex: 1; }
+.outcome-metric-label { font-weight: 600; font-size: .9rem; }
+.outcome-metric-values { font-size: .78rem; color: var(--muted); margin-top: .15rem; }
+.outcome-metric-bar {
+  width: 80px;
+  height: 8px;
+  background: var(--border);
+  border-radius: 999px;
+  overflow: hidden;
+}
+.outcome-metric-bar-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--primary), #7b2ff7);
+  border-radius: 999px;
+  transition: width .3s ease;
+}
+.outcome-metric-pct { font-size: .75rem; font-weight: 700; color: var(--primary); min-width: 35px; text-align: right; }
+.outcome-metric-update {
+  background: none;
+  border: 1px dashed var(--primary);
+  color: var(--primary);
+  font-size: .7rem;
+  font-weight: 600;
+  padding: .2rem .5rem;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+/* ─── Nudge banner ──────────────────────────────────────────────────────────── */
+.nudge-banner {
+  margin-top: 1.5rem;
+  background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%);
+  border: 2px solid #f59e0b;
+  border-radius: var(--radius);
+  padding: 1rem 1.25rem;
+  display: flex;
+  align-items: center;
+  gap: .75rem;
+}
+.nudge-icon { font-size: 1.5rem; }
+.nudge-message { flex: 1; font-size: .875rem; line-height: 1.45; color: #78350f; }

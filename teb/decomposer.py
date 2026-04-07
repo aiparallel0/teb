@@ -1043,3 +1043,152 @@ def get_progress_summary(tasks: List[Task]) -> Dict[str, Any]:
         "completion_pct": pct,
         "estimated_remaining_minutes": remaining_minutes,
     }
+
+
+# ─── Active Coaching: Stagnation Detection & Nudges ──────────────────────────
+
+def detect_stagnation(
+    tasks: List[Task],
+    last_checkin_age_hours: Optional[float],
+    goal_status: str,
+) -> Optional[Dict[str, str]]:
+    """
+    Analyze tasks and check-in recency to detect stagnation.
+
+    Returns a nudge dict {"nudge_type": ..., "message": ...} if the user
+    needs a push, or None if things are progressing fine.
+    """
+    if goal_status == "done":
+        return None
+
+    # If the goal is active but no check-in in over 48 hours
+    if goal_status in ("decomposed", "in_progress"):
+        if last_checkin_age_hours is not None and last_checkin_age_hours > 48:
+            return {
+                "nudge_type": "stagnation",
+                "message": (
+                    "It's been over 2 days since your last check-in. "
+                    "Even 2 minutes of progress counts. What's one small thing "
+                    "you can do right now?"
+                ),
+            }
+        if last_checkin_age_hours is None and goal_status == "in_progress":
+            return {
+                "nudge_type": "reminder",
+                "message": (
+                    "You haven't done a check-in yet. Take 2 minutes to note "
+                    "what you've done and what's blocking you."
+                ),
+            }
+
+    # Check for tasks stuck in_progress for too long (no state change)
+    in_progress_tasks = [t for t in tasks if t.status == "in_progress"]
+    if len(in_progress_tasks) > 3:
+        return {
+            "nudge_type": "blocker_help",
+            "message": (
+                f"You have {len(in_progress_tasks)} tasks in progress at once. "
+                "Pick the one closest to done, finish it, then move on. "
+                "Multitasking kills momentum."
+            ),
+        }
+
+    # Check if no tasks have been completed at all
+    done_count = sum(1 for t in tasks if t.status in ("done", "skipped"))
+    total = len(tasks)
+    if total > 0 and done_count == 0 and goal_status == "in_progress":
+        return {
+            "nudge_type": "encouragement",
+            "message": (
+                "You haven't completed any tasks yet — that's OK! "
+                "Focus on just the first one. Completing one task builds "
+                "momentum for everything that follows."
+            ),
+        }
+
+    return None
+
+
+def analyze_checkin(done_summary: str, blockers: str) -> Dict[str, Any]:
+    """
+    Analyze a check-in response and provide coaching feedback.
+
+    Returns a dict with "feedback" (coaching message) and "mood_detected"
+    based on simple keyword analysis.
+    """
+    blockers_lower = blockers.lower()
+    done_lower = done_summary.lower()
+
+    # Detect mood from keywords
+    mood = "neutral"
+    if any(w in blockers_lower for w in ("stuck", "confused", "lost", "frustrated", "can't", "don't know")):
+        mood = "frustrated"
+    elif any(w in blockers_lower for w in ("nothing", "no time", "busy", "life", "distracted")):
+        mood = "stuck"
+    elif any(w in done_lower for w in ("finished", "completed", "done", "shipped", "launched", "earned")):
+        mood = "positive"
+
+    # Generate feedback
+    feedback_parts: List[str] = []
+
+    if mood == "frustrated":
+        feedback_parts.append(
+            "Sounds like you're hitting a wall. That's normal. "
+            "Try breaking your current task into an even smaller step — "
+            "something you can finish in 10 minutes."
+        )
+    elif mood == "stuck":
+        feedback_parts.append(
+            "Life gets in the way — it happens. The key is not letting "
+            "a pause turn into a stop. Can you carve out just 15 minutes today?"
+        )
+    elif mood == "positive":
+        feedback_parts.append(
+            "Great progress! Keep the momentum going. "
+            "What's the next smallest step you can take?"
+        )
+
+    if not done_summary.strip():
+        feedback_parts.append(
+            "No progress today? That's fine — but write down one tiny thing "
+            "you'll do tomorrow so you have a clear starting point."
+        )
+
+    if blockers.strip() and mood != "frustrated":
+        feedback_parts.append(
+            f"Blocker noted: \"{blockers.strip()[:100]}\". "
+            "Can you rephrase this as a task? E.g. 'Figure out X' or 'Ask Y about Z'."
+        )
+
+    return {
+        "feedback": " ".join(feedback_parts) if feedback_parts else "Keep going — consistency beats intensity.",
+        "mood_detected": mood,
+    }
+
+
+def suggest_outcome_metrics(goal_title: str, goal_description: str) -> List[Dict[str, Any]]:
+    """
+    Suggest measurable outcome metrics for a goal based on its content.
+    Returns a list of metric suggestions with label, unit, and suggested target.
+    """
+    text = f"{goal_title} {goal_description}".lower()
+    suggestions: List[Dict[str, Any]] = []
+
+    # Money vertical
+    if any(w in text for w in ("money", "income", "earn", "revenue", "cash", "profit", "freelanc")):
+        suggestions.append({"label": "Revenue earned", "unit": "$", "target_value": 500})
+        suggestions.append({"label": "Clients acquired", "unit": "clients", "target_value": 3})
+        suggestions.append({"label": "Proposals sent", "unit": "proposals", "target_value": 10})
+
+    # Learning vertical
+    if any(w in text for w in ("learn", "study", "course", "skill", "read", "understand", "master")):
+        suggestions.append({"label": "Modules completed", "unit": "modules", "target_value": 10})
+        suggestions.append({"label": "Practice hours logged", "unit": "hours", "target_value": 20})
+        suggestions.append({"label": "Projects built", "unit": "projects", "target_value": 1})
+
+    # Fallback generic metrics
+    if not suggestions:
+        suggestions.append({"label": "Tasks completed", "unit": "tasks", "target_value": 10})
+        suggestions.append({"label": "Hours invested", "unit": "hours", "target_value": 10})
+
+    return suggestions
