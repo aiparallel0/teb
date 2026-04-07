@@ -576,3 +576,197 @@ async def test_create_manual_task_parent_not_found(client):
         "parent_id": 999999,
     })
     assert r.status_code == 404
+
+
+# ─── POST /api/credentials ───────────────────────────────────────────────────
+
+@pytest.mark.anyio
+async def test_create_credential(client):
+    r = await client.post("/api/credentials", json={
+        "name": "Test API",
+        "base_url": "https://api.example.com",
+        "description": "A test API for testing",
+    })
+    assert r.status_code == 201
+    data = r.json()
+    assert data["id"] is not None
+    assert data["name"] == "Test API"
+    assert data["base_url"] == "https://api.example.com"
+    assert data["auth_value_set"] is False  # no auth_value provided
+
+
+@pytest.mark.anyio
+async def test_create_credential_with_auth(client):
+    r = await client.post("/api/credentials", json={
+        "name": "Authed API",
+        "base_url": "https://api.secure.com",
+        "auth_header": "X-Api-Key",
+        "auth_value": "secret-key-123",
+        "description": "API with auth",
+    })
+    assert r.status_code == 201
+    data = r.json()
+    assert data["auth_value_set"] is True  # has auth
+    assert "secret" not in str(data)  # raw secret not exposed
+
+
+@pytest.mark.anyio
+async def test_create_credential_empty_name(client):
+    r = await client.post("/api/credentials", json={
+        "name": "  ",
+        "base_url": "https://api.example.com",
+    })
+    assert r.status_code == 422
+
+
+@pytest.mark.anyio
+async def test_create_credential_empty_url(client):
+    r = await client.post("/api/credentials", json={
+        "name": "Test",
+        "base_url": "",
+    })
+    assert r.status_code == 422
+
+
+# ─── GET /api/credentials ────────────────────────────────────────────────────
+
+@pytest.mark.anyio
+async def test_list_credentials(client):
+    await client.post("/api/credentials", json={
+        "name": "List Test API",
+        "base_url": "https://api.listtest.com",
+    })
+    r = await client.get("/api/credentials")
+    assert r.status_code == 200
+    assert isinstance(r.json(), list)
+    assert any(c["name"] == "List Test API" for c in r.json())
+
+
+# ─── DELETE /api/credentials/{id} ────────────────────────────────────────────
+
+@pytest.mark.anyio
+async def test_delete_credential(client):
+    create = await client.post("/api/credentials", json={
+        "name": "Delete Me",
+        "base_url": "https://api.deleteme.com",
+    })
+    cid = create.json()["id"]
+    r = await client.delete(f"/api/credentials/{cid}")
+    assert r.status_code == 200
+    assert r.json()["deleted"] == cid
+
+    # Should be gone from list
+    listing = await client.get("/api/credentials")
+    assert cid not in [c["id"] for c in listing.json()]
+
+
+@pytest.mark.anyio
+async def test_delete_credential_not_found(client):
+    r = await client.delete("/api/credentials/999999")
+    assert r.status_code == 404
+
+
+# ─── POST /api/tasks/{id}/execute ────────────────────────────────────────────
+
+@pytest.mark.anyio
+async def test_execute_task_no_credentials(client):
+    """Without AI key, execution should report can't execute."""
+    # Create a fresh goal and decompose
+    create = await client.post("/api/goals", json={"title": "exec test goal"})
+    gid = create.json()["id"]
+    decomp = await client.post(f"/api/goals/{gid}/decompose", json={})
+    tid = decomp.json()["tasks"][0]["id"]
+
+    r = await client.post(f"/api/tasks/{tid}/execute")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["executed"] is False
+    # Without OPENAI_API_KEY, either "No API credentials" or "AI mode is required"
+    assert "No API credentials" in data["reason"] or "AI mode" in data["reason"]
+
+
+@pytest.mark.anyio
+async def test_execute_task_not_found(client):
+    r = await client.post("/api/tasks/999999/execute")
+    assert r.status_code == 404
+
+
+@pytest.mark.anyio
+async def test_execute_task_already_done(client):
+    create = await client.post("/api/goals", json={"title": "done exec test"})
+    gid = create.json()["id"]
+    decomp = await client.post(f"/api/goals/{gid}/decompose", json={})
+    tid = decomp.json()["tasks"][0]["id"]
+    await client.patch(f"/api/tasks/{tid}", json={"status": "done"})
+
+    r = await client.post(f"/api/tasks/{tid}/execute")
+    assert r.status_code == 409
+
+
+@pytest.mark.anyio
+async def test_execute_task_with_credentials_no_ai(client):
+    """With credentials but no AI key, should report need for AI."""
+    create = await client.post("/api/goals", json={"title": "exec with cred"})
+    gid = create.json()["id"]
+    decomp = await client.post(f"/api/goals/{gid}/decompose", json={})
+    tid = decomp.json()["tasks"][0]["id"]
+
+    # Create a credential
+    await client.post("/api/credentials", json={
+        "name": "Exec Test API",
+        "base_url": "https://api.exectest.com",
+    })
+
+    r = await client.post(f"/api/tasks/{tid}/execute")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["executed"] is False
+    assert "AI mode" in data["reason"] or "OPENAI_API_KEY" in data["reason"]
+
+
+# ─── GET /api/tasks/{id}/executions ──────────────────────────────────────────
+
+@pytest.mark.anyio
+async def test_get_task_executions_empty(client):
+    create = await client.post("/api/goals", json={"title": "exec log test"})
+    gid = create.json()["id"]
+    decomp = await client.post(f"/api/goals/{gid}/decompose", json={})
+    tid = decomp.json()["tasks"][0]["id"]
+
+    r = await client.get(f"/api/tasks/{tid}/executions")
+    assert r.status_code == 200
+    data = r.json()
+    assert data["task_id"] == tid
+    assert data["logs"] == []
+
+
+@pytest.mark.anyio
+async def test_get_task_executions_not_found(client):
+    r = await client.get("/api/tasks/999999/executions")
+    assert r.status_code == 404
+
+
+# ─── PATCH with new statuses ─────────────────────────────────────────────────
+
+@pytest.mark.anyio
+async def test_patch_task_executing_status(client):
+    create = await client.post("/api/goals", json={"title": "status test"})
+    gid = create.json()["id"]
+    decomp = await client.post(f"/api/goals/{gid}/decompose", json={})
+    tid = decomp.json()["tasks"][0]["id"]
+
+    r = await client.patch(f"/api/tasks/{tid}", json={"status": "executing"})
+    assert r.status_code == 200
+    assert r.json()["status"] == "executing"
+
+
+@pytest.mark.anyio
+async def test_patch_task_failed_status(client):
+    create = await client.post("/api/goals", json={"title": "fail status test"})
+    gid = create.json()["id"]
+    decomp = await client.post(f"/api/goals/{gid}/decompose", json={})
+    tid = decomp.json()["tasks"][0]["id"]
+
+    r = await client.patch(f"/api/tasks/{tid}", json={"status": "failed"})
+    assert r.status_code == 200
+    assert r.json()["status"] == "failed"
