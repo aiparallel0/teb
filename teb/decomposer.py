@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set
 
 from teb import config
-from teb.models import Goal, Task
+from teb.models import Goal, ProactiveSuggestion, Task
 
 
 # ─── Clarifying Questions ─────────────────────────────────────────────────────
@@ -1190,5 +1190,107 @@ def suggest_outcome_metrics(goal_title: str, goal_description: str) -> List[Dict
     if not suggestions:
         suggestions.append({"label": "Tasks completed", "unit": "tasks", "target_value": 10})
         suggestions.append({"label": "Hours invested", "unit": "hours", "target_value": 10})
+
+    return suggestions
+
+
+# ─── Proactive Suggestions ────────────────────────────────────────────────────
+
+def generate_proactive_suggestions(
+    goal: Goal,
+    tasks: List[Task],
+) -> List[ProactiveSuggestion]:
+    """
+    Proactively discover and suggest actions the user didn't think of.
+
+    Analyzes the current goal, task state, and context to surface:
+    - Optimization: ways to improve existing approach
+    - Opportunity: new actions that could accelerate progress
+    - Risk: potential pitfalls to avoid
+    - Learning: skills or knowledge that would help
+    """
+    suggestions: List[ProactiveSuggestion] = []
+    goal_id = goal.id or 0
+    text = f"{goal.title} {goal.description}".lower()
+    template = _detect_template(goal)
+
+    done_count = sum(1 for t in tasks if t.status in ("done", "skipped"))
+    total = len(tasks)
+    in_progress = [t for t in tasks if t.status == "in_progress"]
+
+    # ── Opportunity suggestions based on goal type ──
+
+    if template == "make_money_online":
+        task_titles = " ".join(t.title.lower() for t in tasks)
+        if "portfolio" not in task_titles and "sample" not in task_titles:
+            suggestions.append(ProactiveSuggestion(
+                goal_id=goal_id,
+                suggestion="Create a portfolio or work sample before reaching out to clients",
+                rationale="Clients are much more likely to respond when they can see concrete examples of your work.",
+                category="opportunity",
+            ))
+        if "automate" not in task_titles:
+            suggestions.append(ProactiveSuggestion(
+                goal_id=goal_id,
+                suggestion="Look into automating repetitive parts of your workflow with AI tools",
+                rationale="Tools like ChatGPT, Zapier, or Make.com can automate proposal writing, email follow-ups, and content creation.",
+                category="optimization",
+            ))
+
+    elif template == "learn_skill":
+        if "teach" not in text and "explain" not in text:
+            suggestions.append(ProactiveSuggestion(
+                goal_id=goal_id,
+                suggestion="Try teaching what you've learned to someone else (or write a blog post)",
+                rationale="The Feynman technique: teaching forces you to identify gaps in understanding and solidifies knowledge.",
+                category="learning",
+            ))
+
+    elif template == "build_project":
+        task_titles = " ".join(t.title.lower() for t in tasks)
+        if "analytics" not in task_titles and "tracking" not in task_titles:
+            suggestions.append(ProactiveSuggestion(
+                goal_id=goal_id,
+                suggestion="Add simple analytics from day one (even just a visit counter)",
+                rationale="You can't improve what you don't measure. Free tools like Plausible or Umami take 5 minutes to set up.",
+                category="optimization",
+            ))
+
+    # ── Progress-aware suggestions ──
+
+    if total > 0 and done_count == 0 and len(in_progress) == 0:
+        suggestions.append(ProactiveSuggestion(
+            goal_id=goal_id,
+            suggestion="Start with the smallest possible task — even 5 minutes counts",
+            rationale="The hardest part is starting. Completing just one tiny task creates momentum for everything else.",
+            category="opportunity",
+        ))
+
+    if total > 0 and done_count > 0 and done_count < total:
+        pct = round((done_count / total) * 100)
+        if pct >= 50:
+            suggestions.append(ProactiveSuggestion(
+                goal_id=goal_id,
+                suggestion=f"You're {pct}% done! Consider sharing your progress for accountability",
+                rationale="Public commitment increases follow-through. Tell a friend, post online, or just write it in a journal.",
+                category="opportunity",
+            ))
+
+    if len(in_progress) > 2:
+        suggestions.append(ProactiveSuggestion(
+            goal_id=goal_id,
+            suggestion="Focus on finishing one task before starting another",
+            rationale="Context-switching significantly reduces productive time. Finishing one thing fully beats having three things half-done.",
+            category="risk",
+        ))
+
+    # ── Generic always-useful suggestions ──
+    if not suggestions:
+        suggestions.append(ProactiveSuggestion(
+            goal_id=goal_id,
+            suggestion="Set a specific time tomorrow to work on this goal — even 15 minutes",
+            rationale="Scheduling creates commitment. Vague intentions like 'I'll do it later' almost never convert to action.",
+            category="opportunity",
+        ))
 
     return suggestions
