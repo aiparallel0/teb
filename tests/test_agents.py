@@ -124,17 +124,28 @@ class TestGoalCategoryDetection:
         assert agents._detect_goal_category(generic_goal) == "default"
 
     def test_money_keywords(self):
-        for kw in ["earn", "income", "revenue", "sell", "profit"]:
+        for kw in ["earn", "income", "revenue", "sell", "profit", "money"]:
             g = Goal(title=f"I want to {kw}", description="")
             assert agents._detect_goal_category(g) == "money", f"Failed for keyword: {kw}"
 
+    def test_money_stems(self):
+        """Test stem-based matching for money keywords."""
+        for phrase in ["freelancing online", "find clients"]:
+            g = Goal(title=phrase, description="")
+            assert agents._detect_goal_category(g) == "money", f"Failed for: {phrase}"
+
     def test_learn_keywords(self):
-        for kw in ["learn", "study", "course", "tutorial"]:
+        for kw in ["learn", "study", "course", "tutorial", "skill"]:
             g = Goal(title=f"I want to {kw}", description="")
             assert agents._detect_goal_category(g) == "learn", f"Failed for keyword: {kw}"
 
+    def test_learn_not_money(self):
+        """'learn' should not match 'earn' — word boundary check."""
+        g = Goal(title="learn Python", description="want to learn programming")
+        assert agents._detect_goal_category(g) == "learn"
+
     def test_build_keywords(self):
-        for kw in ["build", "create", "develop", "launch"]:
+        for kw in ["build", "create", "develop", "launch", "website"]:
             g = Goal(title=f"I want to {kw}", description="")
             assert agents._detect_goal_category(g) == "build", f"Failed for keyword: {kw}"
 

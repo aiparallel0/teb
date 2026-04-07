@@ -498,15 +498,22 @@ def _detect_goal_category(goal: Goal) -> str:
     """Detect the broad category of a goal for template matching."""
     text = f"{goal.title} {goal.description}".lower()
     words = set(text.split())
-    # Check learn first (since "learn" contains "earn")
-    if any(w in text for w in ("learn", "study", "course", "tutorial", "education")) or "skill" in words:
+
+    # Use word-boundary-safe detection: check exact words for short terms,
+    # prefix matching for stems (e.g. "freelanc" matches freelance/freelancing)
+    learn_words = {"learn", "study", "course", "skill", "tutorial", "education"}
+    if words & learn_words:
         return "learn"
-    if any(w in words for w in ("money", "earn", "income", "revenue", "sell", "profit")) or \
-       any(w in text for w in ("freelanc", "client")):
+
+    money_words = {"money", "earn", "income", "revenue", "sell", "profit"}
+    money_stems = ("freelanc", "client")
+    if words & money_words or any(stem in text for stem in money_stems):
         return "money"
-    if any(w in words for w in ("build", "create", "develop", "launch")) or \
-       any(w in text for w in ("website", "app")):
+
+    build_words = {"build", "create", "develop", "launch", "website", "app"}
+    if words & build_words:
         return "build"
+
     return "default"
 
 

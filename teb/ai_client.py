@@ -47,10 +47,18 @@ def ai_chat_json(
     temperature: float = 0.1,
     max_tokens: int = 4096,
 ) -> dict:
-    """Send a chat message expecting JSON back. Parses and returns a dict."""
+    """Send a chat message expecting JSON back. Parses and returns a dict.
+
+    Raises json.JSONDecodeError if the response is not valid JSON.
+    """
     raw = ai_chat(system_prompt, user_prompt, json_mode=True,
                   temperature=temperature, max_tokens=max_tokens)
-    return json.loads(raw)
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        # Try stripping code fences one more time in case they weren't caught
+        stripped = _strip_code_fences(raw)
+        return json.loads(stripped)
 
 
 def _chat_anthropic(

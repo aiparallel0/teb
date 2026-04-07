@@ -21,6 +21,7 @@ Then tracks whether you actually earned any money.
 - **Not generic but experience-aware** — persistent user profiles learn your skills, pace, and style across goals; a knowledge base of successful paths means each new user benefits from what worked before
 - **Not advisory but accountable** — outcome metrics track real results (revenue earned, clients acquired), not just tasks checked off
 - **Proactively discovers actions you didn't think of** — rule-based and AI-powered suggestion engine surfaces opportunities, optimizations, and risks
+- **Multi-agent delegation** — specialized AI agents (marketing, web dev, outreach, research, finance) collaborate and delegate to each other to tackle your goal from every angle
 
 ---
 
@@ -95,6 +96,9 @@ POST   /api/suggestions/{id}          Accept or dismiss a suggestion
 GET    /api/profile                   Get persistent user profile
 PATCH  /api/profile                   Update user profile
 GET    /api/knowledge/paths           List successful execution paths (knowledge base)
+GET    /api/agents                    List all agent types and their capabilities
+POST   /api/goals/{id}/orchestrate    Run multi-agent delegation on a goal
+GET    /api/goals/{id}/handoffs       View agent delegation chain for a goal
 ```
 
 ### Task Execution Example
@@ -156,21 +160,52 @@ curl -X PATCH http://localhost:8000/api/outcomes/1 \
 curl http://localhost:8000/api/goals/1/nudge
 ```
 
+### Multi-Agent Orchestration Example
+
+```bash
+# 1. Create a goal
+curl -X POST http://localhost:8000/api/goals \
+  -H 'Content-Type: application/json' \
+  -d '{"title": "earn money online", "description": "I want to earn $500 freelancing"}'
+
+# 2. Run multi-agent orchestration (coordinator delegates to specialists)
+curl -X POST http://localhost:8000/api/goals/1/orchestrate
+# Returns: strategy, tasks from all agents, handoff chain showing delegation flow
+
+# 3. See which agents were involved and what they delegated
+curl http://localhost:8000/api/goals/1/handoffs
+# Returns: [{from_agent: "coordinator", to_agent: "marketing", ...}, ...]
+
+# 4. List available agent types
+curl http://localhost:8000/api/agents
+# Returns: coordinator, marketing, web_dev, outreach, research, finance
+```
+
+**How orchestration works:**
+1. **Coordinator** analyzes your goal and creates a high-level strategy
+2. Coordinator **delegates** to specialist agents (e.g., marketing, web_dev, outreach)
+3. Each specialist produces **concrete tasks** and may sub-delegate to other specialists
+4. Example chain: `coordinator → marketing → web_dev` (marketing asks web_dev to build a landing page)
+5. All handoffs are logged for full traceability
+
 ---
 
 ## Configuration
 
 | Variable | Default | Description |
 |---|---|---|
-| `OPENAI_API_KEY` | _(none)_ | Enables AI-powered decomposition and execution |
+| `ANTHROPIC_API_KEY` | _(none)_ | Enables Claude-powered AI features (preferred) |
+| `TEB_ANTHROPIC_MODEL` | `claude-sonnet-4-20250514` | Anthropic model for AI features |
+| `OPENAI_API_KEY` | _(none)_ | Enables OpenAI-powered AI features |
 | `OPENAI_BASE_URL` | `https://api.openai.com/v1` | OpenAI-compatible API base URL |
-| `TEB_MODEL` | `gpt-4o-mini` | Model to use for AI decomposition/execution |
+| `TEB_MODEL` | `gpt-4o-mini` | OpenAI model for AI features |
+| `TEB_AI_PROVIDER` | `auto` | AI provider: `anthropic`, `openai`, or `auto` (prefers Anthropic) |
 | `DATABASE_URL` | `sqlite:///teb.db` | SQLite database path |
 | `MAX_TASKS_PER_GOAL` | `20` | Cap on tasks per goal (AI mode) |
 | `TEB_EXECUTOR_TIMEOUT` | `30` | HTTP timeout (seconds) for API execution |
 | `TEB_EXECUTOR_MAX_RETRIES` | `2` | Max retries for failed API calls |
 
-Without `OPENAI_API_KEY`, teb operates in **template mode** — fully offline, instant. Task execution requires `OPENAI_API_KEY` for AI-powered API call planning.
+Without an AI key (`ANTHROPIC_API_KEY` or `OPENAI_API_KEY`), teb operates in **template mode** — fully offline, instant. When both keys are set, Anthropic (Claude) is preferred by default. Set `TEB_AI_PROVIDER=openai` to override.
 
 ---
 
@@ -178,12 +213,14 @@ Without `OPENAI_API_KEY`, teb operates in **template mode** — fully offline, i
 
 ```
 teb/
-├── main.py        FastAPI app + REST endpoints (goals, tasks, coaching, execution, suggestions)
+├── main.py        FastAPI app + REST endpoints (goals, tasks, coaching, execution, agents)
 ├── models.py      Goal, Task, CheckIn, OutcomeMetric, NudgeEvent, UserProfile,
-│                  SuccessPath, ProactiveSuggestion, ApiCredential, ExecutionLog
-├── storage.py     SQLite data access layer (raw sqlite3, 10 tables)
+│                  SuccessPath, ProactiveSuggestion, ApiCredential, ExecutionLog, AgentHandoff
+├── storage.py     SQLite data access layer (raw sqlite3, 11 tables)
 ├── decomposer.py  Template-based + AI decomposition engine + coaching + proactive suggestions
 ├── executor.py    AI-powered task execution engine (API calls via httpx)
+├── agents.py      Multi-agent delegation system (coordinator + 5 specialist agents)
+├── ai_client.py   Unified AI client (Anthropic Claude + OpenAI)
 ├── config.py      Environment variable configuration
 ├── templates/
 │   └── index.html Single-page frontend
@@ -194,8 +231,37 @@ tests/
 ├── test_decomposer.py  Unit tests for decomposition logic
 ├── test_executor.py    Unit tests for execution engine
 ├── test_checkin.py     Tests for coaching, nudges, outcomes, suggestions
+├── test_agents.py      Tests for multi-agent delegation system
 └── test_api.py         Integration tests for API endpoints
 ```
+
+### Multi-Agent Delegation
+
+teb uses specialized AI agents that collaborate and delegate to each other:
+
+```
+User goal: "earn money online"
+    │
+    ▼
+┌─────────────┐
+│ Coordinator │  Analyzes goal → creates strategy
+└──────┬──────┘
+       │ delegates to specialists:
+       ├──► Marketing Agent → positioning, content, SEO
+       │         └──► Web Dev Agent → build landing page
+       │         └──► Outreach Agent → run campaigns
+       ├──► Research Agent → market validation, competitors
+       ├──► Web Dev Agent → hosting, domain, deployment
+       ├──► Outreach Agent → cold outreach, lead gen
+       └──► Finance Agent → budgeting, pricing, payments
+```
+
+Each agent:
+- Has a specific domain of expertise
+- Produces concrete, actionable tasks
+- Can delegate to other agents (up to 3 levels deep)
+- Works in AI mode (Claude/OpenAI) or template mode (offline)
+- All handoffs are logged for full traceability
 
 ### How Execution Works
 
