@@ -403,7 +403,7 @@ async def get_nudge(goal_id: int):
     tasks = storage.list_tasks(goal_id=goal_id)
     last_ci = storage.get_last_checkin(goal_id)
 
-    last_checkin_age_hours: float | None = None
+    last_checkin_age_hours: Optional[float] = None
     if last_ci and last_ci.created_at:
         from datetime import timezone as _tz
         delta = datetime.now(_tz.utc) - last_ci.created_at
