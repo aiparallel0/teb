@@ -1,7 +1,7 @@
 import json
 import sqlite3
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Generator, List, Optional
 
 from teb.config import get_db_path
@@ -80,7 +80,7 @@ def _row_to_goal(row: sqlite3.Row) -> Goal:
 
 
 def create_goal(goal: Goal) -> Goal:
-    now = datetime.utcnow().isoformat()
+    now = datetime.now(timezone.utc).isoformat()
     with _conn() as con:
         cur = con.execute(
             "INSERT INTO goals (title, description, status, answers, created_at, updated_at) "
@@ -106,7 +106,7 @@ def list_goals() -> List[Goal]:
 
 
 def update_goal(goal: Goal) -> Goal:
-    now = datetime.utcnow().isoformat()
+    now = datetime.now(timezone.utc).isoformat()
     with _conn() as con:
         con.execute(
             "UPDATE goals SET title=?, description=?, status=?, answers=?, updated_at=? WHERE id=?",
@@ -135,7 +135,7 @@ def _row_to_task(row: sqlite3.Row) -> Task:
 
 
 def create_task(task: Task) -> Task:
-    now = datetime.utcnow().isoformat()
+    now = datetime.now(timezone.utc).isoformat()
     with _conn() as con:
         cur = con.execute(
             "INSERT INTO tasks (goal_id, parent_id, title, description, estimated_minutes, "
@@ -173,7 +173,7 @@ def list_tasks(goal_id: Optional[int] = None, status: Optional[str] = None) -> L
 
 
 def update_task(task: Task) -> Task:
-    now = datetime.utcnow().isoformat()
+    now = datetime.now(timezone.utc).isoformat()
     with _conn() as con:
         con.execute(
             "UPDATE tasks SET title=?, description=?, estimated_minutes=?, status=?, "
