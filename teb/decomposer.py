@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 
 from teb import config
 from teb.models import Goal, Task
@@ -342,7 +342,7 @@ def get_clarifying_questions(goal: Goal) -> List[ClarifyingQuestion]:
     template_name = _detect_template(goal)
     template = _TEMPLATES[template_name]
     # Deduplicate by key while preserving order
-    seen: set[str] = set()
+    seen: Set[str] = set()
     questions: List[ClarifyingQuestion] = []
     for q in template.questions:
         if q.key not in seen:

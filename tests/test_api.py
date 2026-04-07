@@ -16,9 +16,8 @@ def setup_test_db():
     storage.init_db()
     yield
     # Clean up the test database file
-    import os as _os
     try:
-        _os.remove(TEST_DB)
+        os.remove(TEST_DB)
     except FileNotFoundError:
         pass
 
