@@ -537,7 +537,7 @@ def _decompose_task_template(task: Task) -> List[Task]:
             title=f"Execute: {task.title}",
             description=(
                 f"Do the core work. Follow the checklist from the research step. "
-                f"Focus only on finishing — don't polish or optimise yet."
+                f"Focus only on finishing — don't polish or optimize yet."
             ),
             estimated_minutes=min(total - 2 * capped, 25) if total > 2 * capped else capped,
             order_index=1,

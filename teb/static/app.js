@@ -225,14 +225,14 @@ function buildTaskCard(task, subtasks, byParent) {
   card.dataset.id = task.id;
 
   const cbClass = task.status === 'done' ? 'checked' : '';
-  const hasChildren = subtasks.length > 0;
+  const hasSubtasks = subtasks.length > 0;
 
   card.innerHTML = `
     <div class="task-header">
       <div class="task-checkbox ${cbClass}" data-id="${task.id}" title="Mark done"></div>
       <div class="task-info">
         <div class="task-title">${escHtml(task.title)}</div>
-        <div class="task-meta">~${task.estimated_minutes} min${hasChildren ? ` · ${subtasks.length} sub-tasks` : ''}</div>
+        <div class="task-meta">~${task.estimated_minutes} min${hasSubtasks ? ` · ${subtasks.length} sub-tasks` : ''}</div>
       </div>
       <button class="task-expand-btn" aria-label="expand">▾</button>
     </div>
@@ -244,8 +244,8 @@ function buildTaskCard(task, subtasks, byParent) {
         <option value="done"${task.status === 'done' ? ' selected' : ''}>Done</option>
         <option value="skipped"${task.status === 'skipped' ? ' selected' : ''}>Skip</option>
       </select>
-      ${!hasChildren && task.status !== 'done' ? `<button class="btn-break-down" data-id="${task.id}">🔍 Break down further</button>` : ''}
-      ${hasChildren ? buildSubtaskList(subtasks, byParent) : ''}
+      ${!hasSubtasks && task.status !== 'done' ? `<button class="btn-break-down" data-id="${task.id}">🔍 Break down further</button>` : ''}
+      ${hasSubtasks ? buildSubtaskList(subtasks, byParent) : ''}
     </div>
   `;
 
