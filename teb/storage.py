@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from typing import Generator, List, Optional
 
 from teb.config import get_db_path
-from teb.models import Goal, Task
+from teb.models import ApiCredential, ExecutionLog, Goal, Task
 
 _DB_PATH: Optional[str] = None
 
@@ -60,6 +60,27 @@ def init_db() -> None:
                 order_index        INTEGER NOT NULL DEFAULT 0,
                 created_at         TEXT    NOT NULL,
                 updated_at         TEXT    NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS api_credentials (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                name         TEXT    NOT NULL,
+                base_url     TEXT    NOT NULL,
+                auth_header  TEXT    NOT NULL DEFAULT 'Authorization',
+                auth_value   TEXT    NOT NULL DEFAULT '',
+                description  TEXT    NOT NULL DEFAULT '',
+                created_at   TEXT    NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS execution_logs (
+                id               INTEGER PRIMARY KEY AUTOINCREMENT,
+                task_id          INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+                credential_id    INTEGER REFERENCES api_credentials(id) ON DELETE SET NULL,
+                action           TEXT    NOT NULL,
+                request_summary  TEXT    NOT NULL DEFAULT '',
+                response_summary TEXT    NOT NULL DEFAULT '',
+                status           TEXT    NOT NULL DEFAULT 'success',
+                created_at       TEXT    NOT NULL
             );
         """)
 
@@ -196,3 +217,85 @@ def delete_task(task_id: int) -> None:
     """Delete a task and its children (CASCADE handles children)."""
     with _conn() as con:
         con.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
+
+
+# ─── API Credentials ─────────────────────────────────────────────────────────
+
+def _row_to_credential(row: sqlite3.Row) -> ApiCredential:
+    return ApiCredential(
+        id=row["id"],
+        name=row["name"],
+        base_url=row["base_url"],
+        auth_header=row["auth_header"],
+        auth_value=row["auth_value"],
+        description=row["description"],
+        created_at=datetime.fromisoformat(row["created_at"]),
+    )
+
+
+def create_credential(cred: ApiCredential) -> ApiCredential:
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        cur = con.execute(
+            "INSERT INTO api_credentials (name, base_url, auth_header, auth_value, description, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (cred.name, cred.base_url, cred.auth_header, cred.auth_value, cred.description, now),
+        )
+        cred.id = cur.lastrowid
+        cred.created_at = datetime.fromisoformat(now)
+    return cred
+
+
+def get_credential(cred_id: int) -> Optional[ApiCredential]:
+    with _conn() as con:
+        row = con.execute("SELECT * FROM api_credentials WHERE id = ?", (cred_id,)).fetchone()
+    return _row_to_credential(row) if row else None
+
+
+def list_credentials() -> List[ApiCredential]:
+    with _conn() as con:
+        rows = con.execute("SELECT * FROM api_credentials ORDER BY created_at DESC").fetchall()
+    return [_row_to_credential(r) for r in rows]
+
+
+def delete_credential(cred_id: int) -> None:
+    with _conn() as con:
+        con.execute("DELETE FROM api_credentials WHERE id = ?", (cred_id,))
+
+
+# ─── Execution Logs ──────────────────────────────────────────────────────────
+
+def _row_to_execution_log(row: sqlite3.Row) -> ExecutionLog:
+    return ExecutionLog(
+        id=row["id"],
+        task_id=row["task_id"],
+        credential_id=row["credential_id"],
+        action=row["action"],
+        request_summary=row["request_summary"],
+        response_summary=row["response_summary"],
+        status=row["status"],
+        created_at=datetime.fromisoformat(row["created_at"]),
+    )
+
+
+def create_execution_log(log: ExecutionLog) -> ExecutionLog:
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        cur = con.execute(
+            "INSERT INTO execution_logs (task_id, credential_id, action, request_summary, "
+            "response_summary, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (log.task_id, log.credential_id, log.action, log.request_summary,
+             log.response_summary, log.status, now),
+        )
+        log.id = cur.lastrowid
+        log.created_at = datetime.fromisoformat(now)
+    return log
+
+
+def list_execution_logs(task_id: int) -> List[ExecutionLog]:
+    with _conn() as con:
+        rows = con.execute(
+            "SELECT * FROM execution_logs WHERE task_id = ? ORDER BY created_at ASC",
+            (task_id,),
+        ).fetchall()
+    return [_row_to_execution_log(r) for r in rows]
