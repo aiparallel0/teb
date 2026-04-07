@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -10,7 +11,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from teb import decomposer, storage
-from teb.models import Goal, Task
+from teb.models import CheckIn, Goal, NudgeEvent, OutcomeMetric, Task
 
 
 # ─── Startup / lifespan ───────────────────────────────────────────────────────
@@ -55,6 +56,23 @@ class TaskCreate(BaseModel):
 class ClarifyAnswer(BaseModel):
     key: str
     answer: str
+
+
+class CheckInCreate(BaseModel):
+    done_summary: str
+    blockers: str = ""
+
+
+class OutcomeMetricCreate(BaseModel):
+    label: str
+    target_value: float = 0.0
+    unit: str = ""
+
+
+class OutcomeMetricPatch(BaseModel):
+    current_value: Optional[float] = None
+    target_value: Optional[float] = None
+    label: Optional[str] = None
 
 
 # ─── Frontend ─────────────────────────────────────────────────────────────────
@@ -336,3 +354,137 @@ async def delete_task(task_id: int):
         raise HTTPException(status_code=404, detail="Task not found")
     storage.delete_task(task_id)
     return {"deleted": task_id}
+
+
+# ─── Daily Check-ins ──────────────────────────────────────────────────────────
+
+@app.post("/api/goals/{goal_id}/checkin", status_code=201)
+async def create_checkin(goal_id: int, body: CheckInCreate):
+    goal = storage.get_goal(goal_id)
+    if not goal:
+        raise HTTPException(status_code=404, detail="Goal not found")
+    if not body.done_summary.strip() and not body.blockers.strip():
+        raise HTTPException(status_code=422, detail="Provide at least a summary or blockers")
+
+    # Analyze the check-in and detect mood
+    analysis = decomposer.analyze_checkin(body.done_summary, body.blockers)
+
+    ci = CheckIn(
+        goal_id=goal_id,
+        done_summary=body.done_summary.strip(),
+        blockers=body.blockers.strip(),
+        mood=analysis["mood_detected"],
+    )
+    ci = storage.create_checkin(ci)
+
+    return {
+        "checkin": ci.to_dict(),
+        "coaching": analysis["feedback"],
+    }
+
+
+@app.get("/api/goals/{goal_id}/checkins")
+async def list_checkins(goal_id: int, limit: int = Query(default=30)):
+    goal = storage.get_goal(goal_id)
+    if not goal:
+        raise HTTPException(status_code=404, detail="Goal not found")
+    return [ci.to_dict() for ci in storage.list_checkins(goal_id, limit=limit)]
+
+
+# ─── Active Nudges (stagnation detection) ─────────────────────────────────────
+
+@app.get("/api/goals/{goal_id}/nudge")
+async def get_nudge(goal_id: int):
+    """Check for stagnation and return an active nudge if needed."""
+    goal = storage.get_goal(goal_id)
+    if not goal:
+        raise HTTPException(status_code=404, detail="Goal not found")
+
+    tasks = storage.list_tasks(goal_id=goal_id)
+    last_ci = storage.get_last_checkin(goal_id)
+
+    last_checkin_age_hours: float | None = None
+    if last_ci and last_ci.created_at:
+        from datetime import timezone as _tz
+        delta = datetime.now(_tz.utc) - last_ci.created_at
+        last_checkin_age_hours = delta.total_seconds() / 3600
+
+    nudge_data = decomposer.detect_stagnation(tasks, last_checkin_age_hours, goal.status)
+    if nudge_data is None:
+        # Also check for unacknowledged nudges
+        pending = storage.list_nudges(goal_id, unacknowledged_only=True)
+        if pending:
+            return {"nudge": pending[0].to_dict()}
+        return {"nudge": None, "message": "You're on track!"}
+
+    # Persist the nudge
+    ne = NudgeEvent(
+        goal_id=goal_id,
+        nudge_type=nudge_data["nudge_type"],
+        message=nudge_data["message"],
+    )
+    ne = storage.create_nudge(ne)
+    return {"nudge": ne.to_dict()}
+
+
+@app.post("/api/nudges/{nudge_id}/acknowledge")
+async def acknowledge_nudge(nudge_id: int):
+    ne = storage.acknowledge_nudge(nudge_id)
+    if not ne:
+        raise HTTPException(status_code=404, detail="Nudge not found")
+    return ne.to_dict()
+
+
+# ─── Outcome Metrics ──────────────────────────────────────────────────────────
+
+@app.post("/api/goals/{goal_id}/outcomes", status_code=201)
+async def create_outcome(goal_id: int, body: OutcomeMetricCreate):
+    goal = storage.get_goal(goal_id)
+    if not goal:
+        raise HTTPException(status_code=404, detail="Goal not found")
+    if not body.label.strip():
+        raise HTTPException(status_code=422, detail="label must not be empty")
+    om = OutcomeMetric(
+        goal_id=goal_id,
+        label=body.label.strip(),
+        target_value=body.target_value,
+        unit=body.unit.strip(),
+    )
+    om = storage.create_outcome_metric(om)
+    return om.to_dict()
+
+
+@app.get("/api/goals/{goal_id}/outcomes")
+async def list_outcomes(goal_id: int):
+    goal = storage.get_goal(goal_id)
+    if not goal:
+        raise HTTPException(status_code=404, detail="Goal not found")
+    metrics = storage.list_outcome_metrics(goal_id)
+    return [m.to_dict() for m in metrics]
+
+
+@app.patch("/api/outcomes/{metric_id}")
+async def update_outcome(metric_id: int, body: OutcomeMetricPatch):
+    om = storage.get_outcome_metric(metric_id)
+    if not om:
+        raise HTTPException(status_code=404, detail="Outcome metric not found")
+    if body.current_value is not None:
+        om.current_value = body.current_value
+    if body.target_value is not None:
+        om.target_value = body.target_value
+    if body.label is not None:
+        stripped = body.label.strip()
+        if not stripped:
+            raise HTTPException(status_code=422, detail="label must not be empty")
+        om.label = stripped
+    om = storage.update_outcome_metric(om)
+    return om.to_dict()
+
+
+@app.get("/api/goals/{goal_id}/outcome_suggestions")
+async def suggest_outcomes(goal_id: int):
+    """Suggest measurable outcomes for a goal based on its vertical."""
+    goal = storage.get_goal(goal_id)
+    if not goal:
+        raise HTTPException(status_code=404, detail="Goal not found")
+    return decomposer.suggest_outcome_metrics(goal.title, goal.description)

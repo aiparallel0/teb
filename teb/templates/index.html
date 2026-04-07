@@ -74,6 +74,37 @@
         <button id="btn-redecompose" class="btn-secondary">↻ Re-generate tasks</button>
       </div>
       <div class="error" id="error-tasks"></div>
+
+      <!-- Daily Check-in Section -->
+      <div id="checkin-section" class="checkin-section mt">
+        <h3>📋 Daily Check-in</h3>
+        <p class="sub">2 minutes. What did you do? What's blocking you?</p>
+        <div class="checkin-form">
+          <label for="checkin-done">What did you accomplish?</label>
+          <textarea id="checkin-done" rows="2" placeholder="e.g. Finished the first module, sent 3 proposals…"></textarea>
+          <label for="checkin-blockers">What's blocking you? (optional)</label>
+          <textarea id="checkin-blockers" rows="2" placeholder="e.g. Stuck on setup, no time today…"></textarea>
+          <button id="btn-checkin" class="btn-primary btn-sm">Submit check-in →</button>
+        </div>
+        <div id="checkin-feedback" class="checkin-feedback" style="display:none"></div>
+        <div id="checkin-history" class="checkin-history"></div>
+      </div>
+
+      <!-- Outcome Metrics Section -->
+      <div id="outcome-section" class="outcome-section mt">
+        <h3>🎯 Outcome Tracking</h3>
+        <p class="sub">Track what matters — real results, not just task completion.</p>
+        <div id="outcome-metrics-list" class="outcome-metrics-list"></div>
+        <button id="btn-suggest-outcomes" class="btn-secondary btn-sm">Suggest metrics</button>
+        <button id="btn-add-outcome" class="btn-secondary btn-sm">+ Add metric</button>
+      </div>
+
+      <!-- Nudge Banner -->
+      <div id="nudge-banner" class="nudge-banner" style="display:none">
+        <div class="nudge-icon">⚡</div>
+        <div class="nudge-message" id="nudge-message"></div>
+        <button class="btn-secondary btn-sm" id="btn-nudge-ack">Got it</button>
+      </div>
     </section>
   </div>
 

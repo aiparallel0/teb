@@ -206,6 +206,9 @@ function showTasksScreen(goal) {
   updateProgress(currentTasks);
   loadFocusTask();
   loadProgressDetail();
+  loadCheckinHistory();
+  loadOutcomeMetrics();
+  loadNudge();
   showScreen('screen-tasks');
 }
 
@@ -495,3 +498,168 @@ function escHtml(str) {
 
 showScreen('screen-landing');
 loadGoalList();
+
+// ─── Daily Check-in ───────────────────────────────────────────────────────────
+
+document.getElementById('btn-checkin').addEventListener('click', submitCheckin);
+
+async function submitCheckin() {
+  const done = document.getElementById('checkin-done').value.trim();
+  const blockers = document.getElementById('checkin-blockers').value.trim();
+  if (!done && !blockers) return;
+
+  const btn = document.getElementById('btn-checkin');
+  btn.disabled = true;
+  try {
+    const res = await api.post(`/api/goals/${currentGoalId}/checkin`, {
+      done_summary: done,
+      blockers: blockers,
+    });
+    // Show coaching feedback
+    const fb = document.getElementById('checkin-feedback');
+    fb.textContent = res.coaching;
+    fb.style.display = 'block';
+    // Clear inputs
+    document.getElementById('checkin-done').value = '';
+    document.getElementById('checkin-blockers').value = '';
+    // Refresh history and nudge
+    loadCheckinHistory();
+    loadNudge();
+  } catch (e) {
+    showError('error-tasks', e.message);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function loadCheckinHistory() {
+  if (!currentGoalId) return;
+  try {
+    const checkins = await api.get(`/api/goals/${currentGoalId}/checkins?limit=5`);
+    const container = document.getElementById('checkin-history');
+    if (!checkins.length) {
+      container.innerHTML = '<p style="color:var(--muted);font-size:.8rem">No check-ins yet.</p>';
+      return;
+    }
+    container.innerHTML = checkins.map(ci => {
+      const date = new Date(ci.created_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+      return `<div class="checkin-history-item">
+        <span class="checkin-history-date">${date}</span>
+        <span class="checkin-history-mood mood-${ci.mood}">${ci.mood}</span>
+        <div>${escHtml(ci.done_summary || ci.blockers)}</div>
+      </div>`;
+    }).join('');
+  } catch (e) {
+    // Silent fail for history
+  }
+}
+
+// ─── Nudge system ─────────────────────────────────────────────────────────────
+
+async function loadNudge() {
+  if (!currentGoalId) return;
+  try {
+    const res = await api.get(`/api/goals/${currentGoalId}/nudge`);
+    const banner = document.getElementById('nudge-banner');
+    if (res.nudge) {
+      document.getElementById('nudge-message').textContent = res.nudge.message;
+      banner.style.display = 'flex';
+      banner.dataset.nudgeId = res.nudge.id;
+    } else {
+      banner.style.display = 'none';
+    }
+  } catch (e) {
+    // Silent fail
+  }
+}
+
+document.getElementById('btn-nudge-ack').addEventListener('click', async () => {
+  const banner = document.getElementById('nudge-banner');
+  const nudgeId = banner.dataset.nudgeId;
+  if (nudgeId) {
+    try {
+      await api.post(`/api/nudges/${nudgeId}/acknowledge`, {});
+    } catch (e) { /* ignore */ }
+  }
+  banner.style.display = 'none';
+});
+
+// ─── Outcome Metrics ──────────────────────────────────────────────────────────
+
+async function loadOutcomeMetrics() {
+  if (!currentGoalId) return;
+  try {
+    const metrics = await api.get(`/api/goals/${currentGoalId}/outcomes`);
+    const container = document.getElementById('outcome-metrics-list');
+    if (!metrics.length) {
+      container.innerHTML = '<p style="color:var(--muted);font-size:.8rem">No outcome metrics yet. Add one to track real results.</p>';
+      return;
+    }
+    container.innerHTML = metrics.map(m => `
+      <div class="outcome-metric-card">
+        <div class="outcome-metric-info">
+          <div class="outcome-metric-label">${escHtml(m.label)}</div>
+          <div class="outcome-metric-values">${m.current_value}${m.unit ? ' ' + escHtml(m.unit) : ''} / ${m.target_value}${m.unit ? ' ' + escHtml(m.unit) : ''}</div>
+        </div>
+        <div class="outcome-metric-bar"><div class="outcome-metric-bar-fill" style="width:${m.achievement_pct}%"></div></div>
+        <div class="outcome-metric-pct">${m.achievement_pct}%</div>
+        <button class="outcome-metric-update" data-id="${m.id}" data-current="${m.current_value}">Update</button>
+      </div>
+    `).join('');
+    // Bind update buttons
+    container.querySelectorAll('.outcome-metric-update').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const metricId = btn.dataset.id;
+        const current = btn.dataset.current;
+        const val = prompt(`New value (current: ${current}):`, current);
+        if (val === null) return;
+        const num = parseFloat(val);
+        if (isNaN(num)) return;
+        try {
+          await api.patch(`/api/outcomes/${metricId}`, { current_value: num });
+          loadOutcomeMetrics();
+        } catch (e) {
+          showError('error-tasks', e.message);
+        }
+      });
+    });
+  } catch (e) {
+    // Silent fail
+  }
+}
+
+document.getElementById('btn-suggest-outcomes').addEventListener('click', async () => {
+  if (!currentGoalId) return;
+  try {
+    const suggestions = await api.get(`/api/goals/${currentGoalId}/outcome_suggestions`);
+    for (const s of suggestions) {
+      await api.post(`/api/goals/${currentGoalId}/outcomes`, {
+        label: s.label,
+        target_value: s.target_value,
+        unit: s.unit || '',
+      });
+    }
+    loadOutcomeMetrics();
+  } catch (e) {
+    showError('error-tasks', e.message);
+  }
+});
+
+document.getElementById('btn-add-outcome').addEventListener('click', async () => {
+  if (!currentGoalId) return;
+  const label = prompt('Metric name (e.g. "Revenue earned", "Chapters completed"):');
+  if (!label || !label.trim()) return;
+  const target = prompt('Target value:', '10');
+  if (target === null) return;
+  const unit = prompt('Unit (e.g. "$", "chapters", "hours"):', '');
+  try {
+    await api.post(`/api/goals/${currentGoalId}/outcomes`, {
+      label: label.trim(),
+      target_value: parseFloat(target) || 0,
+      unit: unit || '',
+    });
+    loadOutcomeMetrics();
+  } catch (e) {
+    showError('error-tasks', e.message);
+  }
+});

@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from typing import Generator, List, Optional
 
 from teb.config import get_db_path
-from teb.models import Goal, Task
+from teb.models import CheckIn, Goal, NudgeEvent, OutcomeMetric, Task
 
 _DB_PATH: Optional[str] = None
 
@@ -60,6 +60,35 @@ def init_db() -> None:
                 order_index        INTEGER NOT NULL DEFAULT 0,
                 created_at         TEXT    NOT NULL,
                 updated_at         TEXT    NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS check_ins (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                goal_id      INTEGER NOT NULL REFERENCES goals(id) ON DELETE CASCADE,
+                done_summary TEXT    NOT NULL DEFAULT '',
+                blockers     TEXT    NOT NULL DEFAULT '',
+                mood         TEXT    NOT NULL DEFAULT 'neutral',
+                created_at   TEXT    NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS outcome_metrics (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                goal_id       INTEGER NOT NULL REFERENCES goals(id) ON DELETE CASCADE,
+                label         TEXT    NOT NULL,
+                current_value REAL    NOT NULL DEFAULT 0,
+                target_value  REAL    NOT NULL DEFAULT 0,
+                unit          TEXT    NOT NULL DEFAULT '',
+                created_at    TEXT    NOT NULL,
+                updated_at    TEXT    NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS nudge_events (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                goal_id      INTEGER NOT NULL REFERENCES goals(id) ON DELETE CASCADE,
+                nudge_type   TEXT    NOT NULL,
+                message      TEXT    NOT NULL,
+                acknowledged INTEGER NOT NULL DEFAULT 0,
+                created_at   TEXT    NOT NULL
             );
         """)
 
@@ -196,3 +225,150 @@ def delete_task(task_id: int) -> None:
     """Delete a task and its children (CASCADE handles children)."""
     with _conn() as con:
         con.execute("DELETE FROM tasks WHERE id = ?", (task_id,))
+
+
+# ─── Check-ins ────────────────────────────────────────────────────────────────
+
+def _row_to_checkin(row: sqlite3.Row) -> CheckIn:
+    ci = CheckIn(
+        id=row["id"],
+        goal_id=row["goal_id"],
+        done_summary=row["done_summary"],
+        blockers=row["blockers"],
+        mood=row["mood"],
+    )
+    ci.created_at = datetime.fromisoformat(row["created_at"])
+    return ci
+
+
+def create_checkin(ci: CheckIn) -> CheckIn:
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        cur = con.execute(
+            "INSERT INTO check_ins (goal_id, done_summary, blockers, mood, created_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (ci.goal_id, ci.done_summary, ci.blockers, ci.mood, now),
+        )
+        ci.id = cur.lastrowid
+        ci.created_at = datetime.fromisoformat(now)
+    return ci
+
+
+def list_checkins(goal_id: int, limit: int = 30) -> List[CheckIn]:
+    with _conn() as con:
+        rows = con.execute(
+            "SELECT * FROM check_ins WHERE goal_id = ? ORDER BY created_at DESC LIMIT ?",
+            (goal_id, limit),
+        ).fetchall()
+    return [_row_to_checkin(r) for r in rows]
+
+
+def get_last_checkin(goal_id: int) -> Optional[CheckIn]:
+    with _conn() as con:
+        row = con.execute(
+            "SELECT * FROM check_ins WHERE goal_id = ? ORDER BY created_at DESC LIMIT 1",
+            (goal_id,),
+        ).fetchone()
+    return _row_to_checkin(row) if row else None
+
+
+# ─── Outcome Metrics ──────────────────────────────────────────────────────────
+
+def _row_to_outcome(row: sqlite3.Row) -> OutcomeMetric:
+    om = OutcomeMetric(
+        id=row["id"],
+        goal_id=row["goal_id"],
+        label=row["label"],
+        current_value=row["current_value"],
+        target_value=row["target_value"],
+        unit=row["unit"],
+    )
+    om.created_at = datetime.fromisoformat(row["created_at"])
+    om.updated_at = datetime.fromisoformat(row["updated_at"])
+    return om
+
+
+def create_outcome_metric(om: OutcomeMetric) -> OutcomeMetric:
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        cur = con.execute(
+            "INSERT INTO outcome_metrics (goal_id, label, current_value, target_value, unit, "
+            "created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (om.goal_id, om.label, om.current_value, om.target_value, om.unit, now, now),
+        )
+        om.id = cur.lastrowid
+        om.created_at = datetime.fromisoformat(now)
+        om.updated_at = datetime.fromisoformat(now)
+    return om
+
+
+def get_outcome_metric(metric_id: int) -> Optional[OutcomeMetric]:
+    with _conn() as con:
+        row = con.execute("SELECT * FROM outcome_metrics WHERE id = ?", (metric_id,)).fetchone()
+    return _row_to_outcome(row) if row else None
+
+
+def list_outcome_metrics(goal_id: int) -> List[OutcomeMetric]:
+    with _conn() as con:
+        rows = con.execute(
+            "SELECT * FROM outcome_metrics WHERE goal_id = ? ORDER BY id ASC",
+            (goal_id,),
+        ).fetchall()
+    return [_row_to_outcome(r) for r in rows]
+
+
+def update_outcome_metric(om: OutcomeMetric) -> OutcomeMetric:
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        con.execute(
+            "UPDATE outcome_metrics SET label=?, current_value=?, target_value=?, unit=?, "
+            "updated_at=? WHERE id=?",
+            (om.label, om.current_value, om.target_value, om.unit, now, om.id),
+        )
+    om.updated_at = datetime.fromisoformat(now)
+    return om
+
+
+# ─── Nudge Events ─────────────────────────────────────────────────────────────
+
+def _row_to_nudge(row: sqlite3.Row) -> NudgeEvent:
+    ne = NudgeEvent(
+        id=row["id"],
+        goal_id=row["goal_id"],
+        nudge_type=row["nudge_type"],
+        message=row["message"],
+        acknowledged=bool(row["acknowledged"]),
+    )
+    ne.created_at = datetime.fromisoformat(row["created_at"])
+    return ne
+
+
+def create_nudge(ne: NudgeEvent) -> NudgeEvent:
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        cur = con.execute(
+            "INSERT INTO nudge_events (goal_id, nudge_type, message, acknowledged, created_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (ne.goal_id, ne.nudge_type, ne.message, int(ne.acknowledged), now),
+        )
+        ne.id = cur.lastrowid
+        ne.created_at = datetime.fromisoformat(now)
+    return ne
+
+
+def list_nudges(goal_id: int, unacknowledged_only: bool = False) -> List[NudgeEvent]:
+    query = "SELECT * FROM nudge_events WHERE goal_id = ?"
+    params: list = [goal_id]
+    if unacknowledged_only:
+        query += " AND acknowledged = 0"
+    query += " ORDER BY created_at DESC"
+    with _conn() as con:
+        rows = con.execute(query, params).fetchall()
+    return [_row_to_nudge(r) for r in rows]
+
+
+def acknowledge_nudge(nudge_id: int) -> Optional[NudgeEvent]:
+    with _conn() as con:
+        con.execute("UPDATE nudge_events SET acknowledged = 1 WHERE id = ?", (nudge_id,))
+        row = con.execute("SELECT * FROM nudge_events WHERE id = ?", (nudge_id,)).fetchone()
+    return _row_to_nudge(row) if row else None
