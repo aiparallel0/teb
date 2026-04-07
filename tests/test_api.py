@@ -383,3 +383,126 @@ async def test_progress_endpoint(client):
 async def test_progress_not_found_goal(client):
     r = await client.get("/api/goals/999999/progress")
     assert r.status_code == 404
+
+
+# ─── DELETE /api/tasks/{id} ───────────────────────────────────────────────────
+
+@pytest.mark.anyio
+async def test_delete_task(client):
+    create = await client.post("/api/goals", json={"title": "delete test"})
+    gid = create.json()["id"]
+    decomp = await client.post(f"/api/goals/{gid}/decompose", json={})
+    tasks = decomp.json()["tasks"]
+    tid = tasks[0]["id"]
+
+    r = await client.delete(f"/api/tasks/{tid}")
+    assert r.status_code == 200
+    assert r.json()["deleted"] == tid
+
+    # Task should be gone
+    all_tasks = await client.get(f"/api/tasks?goal_id={gid}")
+    assert tid not in [t["id"] for t in all_tasks.json()]
+
+
+@pytest.mark.anyio
+async def test_delete_task_not_found(client):
+    r = await client.delete("/api/tasks/999999")
+    assert r.status_code == 404
+
+
+# ─── PATCH /api/tasks/{id} — title editing ───────────────────────────────────
+
+@pytest.mark.anyio
+async def test_patch_task_title(client):
+    create = await client.post("/api/goals", json={"title": "title edit test"})
+    gid = create.json()["id"]
+    decomp = await client.post(f"/api/goals/{gid}/decompose", json={})
+    tid = decomp.json()["tasks"][0]["id"]
+
+    r = await client.patch(f"/api/tasks/{tid}", json={"title": "My custom title"})
+    assert r.status_code == 200
+    assert r.json()["title"] == "My custom title"
+
+
+@pytest.mark.anyio
+async def test_patch_task_empty_title_rejected(client):
+    create = await client.post("/api/goals", json={"title": "empty title test"})
+    gid = create.json()["id"]
+    decomp = await client.post(f"/api/goals/{gid}/decompose", json={})
+    tid = decomp.json()["tasks"][0]["id"]
+
+    r = await client.patch(f"/api/tasks/{tid}", json={"title": "  "})
+    assert r.status_code == 422
+
+
+# ─── Decompose depth limit ───────────────────────────────────────────────────
+
+@pytest.mark.anyio
+async def test_decompose_depth_limit(client):
+    """Decomposing at max depth should return 422."""
+    create = await client.post("/api/goals", json={"title": "depth limit test"})
+    gid = create.json()["id"]
+    decomp = await client.post(f"/api/goals/{gid}/decompose", json={})
+    tasks = decomp.json()["tasks"]
+    # Find a top-level task without existing children
+    top_level = [t for t in tasks if t["parent_id"] is None]
+    tid_depth0 = top_level[0]["id"]
+
+    # Depth 0 → 1: should work
+    r1 = await client.post(f"/api/tasks/{tid_depth0}/decompose", json={})
+    assert r1.status_code == 200
+    sub1 = r1.json()["subtasks"][0]["id"]
+
+    # Depth 1 → 2: should work
+    r2 = await client.post(f"/api/tasks/{sub1}/decompose", json={})
+    assert r2.status_code == 200
+    sub2 = r2.json()["subtasks"][0]["id"]
+
+    # Depth 2 → 3: should work
+    r3 = await client.post(f"/api/tasks/{sub2}/decompose", json={})
+    assert r3.status_code == 200
+    sub3 = r3.json()["subtasks"][0]["id"]
+
+    # Depth 3 → 4: should be rejected
+    r4 = await client.post(f"/api/tasks/{sub3}/decompose", json={})
+    assert r4.status_code == 422
+    assert "depth" in r4.json()["detail"].lower()
+
+
+# ─── Answer-aware decomposition (API level) ──────────────────────────────────
+
+@pytest.mark.anyio
+async def test_decompose_with_answers_adapts_tasks(client):
+    """Goals with answers should produce adapted task descriptions."""
+    create = await client.post("/api/goals", json={"title": "earn money online"})
+    gid = create.json()["id"]
+
+    # Answer all questions
+    answers_map = {
+        "technical_skills": "none",
+        "income_urgency": "need money this month",
+        "skill_level": "complete beginner",
+        "time_per_day": "30 minutes",
+        "timeline": "2 weeks",
+    }
+    # Get first question
+    q_resp = await client.get(f"/api/goals/{gid}/next_question")
+    while not q_resp.json().get("done", False):
+        q_data = q_resp.json()
+        # GET returns {"question": {...}}, POST returns {"next_question": {...}}
+        question = q_data.get("question") or q_data.get("next_question")
+        if question is None:
+            break
+        key = question["key"]
+        answer = answers_map.get(key, "test answer")
+        q_resp = await client.post(f"/api/goals/{gid}/clarify", json={"key": key, "answer": answer})
+
+    # Decompose
+    r = await client.post(f"/api/goals/{gid}/decompose", json={})
+    assert r.status_code == 200
+    tasks = r.json()["tasks"]
+    top_level = [t for t in tasks if t["parent_id"] is None]
+
+    # Descriptions should contain context-specific adaptations
+    all_descs = " ".join(t["description"] for t in top_level)
+    assert "starting out" in all_descs.lower() or "30 min" in all_descs or "tight" in all_descs.lower()

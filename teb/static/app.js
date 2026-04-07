@@ -33,6 +33,14 @@ const api = {
     }
     return r.json();
   },
+  async del(url) {
+    const r = await fetch(url, { method: 'DELETE' });
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({ detail: r.statusText }));
+      throw new Error(err.detail || r.statusText);
+    }
+    return r.json();
+  },
 };
 
 // ─── State ────────────────────────────────────────────────────────────────────
@@ -201,6 +209,8 @@ function showTasksScreen(goal) {
   showScreen('screen-tasks');
 }
 
+const MAX_DECOMPOSE_DEPTH = 3;
+
 function renderTasks(tasks) {
   const topLevel = tasks.filter(t => t.parent_id === null);
   const byParent = {};
@@ -215,17 +225,18 @@ function renderTasks(tasks) {
 
   topLevel.forEach(task => {
     const subtasks = byParent[task.id] || [];
-    container.appendChild(buildTaskCard(task, subtasks, byParent));
+    container.appendChild(buildTaskCard(task, subtasks, byParent, 0));
   });
 }
 
-function buildTaskCard(task, subtasks, byParent) {
+function buildTaskCard(task, subtasks, byParent, depth) {
   const card = document.createElement('div');
   card.className = `task-card${task.status === 'done' ? ' done-card' : ''}`;
   card.dataset.id = task.id;
 
   const cbClass = task.status === 'done' ? 'checked' : '';
   const hasSubtasks = subtasks.length > 0;
+  const canDecompose = !hasSubtasks && task.status !== 'done' && depth < MAX_DECOMPOSE_DEPTH;
 
   card.innerHTML = `
     <div class="task-header">
@@ -238,14 +249,17 @@ function buildTaskCard(task, subtasks, byParent) {
     </div>
     <div class="task-body" style="display:none">
       <p class="task-desc">${escHtml(task.description)}</p>
-      <select class="task-status-select" data-id="${task.id}">
-        <option value="todo"${task.status === 'todo' ? ' selected' : ''}>To do</option>
-        <option value="in_progress"${task.status === 'in_progress' ? ' selected' : ''}>In progress</option>
-        <option value="done"${task.status === 'done' ? ' selected' : ''}>Done</option>
-        <option value="skipped"${task.status === 'skipped' ? ' selected' : ''}>Skip</option>
-      </select>
-      ${!hasSubtasks && task.status !== 'done' ? `<button class="btn-break-down" data-id="${task.id}">🔍 Break down further</button>` : ''}
-      ${hasSubtasks ? buildSubtaskList(subtasks, byParent) : ''}
+      <div class="task-actions">
+        <select class="task-status-select" data-id="${task.id}">
+          <option value="todo"${task.status === 'todo' ? ' selected' : ''}>To do</option>
+          <option value="in_progress"${task.status === 'in_progress' ? ' selected' : ''}>In progress</option>
+          <option value="done"${task.status === 'done' ? ' selected' : ''}>Done</option>
+          <option value="skipped"${task.status === 'skipped' ? ' selected' : ''}>Skip</option>
+        </select>
+        ${canDecompose ? `<button class="btn-break-down" data-id="${task.id}">🔍 Break down further</button>` : ''}
+        <button class="btn-delete-task" data-id="${task.id}" title="Delete task">🗑</button>
+      </div>
+      ${hasSubtasks ? buildSubtaskList(subtasks, byParent, depth + 1) : ''}
     </div>
   `;
 
@@ -271,6 +285,9 @@ function buildTaskCard(task, subtasks, byParent) {
     breakBtn.addEventListener('click', () => decomposeTask(task.id));
   }
 
+  // Delete button
+  card.querySelector('.btn-delete-task').addEventListener('click', () => deleteTask(task.id));
+
   // Sub-task checkboxes
   card.querySelectorAll('.subtask-cb').forEach(cb => {
     cb.addEventListener('click', () => {
@@ -285,21 +302,30 @@ function buildTaskCard(task, subtasks, byParent) {
     btn.addEventListener('click', () => decomposeTask(parseInt(btn.dataset.id, 10)));
   });
 
+  // Sub-task delete buttons
+  card.querySelectorAll('.btn-delete-sub').forEach(btn => {
+    btn.addEventListener('click', () => deleteTask(parseInt(btn.dataset.id, 10)));
+  });
+
   return card;
 }
 
-function buildSubtaskList(subtasks, byParent) {
+function buildSubtaskList(subtasks, byParent, depth) {
   const items = subtasks.map(s => {
     const grandkids = (byParent && byParent[s.id]) || [];
     const hasGrandkids = grandkids.length > 0;
+    const canDecompose = !hasGrandkids && s.status !== 'done' && depth < MAX_DECOMPOSE_DEPTH;
     return `
     <div class="subtask-item">
       <div class="subtask-cb ${s.status === 'done' ? 'checked' : ''}" data-id="${s.id}"></div>
       <div>
         <div class="subtask-title">${escHtml(s.title)}</div>
         <div class="subtask-meta">~${s.estimated_minutes} min${hasGrandkids ? ` · ${grandkids.length} sub-tasks` : ''}</div>
-        ${!hasGrandkids && s.status !== 'done' ? `<button class="btn-break-down-sub" data-id="${s.id}">🔍 Break down</button>` : ''}
-        ${hasGrandkids ? buildSubtaskList(grandkids, byParent) : ''}
+        <div class="subtask-actions">
+          ${canDecompose ? `<button class="btn-break-down-sub" data-id="${s.id}">🔍 Break down</button>` : ''}
+          <button class="btn-delete-sub" data-id="${s.id}" title="Delete">🗑</button>
+        </div>
+        ${hasGrandkids ? buildSubtaskList(grandkids, byParent, depth + 1) : ''}
       </div>
     </div>
   `}).join('');
@@ -315,13 +341,7 @@ async function patchTaskStatus(taskId, status) {
   showError('error-tasks', '');
   try {
     await api.patch(`/api/tasks/${taskId}`, { status });
-    // Refresh goal
-    const goal = await api.get(`/api/goals/${currentGoalId}`);
-    currentTasks = goal.tasks || [];
-    renderTasks(currentTasks);
-    updateProgress(currentTasks);
-    loadFocusTask();
-    loadProgressDetail();
+    await refreshGoalView();
   } catch (e) {
     showError('error-tasks', e.message);
   }
@@ -331,16 +351,29 @@ async function decomposeTask(taskId) {
   showError('error-tasks', '');
   try {
     await api.post(`/api/tasks/${taskId}/decompose`, {});
-    // Refresh goal
-    const goal = await api.get(`/api/goals/${currentGoalId}`);
-    currentTasks = goal.tasks || [];
-    renderTasks(currentTasks);
-    updateProgress(currentTasks);
-    loadFocusTask();
-    loadProgressDetail();
+    await refreshGoalView();
   } catch (e) {
     showError('error-tasks', e.message);
   }
+}
+
+async function deleteTask(taskId) {
+  showError('error-tasks', '');
+  try {
+    await api.del(`/api/tasks/${taskId}`);
+    await refreshGoalView();
+  } catch (e) {
+    showError('error-tasks', e.message);
+  }
+}
+
+async function refreshGoalView() {
+  const goal = await api.get(`/api/goals/${currentGoalId}`);
+  currentTasks = goal.tasks || [];
+  renderTasks(currentTasks);
+  updateProgress(currentTasks);
+  loadFocusTask();
+  loadProgressDetail();
 }
 
 async function loadFocusTask() {

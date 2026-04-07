@@ -312,3 +312,57 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 }
 .btn-break-down:hover { background: #eef2ff; }
 .btn-break-down:disabled { opacity: .4; cursor: not-allowed; }
+
+.task-actions, .subtask-actions { display: flex; gap: .5rem; align-items: center; margin-top: .5rem; flex-wrap: wrap; }
+
+.btn-delete-task, .btn-delete-sub {
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  font-size: .75rem;
+  padding: .2rem .5rem;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: color var(--transition), border-color var(--transition);
+}
+.btn-delete-task:hover, .btn-delete-sub:hover { color: var(--danger); border-color: var(--danger); }
+
+/* ─── Mobile responsiveness ─────────────────────────────────────────────────── */
+@media (max-width: 600px) {
+  body { padding: 1rem .5rem 3rem; }
+  #app { max-width: 100%; }
+
+  .hero h1 { font-size: 2rem; }
+  .hero .tagline { font-size: .9rem; }
+
+  .card { padding: 1.25rem 1rem; gap: .6rem; }
+
+  .btn-primary, .btn-secondary { padding: .6rem 1rem; font-size: .9rem; }
+
+  .tasks-header h2 { font-size: 1.15rem; }
+  .progress-bar-wrap { gap: .5rem; }
+
+  .focus-banner { padding: 1rem; }
+  .focus-title { font-size: 1rem; }
+  .focus-desc { font-size: .8rem; }
+  .focus-banner .btn-sm { padding: .35rem .75rem; font-size: .8rem; }
+
+  .task-card { padding: .75rem .85rem; }
+  .task-header { gap: .5rem; }
+  .task-title { font-size: .9rem; }
+  .task-meta { font-size: .75rem; }
+  .task-desc { font-size: .8rem; }
+
+  .subtask-list { padding-left: 1rem; }
+  .subtask-item { font-size: .8rem; }
+
+  .goal-item { padding: .6rem .75rem; }
+  .goal-item-title { font-size: .85rem; }
+  .goal-item-status { font-size: .65rem; padding: .15rem .4rem; }
+}
+
+@media (max-width: 400px) {
+  .hero h1 { font-size: 1.75rem; }
+  .card { padding: 1rem .75rem; }
+  .focus-banner .btn-sm { display: block; margin-top: .4rem; margin-right: 0; width: 100%; text-align: center; }
+}

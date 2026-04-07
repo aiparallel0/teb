@@ -40,6 +40,8 @@ class GoalCreate(BaseModel):
 class TaskPatch(BaseModel):
     status: Optional[str] = None
     notes: Optional[str] = None   # stored in description for simplicity
+    title: Optional[str] = None
+    order_index: Optional[int] = None
 
 
 class ClarifyAnswer(BaseModel):
@@ -133,6 +135,9 @@ async def decompose_goal(goal_id: int):
 
 # ─── Task-level decomposition ─────────────────────────────────────────────────
 
+_MAX_DECOMPOSE_DEPTH = 3  # Maximum nesting depth for task decomposition
+
+
 @app.post("/api/tasks/{task_id}/decompose")
 async def decompose_task(task_id: int):
     task = storage.get_task(task_id)
@@ -145,6 +150,14 @@ async def decompose_task(task_id: int):
     if has_children:
         raise HTTPException(status_code=409, detail="Task already has sub-tasks")
 
+    # Enforce depth limit
+    depth = _get_task_depth(task, existing)
+    if depth >= _MAX_DECOMPOSE_DEPTH:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Maximum decomposition depth ({_MAX_DECOMPOSE_DEPTH}) reached",
+        )
+
     subtasks = decomposer.decompose_task(task)
 
     saved: list[dict] = []
@@ -153,6 +166,17 @@ async def decompose_task(task_id: int):
         saved.append(saved_sub.to_dict())
 
     return {"task_id": task_id, "subtasks": saved}
+
+
+def _get_task_depth(task: Task, all_tasks: list[Task]) -> int:
+    """Return the depth of a task in the hierarchy (0 = top-level)."""
+    by_id = {t.id: t for t in all_tasks if t.id is not None}
+    depth = 0
+    current = task
+    while current.parent_id is not None and current.parent_id in by_id:
+        depth += 1
+        current = by_id[current.parent_id]
+    return depth
 
 
 # ─── Focus mode ───────────────────────────────────────────────────────────────
@@ -238,6 +262,15 @@ async def update_task(task_id: int, body: TaskPatch):
     if body.notes is not None:
         task.description = body.notes
 
+    if body.title is not None:
+        stripped = body.title.strip()
+        if not stripped:
+            raise HTTPException(status_code=422, detail="title must not be empty")
+        task.title = stripped
+
+    if body.order_index is not None:
+        task.order_index = body.order_index
+
     # Update the goal's status if all tasks are done
     task = storage.update_task(task)
 
@@ -255,3 +288,12 @@ async def update_task(task_id: int, body: TaskPatch):
             storage.update_goal(goal)
 
     return task.to_dict()
+
+
+@app.delete("/api/tasks/{task_id}", status_code=200)
+async def delete_task(task_id: int):
+    task = storage.get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    storage.delete_task(task_id)
+    return {"deleted": task_id}

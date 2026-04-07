@@ -387,22 +387,175 @@ def _template_tasks_to_models(
 
 
 def decompose_template(goal: Goal) -> List[Task]:
-    """Return a flat list of Task objects using template-based decomposition."""
+    """Return a flat list of Task objects using template-based decomposition.
+
+    When the goal has clarifying answers, task descriptions and time estimates
+    are adapted to the user's context (skill level, available time, timeline).
+    """
     template_name = _detect_template(goal)
     template = _TEMPLATES[template_name]
+    profile = _build_user_profile(goal.answers)
 
     tasks: List[Task] = []
     for idx, tt in enumerate(template.tasks):
+        adapted = _adapt_template_task(tt, profile)
         parent = Task(
             goal_id=goal.id,  # type: ignore[arg-type]
-            title=tt.title,
-            description=tt.description,
-            estimated_minutes=tt.estimated_minutes,
+            title=adapted.title,
+            description=adapted.description,
+            estimated_minutes=adapted.estimated_minutes,
             order_index=idx,
         )
-        parent._subtask_templates = tt.subtasks  # type: ignore[attr-defined]
+        parent._subtask_templates = [  # type: ignore[attr-defined]
+            _adapt_template_task(sub, profile) for sub in tt.subtasks
+        ]
         tasks.append(parent)
     return tasks
+
+
+# ─── Answer-aware adaptation ──────────────────────────────────────────────────
+
+@dataclass
+class _UserProfile:
+    """Parsed user context extracted from clarifying answers."""
+    skill_level: str = "unknown"     # beginner | intermediate | advanced | unknown
+    minutes_per_day: int = 60        # parsed from time_per_day answer
+    timeline: str = "medium"         # short (< 1 month) | medium | long | unknown
+    has_technical_skills: bool = False
+    income_urgent: bool = False
+    raw_answers: Dict[str, str] = field(default_factory=dict)
+
+
+def _build_user_profile(answers: Dict[str, str]) -> _UserProfile:
+    """Parse clarifying answers into a structured user profile."""
+    profile = _UserProfile(raw_answers=dict(answers))
+
+    # ─── Skill level ───────────────────────────────────────────────────
+    skill = answers.get("skill_level", "").lower()
+    if any(w in skill for w in ("beginner", "none", "zero", "no experience", "never", "starting")):
+        profile.skill_level = "beginner"
+    elif any(w in skill for w in ("intermediate", "some", "a bit", "familiar", "decent")):
+        profile.skill_level = "intermediate"
+    elif any(w in skill for w in ("advanced", "expert", "professional", "years", "senior")):
+        profile.skill_level = "advanced"
+
+    # ─── Time per day ──────────────────────────────────────────────────
+    time_str = answers.get("time_per_day", "").lower()
+    mins = _parse_minutes(time_str)
+    if mins > 0:
+        profile.minutes_per_day = mins
+
+    # ─── Timeline ──────────────────────────────────────────────────────
+    tl = answers.get("timeline", "").lower()
+    if any(w in tl for w in ("week", "days", "asap", "urgent", "quick", "immediately")):
+        profile.timeline = "short"
+    elif any(w in tl for w in ("month", "1-3", "a few months", "quarter")):
+        profile.timeline = "medium"
+    elif any(w in tl for w in ("year", "no rush", "long", "6 month", "no hurry")):
+        profile.timeline = "long"
+
+    # ─── Technical skills ──────────────────────────────────────────────
+    tech = answers.get("technical_skills", "").lower()
+    if any(w in tech for w in ("code", "python", "javascript", "design", "html", "program", "react",
+                                "developer", "engineer", "writing", "marketing")):
+        profile.has_technical_skills = True
+    elif any(w in tech for w in ("none", "no", "zero", "nothing")):
+        profile.has_technical_skills = False
+
+    # ─── Income urgency ────────────────────────────────────────────────
+    urgency = answers.get("income_urgency", "").lower()
+    if any(w in urgency for w in ("this month", "30 day", "asap", "urgent", "need money now", "immediately")):
+        profile.income_urgent = True
+
+    return profile
+
+
+def _parse_minutes(text: str) -> int:
+    """Best-effort parse of a time string like '30 min', '2 hours', '1.5h'."""
+    import re as _re
+    # Try "N hours" / "Nh"
+    m = _re.search(r"(\d+(?:\.\d+)?)\s*h(?:ours?|r)?", text)
+    if m:
+        return int(float(m.group(1)) * 60)
+    # Try "N minutes" / "Nmin" / "Nm"
+    m = _re.search(r"(\d+)\s*m(?:in(?:ute)?s?)?", text)
+    if m:
+        return int(m.group(1))
+    # Try bare number — assume minutes if ≤ 300, else hours
+    m = _re.search(r"(\d+)", text)
+    if m:
+        val = int(m.group(1))
+        return val if val <= 300 else val * 60
+    return 0
+
+
+def _time_scale(profile: _UserProfile) -> float:
+    """Return a multiplier to scale task times based on the user's availability.
+
+    If someone has only 30 min/day, tasks should be compressed to fit into
+    short sessions. If they have 4 hours, tasks can be larger.
+    """
+    if profile.minutes_per_day <= 30:
+        return 0.5
+    if profile.minutes_per_day <= 60:
+        return 0.75
+    if profile.minutes_per_day <= 120:
+        return 1.0
+    return 1.25
+
+
+def _skill_adjustment(profile: _UserProfile) -> tuple[float, str]:
+    """Return (time_multiplier, context_note) based on skill level.
+
+    Beginners need more time and more guidance in descriptions.
+    Advanced users can skip basics and move faster.
+    """
+    if profile.skill_level == "beginner":
+        return 1.3, "Since you're starting out, take extra time and don't rush this step."
+    if profile.skill_level == "advanced":
+        return 0.7, "Given your experience, you can move through this quickly."
+    if profile.skill_level == "intermediate":
+        return 1.0, "Adapt the depth to areas where you're less confident."
+    return 1.0, ""
+
+
+def _adapt_template_task(tt: _TemplateTask, profile: _UserProfile) -> _TemplateTask:
+    """Return a new _TemplateTask with time/description adapted to the user profile."""
+    if not profile.raw_answers:
+        # No answers provided — return the original unchanged
+        return tt
+
+    time_factor = _time_scale(profile)
+    skill_mult, skill_note = _skill_adjustment(profile)
+    combined_factor = time_factor * skill_mult
+
+    # Scale time, round to nearest 5, clamp 5..180
+    scaled_minutes = max(5, min(180, round(tt.estimated_minutes * combined_factor / 5) * 5))
+
+    # Build an adapted description
+    desc = tt.description
+    additions: List[str] = []
+    if skill_note:
+        additions.append(skill_note)
+    if profile.minutes_per_day <= 30:
+        additions.append(
+            f"You have ~{profile.minutes_per_day} min/day, so break this into "
+            f"multiple short sessions if needed."
+        )
+    if profile.timeline == "short":
+        additions.append("Your timeline is tight — focus on the essentials and skip nice-to-haves.")
+    elif profile.timeline == "long":
+        additions.append("You have time on your side — aim for depth over speed.")
+
+    if additions:
+        desc = desc + " " + " ".join(additions)
+
+    return _TemplateTask(
+        title=tt.title,
+        description=desc,
+        estimated_minutes=scaled_minutes,
+        subtasks=tt.subtasks,  # subtasks are adapted separately by the caller
+    )
 
 
 def decompose_ai(goal: Goal) -> List[Task]:
@@ -673,10 +826,16 @@ def get_progress_summary(tasks: List[Task]) -> Dict[str, Any]:
     Return progress statistics for a set of tasks.
 
     Includes counts by status, completion percentage, and estimated
-    remaining time.
+    remaining time.  Parents that have been decomposed into children are
+    excluded from the time estimate to avoid double-counting.
     """
     top_level = [t for t in tasks if t.parent_id is None]
-    all_actionable = tasks  # include subtasks in time estimate
+
+    # Identify tasks that have children (decomposed parents)
+    parent_ids: Set[int] = set()
+    for t in tasks:
+        if t.parent_id is not None:
+            parent_ids.add(t.parent_id)
 
     total = len(top_level)
     done = sum(1 for t in top_level if t.status in ("done", "skipped"))
@@ -684,10 +843,11 @@ def get_progress_summary(tasks: List[Task]) -> Dict[str, Any]:
     todo = sum(1 for t in top_level if t.status == "todo")
     pct = round((done / total) * 100) if total else 0
 
+    # Only count leaf tasks (those without children) for time estimation
     remaining_minutes = sum(
         t.estimated_minutes
-        for t in all_actionable
-        if t.status not in ("done", "skipped")
+        for t in tasks
+        if t.status not in ("done", "skipped") and (t.id is None or t.id not in parent_ids)
     )
 
     return {

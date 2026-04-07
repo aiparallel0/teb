@@ -264,7 +264,8 @@ class TestProgressSummary:
         assert summary["completion_pct"] == 50
         assert summary["estimated_remaining_minutes"] == 60
 
-    def test_progress_excludes_subtasks_from_count(self):
+    def test_progress_excludes_decomposed_parents_from_time(self):
+        """When a parent has children, only children's time is counted (no double-counting)."""
         from teb.decomposer import get_progress_summary
         parent = Task(goal_id=1, title="P", description="", order_index=0, status="todo", estimated_minutes=30)
         parent.id = 1
@@ -272,10 +273,98 @@ class TestProgressSummary:
         child.id = 2
         summary = get_progress_summary([parent, child])
         assert summary["total_tasks"] == 1  # only top-level
-        assert summary["estimated_remaining_minutes"] == 45  # both included in time
+        # Parent is excluded from time because it has a child — only child's 15 min counted
+        assert summary["estimated_remaining_minutes"] == 15
 
     def test_empty_progress(self):
         from teb.decomposer import get_progress_summary
         summary = get_progress_summary([])
         assert summary["total_tasks"] == 0
         assert summary["completion_pct"] == 0
+
+
+# ─── Answer-aware decomposition ───────────────────────────────────────────────
+
+class TestAnswerAwareDecomposition:
+    def test_beginner_gets_longer_estimates(self):
+        """Beginner with answers should get scaled-up task times."""
+        goal_no_answers = _goal("earn money online")
+        goal_beginner = _goal("earn money online")
+        goal_beginner.answers = {"skill_level": "complete beginner", "time_per_day": "30 min", "timeline": "2 weeks"}
+
+        tasks_plain = decompose_template(goal_no_answers)
+        tasks_adapted = decompose_template(goal_beginner)
+
+        # Beginner + 30 min/day → tasks should be shorter per-session (0.5 time scale)
+        # but 1.3x skill multiplier, so net ~0.65x
+        plain_total = sum(t.estimated_minutes for t in tasks_plain)
+        adapted_total = sum(t.estimated_minutes for t in tasks_adapted)
+        assert adapted_total != plain_total  # should be different
+
+    def test_advanced_gets_shorter_estimates(self):
+        goal_advanced = _goal("learn Python")
+        goal_advanced.answers = {"skill_level": "advanced programmer", "time_per_day": "2 hours", "timeline": "no rush"}
+
+        goal_plain = _goal("learn Python")
+
+        tasks_advanced = decompose_template(goal_advanced)
+        tasks_plain = decompose_template(goal_plain)
+
+        advanced_total = sum(t.estimated_minutes for t in tasks_advanced)
+        plain_total = sum(t.estimated_minutes for t in tasks_plain)
+        assert advanced_total < plain_total
+
+    def test_descriptions_include_context(self):
+        goal = _goal("earn money online")
+        goal.answers = {"skill_level": "beginner", "time_per_day": "30 min", "timeline": "2 weeks"}
+
+        tasks = decompose_template(goal)
+        # Descriptions should mention the user's context
+        all_descs = " ".join(t.description for t in tasks)
+        assert "starting out" in all_descs.lower() or "30 min" in all_descs
+
+    def test_no_answers_returns_unchanged_templates(self):
+        """Without answers, decomposition should behave like before."""
+        goal = _goal("earn money online")
+        tasks = decompose_template(goal)
+        # Original template has 6 tasks for make_money_online
+        assert len(tasks) == 6
+        assert tasks[0].estimated_minutes == 60  # original value unchanged
+
+    def test_subtask_templates_also_adapted(self):
+        goal = _goal("earn money online")
+        goal.answers = {"skill_level": "advanced", "time_per_day": "4 hours", "timeline": "no rush"}
+        tasks = decompose_template(goal)
+        tasks_with_subs = [t for t in tasks if getattr(t, "_subtask_templates", [])]
+        assert len(tasks_with_subs) > 0
+        # Subtask templates should also be adapted
+        for t in tasks_with_subs:
+            for sub in t._subtask_templates:
+                # Advanced + 4h/day + long timeline → 0.7 * 1.25 = 0.875x
+                # So a 20-min task should be scaled
+                assert sub.estimated_minutes > 0
+
+
+# ─── Parse minutes ────────────────────────────────────────────────────────────
+
+class TestParseMinutes:
+    def test_parse_hours(self):
+        from teb.decomposer import _parse_minutes
+        assert _parse_minutes("2 hours") == 120
+        assert _parse_minutes("1.5h") == 90
+        assert _parse_minutes("1 hr") == 60
+
+    def test_parse_minutes_text(self):
+        from teb.decomposer import _parse_minutes
+        assert _parse_minutes("30 min") == 30
+        assert _parse_minutes("45 minutes") == 45
+        assert _parse_minutes("15m") == 15
+
+    def test_parse_bare_number(self):
+        from teb.decomposer import _parse_minutes
+        assert _parse_minutes("60") == 60
+
+    def test_parse_empty(self):
+        from teb.decomposer import _parse_minutes
+        assert _parse_minutes("") == 0
+        assert _parse_minutes("no idea") == 0
