@@ -55,7 +55,19 @@
           </div>
           <span class="progress-label" id="progress-label">0% complete</span>
         </div>
+        <div class="progress-detail" id="progress-detail"></div>
       </div>
+
+      <!-- Focus mode banner -->
+      <div id="focus-banner" class="focus-banner" style="display:none">
+        <div class="focus-label">🎯 Focus now</div>
+        <div class="focus-title" id="focus-title"></div>
+        <div class="focus-desc" id="focus-desc"></div>
+        <div class="focus-meta" id="focus-meta"></div>
+        <button class="btn-primary btn-sm" id="btn-focus-done">Mark done ✓</button>
+        <button class="btn-secondary btn-sm" id="btn-focus-start">Start working →</button>
+      </div>
+
       <div id="task-list" class="task-list"></div>
       <button id="btn-redecompose" class="btn-secondary mt">↻ Re-generate tasks</button>
       <div class="error" id="error-tasks"></div>

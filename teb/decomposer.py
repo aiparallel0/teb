@@ -487,3 +487,214 @@ def decompose(goal: Goal) -> List[Task]:
     if config.OPENAI_API_KEY:
         return decompose_ai(goal)
     return decompose_template(goal)
+
+
+# ─── Task-level decomposition ─────────────────────────────────────────────────
+
+def decompose_task(task: Task) -> List[Task]:
+    """
+    Break a single task into smaller sub-tasks.
+
+    Uses AI when OPENAI_API_KEY is set; otherwise uses a template-based
+    approach that splits the task into research → execute → verify steps,
+    each ≤ 25 minutes.
+    """
+    if config.OPENAI_API_KEY:
+        return _decompose_task_ai(task)
+    return _decompose_task_template(task)
+
+
+def _decompose_task_template(task: Task) -> List[Task]:
+    """
+    Template-based single-task decomposition.
+
+    Splits any task into 3 focused micro-steps:
+      1. Research/prepare  — understand what's needed
+      2. Execute           — do the core work
+      3. Verify/review     — confirm the result
+    Each step gets roughly 1/3 of the parent's estimated time, capped at 25 min.
+    """
+    total = task.estimated_minutes
+    third = max(5, total // 3)
+    capped = min(third, 25)
+
+    subtasks = [
+        Task(
+            goal_id=task.goal_id,
+            parent_id=task.id,
+            title=f"Research: {task.title}",
+            description=(
+                f"Spend {capped} minutes gathering what you need to complete "
+                f"'{task.title}'. Look up any unknowns, collect links or tools, "
+                f"and write a quick checklist of steps."
+            ),
+            estimated_minutes=capped,
+            order_index=0,
+        ),
+        Task(
+            goal_id=task.goal_id,
+            parent_id=task.id,
+            title=f"Execute: {task.title}",
+            description=(
+                f"Do the core work. Follow the checklist from the research step. "
+                f"Focus only on finishing — don't polish or optimise yet."
+            ),
+            estimated_minutes=min(total - 2 * capped, 25) if total > 2 * capped else capped,
+            order_index=1,
+        ),
+        Task(
+            goal_id=task.goal_id,
+            parent_id=task.id,
+            title=f"Verify: {task.title}",
+            description=(
+                f"Review your work. Does it meet the goal? Fix any obvious gaps "
+                f"and note anything to revisit later."
+            ),
+            estimated_minutes=capped,
+            order_index=2,
+        ),
+    ]
+    return subtasks
+
+
+def _decompose_task_ai(task: Task) -> List[Task]:
+    """Call an OpenAI-compatible API to break a single task into sub-tasks."""
+    try:
+        from openai import OpenAI  # noqa: PLC0415
+
+        client = OpenAI(
+            api_key=config.OPENAI_API_KEY,
+            base_url=config.OPENAI_BASE_URL,
+        )
+
+        system_prompt = (
+            "You are a task-decomposition assistant. "
+            "Given a task title and description, break it into 2-5 smaller, "
+            "concrete sub-tasks that each take ≤25 minutes. "
+            "Each sub-task must have: title (str), description (str), "
+            "estimated_minutes (int). "
+            "Return ONLY valid JSON: {\"subtasks\": [...]}."
+        )
+        user_prompt = (
+            f"Task: {task.title}\n"
+            f"Description: {task.description}\n"
+            f"Original estimate: {task.estimated_minutes} minutes\n\n"
+            f"Break this into 2-5 concrete, actionable sub-tasks."
+        )
+
+        response = client.chat.completions.create(
+            model=config.MODEL,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            response_format={"type": "json_object"},
+            temperature=0.3,
+        )
+
+        raw = response.choices[0].message.content or "{}"
+        data = json.loads(raw)
+        subtask_list = data if isinstance(data, list) else data.get("subtasks", [])
+        return _parse_task_subtasks(subtask_list, task)
+    except Exception:
+        return _decompose_task_template(task)
+
+
+def _parse_task_subtasks(subtask_list: List[Any], parent: Task) -> List[Task]:
+    result: List[Task] = []
+    for idx, item in enumerate(subtask_list):
+        if not isinstance(item, dict):
+            continue
+        result.append(Task(
+            goal_id=parent.goal_id,
+            parent_id=parent.id,
+            title=str(item.get("title", "Subtask")),
+            description=str(item.get("description", "")),
+            estimated_minutes=min(int(item.get("estimated_minutes", 15)), 25),
+            order_index=idx,
+        ))
+    return result if result else _decompose_task_template(parent)
+
+
+# ─── Focus mode ───────────────────────────────────────────────────────────────
+
+def get_focus_task(tasks: List[Task]) -> Optional[Task]:
+    """
+    Return the single next task the user should work on.
+
+    Strategy:
+      1. If any task is "in_progress", return the deepest (leaf) one.
+      2. Otherwise, return the first "todo" task in order, preferring
+         sub-tasks of the earliest incomplete parent.
+    """
+    if not tasks:
+        return None
+
+    # Build lookup structures
+    by_id: Dict[int, Task] = {t.id: t for t in tasks if t.id is not None}
+    children: Dict[Optional[int], List[Task]] = {}
+    for t in tasks:
+        children.setdefault(t.parent_id, []).append(t)
+
+    # 1. Find in-progress tasks, pick deepest
+    in_progress = [t for t in tasks if t.status == "in_progress"]
+    if in_progress:
+        # Find the one with no in-progress children (deepest)
+        for t in sorted(in_progress, key=lambda x: x.order_index):
+            child_ids = children.get(t.id, [])
+            has_active_child = any(c.status == "in_progress" for c in child_ids)
+            if not has_active_child:
+                return t
+
+    # 2. Walk the tree in order; find first actionable "todo" leaf
+    def _first_todo(parent_id: Optional[int]) -> Optional[Task]:
+        kids = children.get(parent_id, [])
+        kids_sorted = sorted(kids, key=lambda x: (x.order_index, x.id or 0))
+        for kid in kids_sorted:
+            if kid.status in ("done", "skipped"):
+                continue
+            # If this task has children, recurse into them
+            grandkids = children.get(kid.id, [])
+            actionable_grandkids = [g for g in grandkids if g.status not in ("done", "skipped")]
+            if actionable_grandkids:
+                deeper = _first_todo(kid.id)
+                if deeper:
+                    return deeper
+            # Leaf or no actionable children → this is the focus task
+            if kid.status == "todo":
+                return kid
+        return None
+
+    return _first_todo(None)
+
+
+def get_progress_summary(tasks: List[Task]) -> Dict[str, Any]:
+    """
+    Return progress statistics for a set of tasks.
+
+    Includes counts by status, completion percentage, and estimated
+    remaining time.
+    """
+    top_level = [t for t in tasks if t.parent_id is None]
+    all_actionable = tasks  # include subtasks in time estimate
+
+    total = len(top_level)
+    done = sum(1 for t in top_level if t.status in ("done", "skipped"))
+    in_progress = sum(1 for t in top_level if t.status == "in_progress")
+    todo = sum(1 for t in top_level if t.status == "todo")
+    pct = round((done / total) * 100) if total else 0
+
+    remaining_minutes = sum(
+        t.estimated_minutes
+        for t in all_actionable
+        if t.status not in ("done", "skipped")
+    )
+
+    return {
+        "total_tasks": total,
+        "done": done,
+        "in_progress": in_progress,
+        "todo": todo,
+        "completion_pct": pct,
+        "estimated_remaining_minutes": remaining_minutes,
+    }

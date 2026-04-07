@@ -131,6 +131,58 @@ async def decompose_goal(goal_id: int):
     return {"goal_id": goal_id, "tasks": saved}
 
 
+# ─── Task-level decomposition ─────────────────────────────────────────────────
+
+@app.post("/api/tasks/{task_id}/decompose")
+async def decompose_task(task_id: int):
+    task = storage.get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    # Don't re-decompose if already has children
+    existing = storage.list_tasks(goal_id=task.goal_id)
+    has_children = any(t.parent_id == task_id for t in existing)
+    if has_children:
+        raise HTTPException(status_code=409, detail="Task already has sub-tasks")
+
+    subtasks = decomposer.decompose_task(task)
+
+    saved: list[dict] = []
+    for sub in subtasks:
+        saved_sub = storage.create_task(sub)
+        saved.append(saved_sub.to_dict())
+
+    return {"task_id": task_id, "subtasks": saved}
+
+
+# ─── Focus mode ───────────────────────────────────────────────────────────────
+
+@app.get("/api/goals/{goal_id}/focus")
+async def get_focus(goal_id: int):
+    goal = storage.get_goal(goal_id)
+    if not goal:
+        raise HTTPException(status_code=404, detail="Goal not found")
+    tasks = storage.list_tasks(goal_id=goal_id)
+    focus = decomposer.get_focus_task(tasks)
+    if focus is None:
+        return {"focus_task": None, "message": "All tasks completed — well done!"}
+    return {"focus_task": focus.to_dict()}
+
+
+# ─── Progress summary ─────────────────────────────────────────────────────────
+
+@app.get("/api/goals/{goal_id}/progress")
+async def get_progress(goal_id: int):
+    goal = storage.get_goal(goal_id)
+    if not goal:
+        raise HTTPException(status_code=404, detail="Goal not found")
+    tasks = storage.list_tasks(goal_id=goal_id)
+    summary = decomposer.get_progress_summary(tasks)
+    summary["goal_id"] = goal_id
+    summary["goal_status"] = goal.status
+    return summary
+
+
 # ─── Clarifying questions ─────────────────────────────────────────────────────
 
 @app.get("/api/goals/{goal_id}/next_question")
