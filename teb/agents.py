@@ -1,0 +1,655 @@
+"""
+Multi-agent delegation system.
+
+Specialized AI agents that can delegate work to each other to accomplish
+complex goals end-to-end.
+
+Flow:
+  1. User creates a goal (e.g. "earn money online")
+  2. Coordinator agent analyzes the goal and creates a strategy
+  3. Coordinator delegates to specialized agents (marketing, web_dev, outreach, etc.)
+  4. Each specialist produces tasks and can sub-delegate to other specialists
+  5. All handoffs are logged in agent_handoffs for full traceability
+
+Each agent has:
+  - A domain of expertise (marketing, web_dev, outreach, research, finance)
+  - A system prompt that makes it an expert in that domain
+  - The ability to produce concrete tasks
+  - The ability to request delegation to other agents
+
+Without an AI key, agents use template-based heuristics.
+"""
+
+from __future__ import annotations
+
+import json
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Optional
+
+from teb import config, storage
+from teb.models import AgentHandoff, Goal, Task
+
+
+# ─── Agent definitions ───────────────────────────────────────────────────────
+
+@dataclass
+class AgentSpec:
+    """Specification for a specialized agent."""
+    agent_type: str          # unique identifier: coordinator, marketing, web_dev, etc.
+    name: str                # human-readable name
+    description: str         # what this agent does
+    expertise: List[str]     # keywords this agent handles
+    system_prompt: str       # AI system prompt for this agent
+    can_delegate_to: List[str]  # agent types this agent can delegate to
+
+    def to_dict(self) -> dict:
+        return {
+            "agent_type": self.agent_type,
+            "name": self.name,
+            "description": self.description,
+            "expertise": self.expertise,
+            "can_delegate_to": self.can_delegate_to,
+        }
+
+
+@dataclass
+class AgentOutput:
+    """What an agent produces after processing."""
+    tasks: List[Dict[str, Any]]       # tasks to create
+    delegations: List[Dict[str, Any]]  # requests to delegate to other agents
+    summary: str                       # what this agent decided/did
+
+
+# ─── Agent registry ──────────────────────────────────────────────────────────
+
+_AGENTS: Dict[str, AgentSpec] = {}
+
+
+def _register(spec: AgentSpec) -> None:
+    _AGENTS[spec.agent_type] = spec
+
+
+def get_agent(agent_type: str) -> Optional[AgentSpec]:
+    """Get an agent spec by type."""
+    return _AGENTS.get(agent_type)
+
+
+def list_agents() -> List[AgentSpec]:
+    """List all registered agent specs."""
+    return list(_AGENTS.values())
+
+
+# ─── Built-in agents ─────────────────────────────────────────────────────────
+
+_register(AgentSpec(
+    agent_type="coordinator",
+    name="Coordinator",
+    description=(
+        "The orchestrator. Analyzes the user's goal, creates a high-level strategy, "
+        "and delegates specific domains to specialist agents."
+    ),
+    expertise=["strategy", "planning", "delegation", "orchestration"],
+    system_prompt=(
+        "You are the Coordinator agent in a multi-agent task execution system. "
+        "Your job is to analyze a user's goal and create a concrete strategy by "
+        "delegating work to specialist agents.\n\n"
+        "Available specialist agents:\n"
+        "- marketing: Market research, positioning, content strategy, SEO, ads\n"
+        "- web_dev: Websites, landing pages, web apps, hosting, domains, technical setup\n"
+        "- outreach: Cold outreach, email campaigns, networking, lead generation\n"
+        "- research: Deep research, competitive analysis, data gathering, validation\n"
+        "- finance: Budgeting, pricing, payment setup, financial projections\n\n"
+        "Return JSON with this structure:\n"
+        "{\n"
+        '  "strategy_summary": "1-2 sentence overview of the approach",\n'
+        '  "tasks": [\n'
+        '    {"title": "...", "description": "...", "estimated_minutes": 30}\n'
+        "  ],\n"
+        '  "delegations": [\n'
+        '    {"to_agent": "marketing", "instruction": "what to do"}\n'
+        "  ]\n"
+        "}\n\n"
+        "Rules:\n"
+        "- Create 1-3 immediate tasks the user should do themselves\n"
+        "- Delegate specialized work to 2-4 specialist agents\n"
+        "- Be specific and actionable, not generic\n"
+        "- Each delegation instruction should be detailed enough for the specialist\n"
+        "- Focus on the fastest path to a concrete result"
+    ),
+    can_delegate_to=["marketing", "web_dev", "outreach", "research", "finance"],
+))
+
+_register(AgentSpec(
+    agent_type="marketing",
+    name="Marketing Specialist",
+    description="Market research, positioning, content strategy, SEO, and advertising.",
+    expertise=["marketing", "seo", "content", "branding", "ads", "social media", "positioning"],
+    system_prompt=(
+        "You are the Marketing Specialist agent. You create concrete marketing tasks: "
+        "market research, positioning, content creation, SEO optimization, ad campaigns.\n\n"
+        "Return JSON:\n"
+        "{\n"
+        '  "tasks": [\n'
+        '    {"title": "...", "description": "detailed actionable steps", "estimated_minutes": 30}\n'
+        "  ],\n"
+        '  "delegations": [\n'
+        '    {"to_agent": "web_dev", "instruction": "build landing page for X"}\n'
+        "  ],\n"
+        '  "summary": "what was decided"\n'
+        "}\n\n"
+        "Rules:\n"
+        "- Create 3-6 specific, actionable marketing tasks\n"
+        "- Tasks should be ordered by priority\n"
+        "- You can delegate to web_dev (for landing pages/sites) or outreach (for campaigns)\n"
+        "- Include realistic time estimates\n"
+        "- Focus on low-cost, high-impact strategies first"
+    ),
+    can_delegate_to=["web_dev", "outreach"],
+))
+
+_register(AgentSpec(
+    agent_type="web_dev",
+    name="Web Development Specialist",
+    description="Websites, landing pages, web apps, hosting, domains, and technical setup.",
+    expertise=["website", "web", "landing page", "hosting", "domain", "html", "css", "deploy",
+               "nginx", "app", "technical", "code", "build"],
+    system_prompt=(
+        "You are the Web Development Specialist agent. You create concrete technical tasks: "
+        "domain registration, hosting setup, website building, deployment.\n\n"
+        "Return JSON:\n"
+        "{\n"
+        '  "tasks": [\n'
+        '    {"title": "...", "description": "detailed technical steps including specific tools/services", '
+        '"estimated_minutes": 60}\n'
+        "  ],\n"
+        '  "delegations": [],\n'
+        '  "summary": "what was decided"\n'
+        "}\n\n"
+        "Rules:\n"
+        "- Create 3-6 specific technical tasks\n"
+        "- Include exact tools/services (e.g., 'Use Namecheap for domain', 'Deploy with Vercel')\n"
+        "- Break down into steps a beginner can follow\n"
+        "- Include setup, build, test, and deploy phases\n"
+        "- Reference specific technologies (nginx, Cloudflare, etc.)"
+    ),
+    can_delegate_to=[],
+))
+
+_register(AgentSpec(
+    agent_type="outreach",
+    name="Outreach Specialist",
+    description="Cold outreach, email campaigns, networking, and lead generation.",
+    expertise=["outreach", "email", "cold email", "networking", "leads", "sales", "clients"],
+    system_prompt=(
+        "You are the Outreach Specialist agent. You create concrete outreach tasks: "
+        "identifying prospects, crafting messages, setting up campaigns, following up.\n\n"
+        "Return JSON:\n"
+        "{\n"
+        '  "tasks": [\n'
+        '    {"title": "...", "description": "detailed steps", "estimated_minutes": 30}\n'
+        "  ],\n"
+        '  "delegations": [],\n'
+        '  "summary": "what was decided"\n'
+        "}\n\n"
+        "Rules:\n"
+        "- Create 3-5 specific outreach tasks\n"
+        "- Include templates or frameworks for messages\n"
+        "- Specify platforms (LinkedIn, email, Twitter/X)\n"
+        "- Include follow-up cadence\n"
+        "- Focus on personalized, high-response approaches"
+    ),
+    can_delegate_to=[],
+))
+
+_register(AgentSpec(
+    agent_type="research",
+    name="Research Specialist",
+    description="Deep research, competitive analysis, data gathering, and validation.",
+    expertise=["research", "analysis", "data", "competitive", "market", "validate", "investigate"],
+    system_prompt=(
+        "You are the Research Specialist agent. You create concrete research tasks: "
+        "competitive analysis, market validation, data gathering, trend analysis.\n\n"
+        "Return JSON:\n"
+        "{\n"
+        '  "tasks": [\n'
+        '    {"title": "...", "description": "what to research and where", "estimated_minutes": 45}\n'
+        "  ],\n"
+        '  "delegations": [\n'
+        '    {"to_agent": "marketing", "instruction": "use findings to create strategy"}\n'
+        "  ],\n"
+        '  "summary": "what was decided"\n'
+        "}\n\n"
+        "Rules:\n"
+        "- Create 2-4 focused research tasks\n"
+        "- Specify exact sources/tools (Google Trends, SimilarWeb, Reddit, etc.)\n"
+        "- Include validation criteria\n"
+        "- You can delegate findings to marketing or finance agents"
+    ),
+    can_delegate_to=["marketing", "finance"],
+))
+
+_register(AgentSpec(
+    agent_type="finance",
+    name="Finance Specialist",
+    description="Budgeting, pricing strategy, payment setup, and financial projections.",
+    expertise=["money", "budget", "pricing", "payment", "revenue", "cost", "profit", "financial"],
+    system_prompt=(
+        "You are the Finance Specialist agent. You create concrete financial tasks: "
+        "budgeting, pricing strategy, payment processor setup, financial projections.\n\n"
+        "Return JSON:\n"
+        "{\n"
+        '  "tasks": [\n'
+        '    {"title": "...", "description": "specific financial steps", "estimated_minutes": 30}\n'
+        "  ],\n"
+        '  "delegations": [],\n'
+        '  "summary": "what was decided"\n'
+        "}\n\n"
+        "Rules:\n"
+        "- Create 2-4 specific finance tasks\n"
+        "- Include realistic numbers and benchmarks\n"
+        "- Specify payment platforms (Stripe, PayPal, etc.)\n"
+        "- Include pricing analysis methodology"
+    ),
+    can_delegate_to=[],
+))
+
+
+# ─── Agent execution (AI + template fallback) ───────────────────────────────
+
+def run_agent(
+    agent_type: str,
+    goal: Goal,
+    instruction: str = "",
+    context: str = "",
+) -> AgentOutput:
+    """
+    Run a specialized agent on a goal with optional instructions.
+
+    Returns AgentOutput with tasks to create and delegations to perform.
+    """
+    spec = get_agent(agent_type)
+    if spec is None:
+        return AgentOutput(tasks=[], delegations=[], summary=f"Unknown agent type: {agent_type}")
+
+    if config.has_ai():
+        return _run_agent_ai(spec, goal, instruction, context)
+    return _run_agent_template(spec, goal, instruction)
+
+
+def _run_agent_ai(
+    spec: AgentSpec,
+    goal: Goal,
+    instruction: str,
+    context: str,
+) -> AgentOutput:
+    """Run agent using AI."""
+    try:
+        from teb.ai_client import ai_chat_json  # noqa: PLC0415
+
+        user_prompt = f"Goal: {goal.title}\nDescription: {goal.description}\n"
+        if goal.answers:
+            user_prompt += f"User context: {json.dumps(goal.answers)}\n"
+        if instruction:
+            user_prompt += f"\nSpecific instruction: {instruction}\n"
+        if context:
+            user_prompt += f"\nContext from other agents: {context}\n"
+
+        data = ai_chat_json(spec.system_prompt, user_prompt, temperature=0.2)
+
+        tasks = data.get("tasks", [])
+        if not isinstance(tasks, list):
+            tasks = []
+        # Validate task structure
+        valid_tasks = []
+        for t in tasks:
+            if isinstance(t, dict) and t.get("title"):
+                valid_tasks.append({
+                    "title": str(t["title"]),
+                    "description": str(t.get("description", "")),
+                    "estimated_minutes": int(t.get("estimated_minutes", 30)),
+                })
+
+        delegations = data.get("delegations", [])
+        if not isinstance(delegations, list):
+            delegations = []
+        # Validate and filter delegations to only allowed targets
+        valid_delegations = []
+        for d in delegations:
+            if isinstance(d, dict) and d.get("to_agent") in spec.can_delegate_to:
+                valid_delegations.append({
+                    "to_agent": str(d["to_agent"]),
+                    "instruction": str(d.get("instruction", "")),
+                })
+
+        summary = str(data.get("summary", data.get("strategy_summary", "")))
+
+        return AgentOutput(tasks=valid_tasks, delegations=valid_delegations, summary=summary)
+    except Exception as exc:
+        return AgentOutput(tasks=[], delegations=[], summary=f"Agent error: {exc}")
+
+
+# ─── Template-based agent fallback ──────────────────────────────────────────
+
+_TEMPLATE_STRATEGIES: Dict[str, Dict[str, Any]] = {
+    "coordinator": {
+        "money": {
+            "summary": "Earn money online via freelancing and digital products",
+            "tasks": [
+                {"title": "Define your sellable skill or service",
+                 "description": "List 3 skills you have. Pick the one most in demand online. "
+                                "Search Upwork/Fiverr for what people pay for it.",
+                 "estimated_minutes": 30},
+                {"title": "Set a 30-day revenue target",
+                 "description": "Pick a realistic first target ($100-500). "
+                                "Break it down: how many clients/sales needed?",
+                 "estimated_minutes": 15},
+            ],
+            "delegations": [
+                {"to_agent": "research", "instruction": "Research the top 5 platforms where beginners earn money with common skills. Include earning potential and time-to-first-dollar."},
+                {"to_agent": "marketing", "instruction": "Create a personal positioning strategy for a beginner freelancer. Include profile optimization and portfolio building."},
+                {"to_agent": "web_dev", "instruction": "Set up a simple portfolio/landing page to showcase services. Include specific tools and hosting options."},
+                {"to_agent": "outreach", "instruction": "Create a cold outreach strategy to land the first 3 clients. Include message templates and target identification."},
+            ],
+        },
+        "learn": {
+            "summary": "Structured learning plan with practice and validation",
+            "tasks": [
+                {"title": "Define exactly what you want to learn and why",
+                 "description": "Write a 1-sentence goal: 'I want to learn X so I can Y by Z date.'",
+                 "estimated_minutes": 15},
+                {"title": "Find the best learning resource",
+                 "description": "Search for top-rated courses/tutorials. Pick ONE. Don't spread across many.",
+                 "estimated_minutes": 30},
+            ],
+            "delegations": [
+                {"to_agent": "research", "instruction": "Research the most effective learning path for this skill. Include specific courses, books, and practice projects."},
+            ],
+        },
+        "build": {
+            "summary": "Build a project from idea to deployment",
+            "tasks": [
+                {"title": "Write a 1-page project spec",
+                 "description": "Define: what it does, who it's for, core features (max 3), tech stack.",
+                 "estimated_minutes": 45},
+            ],
+            "delegations": [
+                {"to_agent": "web_dev", "instruction": "Create the technical implementation plan: tech stack selection, architecture, hosting, and deployment pipeline."},
+                {"to_agent": "research", "instruction": "Validate the idea: find competitors, check market demand, identify unique angle."},
+            ],
+        },
+        "default": {
+            "summary": "Breaking down your goal into actionable steps with specialist help",
+            "tasks": [
+                {"title": "Clarify your specific outcome",
+                 "description": "Define exactly what 'done' looks like. What is the measurable result?",
+                 "estimated_minutes": 15},
+                {"title": "Identify the first concrete step",
+                 "description": "What is the single smallest thing you can do in the next 30 minutes to make progress?",
+                 "estimated_minutes": 10},
+            ],
+            "delegations": [
+                {"to_agent": "research", "instruction": "Research the most effective approaches for this type of goal. Find 3 proven strategies with examples."},
+            ],
+        },
+    },
+    "marketing": {
+        "default": {
+            "tasks": [
+                {"title": "Define your target audience",
+                 "description": "Create a 1-paragraph profile: who are they, what do they need, where do they hang out online?",
+                 "estimated_minutes": 30},
+                {"title": "Create your unique value proposition",
+                 "description": "Complete: 'I help [audience] achieve [result] by [method], unlike [alternatives].'",
+                 "estimated_minutes": 20},
+                {"title": "Set up social media presence",
+                 "description": "Create/optimize profiles on 2 platforms where your audience is. Use consistent branding.",
+                 "estimated_minutes": 45},
+                {"title": "Create 3 pieces of valuable content",
+                 "description": "Write/record content that demonstrates your expertise. Focus on solving a specific problem.",
+                 "estimated_minutes": 90},
+            ],
+            "delegations": [
+                {"to_agent": "web_dev", "instruction": "Build a landing page with email capture to convert visitors into leads."},
+            ],
+            "summary": "Marketing strategy: audience definition, positioning, content, and lead capture.",
+        },
+    },
+    "web_dev": {
+        "default": {
+            "tasks": [
+                {"title": "Register a domain name",
+                 "description": "Use Namecheap or Cloudflare Registrar. Pick a .com that's short and memorable. Budget: $10-15/year.",
+                 "estimated_minutes": 20},
+                {"title": "Set up hosting with Vercel or Cloudflare Pages",
+                 "description": "Create account, connect to GitHub repo. Free tier is enough to start.",
+                 "estimated_minutes": 30},
+                {"title": "Build a landing page",
+                 "description": "Single page with: headline, value proposition, call-to-action, contact form. Use HTML/CSS or a template.",
+                 "estimated_minutes": 120},
+                {"title": "Set up DNS and SSL",
+                 "description": "Point domain to hosting. Enable HTTPS. Test in browser.",
+                 "estimated_minutes": 20},
+                {"title": "Add analytics",
+                 "description": "Install Plausible or Google Analytics. Set up conversion tracking.",
+                 "estimated_minutes": 15},
+            ],
+            "delegations": [],
+            "summary": "Technical setup: domain, hosting, landing page, SSL, analytics.",
+        },
+    },
+    "outreach": {
+        "default": {
+            "tasks": [
+                {"title": "Identify 20 potential prospects",
+                 "description": "Use LinkedIn, Twitter/X, or industry forums. Find people who need your service.",
+                 "estimated_minutes": 45},
+                {"title": "Write a cold outreach template",
+                 "description": "Structure: compliment, problem, solution, soft CTA. Keep under 100 words. Personalize the first line.",
+                 "estimated_minutes": 30},
+                {"title": "Send first 10 personalized messages",
+                 "description": "Personalize each message with something specific about the prospect. Track responses.",
+                 "estimated_minutes": 60},
+                {"title": "Set up follow-up cadence",
+                 "description": "Day 3: bump email. Day 7: value-add follow up. Day 14: final check. Use a spreadsheet to track.",
+                 "estimated_minutes": 20},
+            ],
+            "delegations": [],
+            "summary": "Outreach strategy: prospect identification, personalized messaging, follow-up cadence.",
+        },
+    },
+    "research": {
+        "default": {
+            "tasks": [
+                {"title": "Competitive landscape analysis",
+                 "description": "Find 5 competitors/alternatives. Note: pricing, features, reviews, weaknesses.",
+                 "estimated_minutes": 60},
+                {"title": "Validate demand with search data",
+                 "description": "Use Google Trends, Ubersuggest, or AnswerThePublic. Document search volumes and trends.",
+                 "estimated_minutes": 30},
+                {"title": "Gather social proof and case studies",
+                 "description": "Find 3 examples of people who succeeded at something similar. Note their approach.",
+                 "estimated_minutes": 30},
+            ],
+            "delegations": [],
+            "summary": "Research: competitive analysis, demand validation, case studies.",
+        },
+    },
+    "finance": {
+        "default": {
+            "tasks": [
+                {"title": "Calculate startup costs",
+                 "description": "List every expense: domain ($12), hosting ($0-20/mo), tools ($0-50/mo). Set a budget cap.",
+                 "estimated_minutes": 20},
+                {"title": "Set pricing strategy",
+                 "description": "Research competitor pricing. Start 20% below market for first clients. Plan to raise after 5 clients.",
+                 "estimated_minutes": 30},
+                {"title": "Set up payment processing",
+                 "description": "Create Stripe or PayPal business account. Set up invoicing. Test with a $1 transaction.",
+                 "estimated_minutes": 30},
+            ],
+            "delegations": [],
+            "summary": "Finance setup: cost analysis, pricing strategy, payment processing.",
+        },
+    },
+}
+
+
+def _detect_goal_category(goal: Goal) -> str:
+    """Detect the broad category of a goal for template matching."""
+    text = f"{goal.title} {goal.description}".lower()
+    words = set(text.split())
+    # Check learn first (since "learn" contains "earn")
+    if any(w in text for w in ("learn", "study", "course", "tutorial", "education")) or "skill" in words:
+        return "learn"
+    if any(w in words for w in ("money", "earn", "income", "revenue", "sell", "profit")) or \
+       any(w in text for w in ("freelanc", "client")):
+        return "money"
+    if any(w in words for w in ("build", "create", "develop", "launch")) or \
+       any(w in text for w in ("website", "app")):
+        return "build"
+    return "default"
+
+
+def _run_agent_template(
+    spec: AgentSpec,
+    goal: Goal,
+    instruction: str,
+) -> AgentOutput:
+    """Run agent using template heuristics (no AI required)."""
+    agent_templates = _TEMPLATE_STRATEGIES.get(spec.agent_type, {})
+
+    # For coordinator, match by goal category; for specialists, use default
+    if spec.agent_type == "coordinator":
+        category = _detect_goal_category(goal)
+        template = agent_templates.get(category, agent_templates.get("default", {}))
+    else:
+        template = agent_templates.get("default", {})
+
+    if not template:
+        return AgentOutput(
+            tasks=[],
+            delegations=[],
+            summary=f"No template available for {spec.name}.",
+        )
+
+    tasks = template.get("tasks", [])
+    delegations = template.get("delegations", [])
+    # Filter delegations to only agents this spec can delegate to
+    valid_delegations = [d for d in delegations if d.get("to_agent") in spec.can_delegate_to]
+    summary = template.get("summary", "")
+
+    return AgentOutput(tasks=tasks, delegations=valid_delegations, summary=summary)
+
+
+# ─── Orchestration ───────────────────────────────────────────────────────────
+
+_MAX_DELEGATION_DEPTH = 3  # prevent infinite delegation loops
+
+
+def orchestrate_goal(goal: Goal) -> Dict[str, Any]:
+    """
+    Full multi-agent orchestration for a goal.
+
+    1. Coordinator analyzes the goal
+    2. Coordinator delegates to specialists
+    3. Specialists produce tasks and may sub-delegate
+    4. All handoffs are logged
+    5. All tasks are created in the database
+
+    Returns a summary of the orchestration.
+    """
+    all_tasks: List[Task] = []
+    all_handoffs: List[Dict] = []
+
+    def _run_delegation_chain(
+        from_agent_type: str,
+        to_agent_type: str,
+        instruction: str,
+        depth: int = 0,
+        context: str = "",
+    ) -> None:
+        if depth >= _MAX_DELEGATION_DEPTH:
+            return
+
+        # Log the handoff
+        handoff = AgentHandoff(
+            goal_id=goal.id,
+            from_agent=from_agent_type,
+            to_agent=to_agent_type,
+            input_summary=instruction[:500],
+            status="in_progress",
+        )
+        handoff = storage.create_handoff(handoff)
+
+        # Run the specialist
+        output = run_agent(to_agent_type, goal, instruction=instruction, context=context)
+
+        # Create tasks from agent output
+        for idx, task_data in enumerate(output.tasks):
+            task = Task(
+                goal_id=goal.id,
+                title=task_data["title"],
+                description=task_data.get("description", ""),
+                estimated_minutes=task_data.get("estimated_minutes", 30),
+                order_index=len(all_tasks) + idx,
+            )
+            saved_task = storage.create_task(task)
+            all_tasks.append(saved_task)
+
+            # Link first task to handoff
+            if idx == 0 and handoff.id:
+                handoff.task_id = saved_task.id
+
+        # Update handoff
+        handoff.output_summary = output.summary[:500]
+        handoff.status = "completed"
+        storage.update_handoff(handoff)
+        all_handoffs.append(handoff.to_dict())
+
+        # Process sub-delegations
+        for delegation in output.delegations:
+            _run_delegation_chain(
+                from_agent_type=to_agent_type,
+                to_agent_type=delegation["to_agent"],
+                instruction=delegation.get("instruction", ""),
+                depth=depth + 1,
+                context=output.summary,
+            )
+
+    # Step 1: Run coordinator
+    coordinator_output = run_agent("coordinator", goal)
+
+    # Create coordinator's own tasks
+    for idx, task_data in enumerate(coordinator_output.tasks):
+        task = Task(
+            goal_id=goal.id,
+            title=task_data["title"],
+            description=task_data.get("description", ""),
+            estimated_minutes=task_data.get("estimated_minutes", 30),
+            order_index=idx,
+        )
+        saved_task = storage.create_task(task)
+        all_tasks.append(saved_task)
+
+    # Step 2: Execute delegations from coordinator
+    for delegation in coordinator_output.delegations:
+        _run_delegation_chain(
+            from_agent_type="coordinator",
+            to_agent_type=delegation["to_agent"],
+            instruction=delegation.get("instruction", ""),
+            depth=0,
+            context=coordinator_output.summary,
+        )
+
+    # Update goal status
+    goal.status = "decomposed"
+    storage.update_goal(goal)
+
+    return {
+        "goal_id": goal.id,
+        "strategy": coordinator_output.summary,
+        "total_tasks": len(all_tasks),
+        "tasks": [t.to_dict() for t in all_tasks],
+        "handoffs": all_handoffs,
+        "agents_involved": list({h["to_agent"] for h in all_handoffs} | {"coordinator"}),
+    }

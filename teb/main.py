@@ -10,7 +10,7 @@ from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from teb import decomposer, executor, storage
+from teb import agents, decomposer, executor, storage
 from teb.models import ApiCredential, CheckIn, ExecutionLog, Goal, NudgeEvent, OutcomeMetric, Task
 
 
@@ -661,3 +661,43 @@ async def act_on_suggestion(suggestion_id: int, body: SuggestionAction):
 async def list_success_paths(goal_type: Optional[str] = Query(default=None)):
     paths = storage.list_success_paths(goal_type=goal_type)
     return [p.to_dict() for p in paths]
+
+
+# ─── Multi-Agent Delegation ─────────────────────────────────────────────────
+
+@app.get("/api/agents")
+async def list_agent_types():
+    """List all available agent types and their capabilities."""
+    return [a.to_dict() for a in agents.list_agents()]
+
+
+@app.post("/api/goals/{goal_id}/orchestrate")
+async def orchestrate_goal(goal_id: int):
+    """
+    Run multi-agent orchestration on a goal.
+
+    The coordinator agent analyzes the goal, delegates to specialists
+    (marketing, web_dev, outreach, research, finance), each specialist
+    produces concrete tasks and may sub-delegate to others.
+
+    All handoffs are logged and all tasks are created in the database.
+    """
+    goal = storage.get_goal(goal_id)
+    if not goal:
+        raise HTTPException(status_code=404, detail="Goal not found")
+
+    # Clear any previous tasks for a clean orchestration
+    storage.delete_tasks_for_goal(goal_id)
+
+    result = agents.orchestrate_goal(goal)
+    return result
+
+
+@app.get("/api/goals/{goal_id}/handoffs")
+async def list_handoffs(goal_id: int):
+    """View the agent delegation chain for a goal."""
+    goal = storage.get_goal(goal_id)
+    if not goal:
+        raise HTTPException(status_code=404, detail="Goal not found")
+    handoffs = storage.list_handoffs(goal_id)
+    return [h.to_dict() for h in handoffs]
