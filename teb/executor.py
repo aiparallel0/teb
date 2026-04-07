@@ -251,9 +251,14 @@ def _parse_plan(data: dict, credentials: List[ApiCredential]) -> ExecutionPlan:
 
 # ─── Step execution ──────────────────────────────────────────────────────────
 
+_MIN_SECRET_LENGTH_FOR_MASKING = 12
+_MAX_RESPONSE_LOG_SIZE = 2000
+_MAX_SUMMARY_LENGTH = 500
+
+
 def _mask_secret(value: str) -> str:
     """Show only the first 4 and last 4 characters of a secret."""
-    if len(value) <= 12:
+    if len(value) <= _MIN_SECRET_LENGTH_FOR_MASKING:
         return "****"
     return value[:4] + "****" + value[-4:]
 
@@ -285,7 +290,7 @@ def execute_step(
                 headers=headers,
                 json=step.body if step.body else None,
             )
-        body_text = response.text[:2000]  # cap log size
+        body_text = response.text[:_MAX_RESPONSE_LOG_SIZE]  # cap log size
         success = 200 <= response.status_code < 400
         return StepResult(
             step=step,
@@ -329,8 +334,8 @@ def build_request_summary(step: ExecutionStep, cred: Optional[ApiCredential]) ->
     if step.body:
         # Truncate body representation
         body_str = json.dumps(step.body)
-        if len(body_str) > 500:
-            body_str = body_str[:500] + "..."
+        if len(body_str) > _MAX_SUMMARY_LENGTH:
+            body_str = body_str[:_MAX_SUMMARY_LENGTH] + "..."
         parts.append(f"Body: {body_str}")
     return " | ".join(parts)
 
@@ -342,7 +347,7 @@ def build_response_summary(result: StepResult) -> str:
     parts = [f"Status: {result.status_code}"]
     if result.response_body:
         body = result.response_body
-        if len(body) > 500:
-            body = body[:500] + "..."
+        if len(body) > _MAX_SUMMARY_LENGTH:
+            body = body[:_MAX_SUMMARY_LENGTH] + "..."
         parts.append(f"Body: {body}")
     return " | ".join(parts)

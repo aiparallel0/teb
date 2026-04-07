@@ -8,6 +8,7 @@ from teb.executor import (
     ExecutionPlan,
     ExecutionStep,
     StepResult,
+    _MIN_SECRET_LENGTH_FOR_MASKING,
     _mask_secret,
     _parse_plan,
     _sanitize_path,
@@ -24,8 +25,8 @@ def _cred(cred_id: int = 1, name: str = "TestAPI", base_url: str = "https://api.
     return c
 
 
-def _task(title: str = "Test task", desc: str = "Do something") -> Task:
-    t = Task(goal_id=1, title=title, description=desc, estimated_minutes=30)
+def _task(title: str = "Test task", description: str = "Do something") -> Task:
+    t = Task(goal_id=1, title=title, description=description, estimated_minutes=30)
     t.id = 10
     return t
 
