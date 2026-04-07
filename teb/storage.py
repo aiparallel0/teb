@@ -156,6 +156,9 @@ def init_db() -> None:
                 status         TEXT    NOT NULL DEFAULT 'pending',
                 created_at     TEXT    NOT NULL
             );
+
+            CREATE INDEX IF NOT EXISTS idx_check_ins_goal_created
+                ON check_ins(goal_id, created_at DESC);
         """)
 
 

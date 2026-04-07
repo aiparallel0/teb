@@ -1226,7 +1226,7 @@ def generate_proactive_suggestions(
             suggestions.append(ProactiveSuggestion(
                 goal_id=goal_id,
                 suggestion="Create a portfolio or work sample before reaching out to clients",
-                rationale="Clients are 3x more likely to respond when they can see concrete examples of your work.",
+                rationale="Clients are much more likely to respond when they can see concrete examples of your work.",
                 category="opportunity",
             ))
         if "automate" not in task_titles:
@@ -1280,7 +1280,7 @@ def generate_proactive_suggestions(
         suggestions.append(ProactiveSuggestion(
             goal_id=goal_id,
             suggestion="Focus on finishing one task before starting another",
-            rationale="Context-switching costs 20-40% of productive time. Finishing one thing fully beats having three things half-done.",
+            rationale="Context-switching significantly reduces productive time. Finishing one thing fully beats having three things half-done.",
             category="risk",
         ))
 

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -487,7 +487,7 @@ async def create_checkin(goal_id: int, body: CheckInCreate):
         raise HTTPException(status_code=404, detail="Goal not found")
 
     if not body.done_summary.strip() and not body.blockers.strip():
-        raise HTTPException(status_code=422, detail="Provide done_summary or blockers")
+        raise HTTPException(status_code=422, detail="At least one of done_summary or blockers must be provided")
 
     # Analyze the check-in for coaching feedback
     coaching = decomposer.analyze_checkin(body.done_summary, body.blockers)
@@ -526,8 +526,7 @@ async def get_nudge(goal_id: int):
 
     last_ci_age: Optional[float] = None
     if last_ci and last_ci.created_at:
-        from datetime import timezone as tz
-        delta = datetime.now(tz.utc) - last_ci.created_at.replace(tzinfo=tz.utc)
+        delta = datetime.now(timezone.utc) - last_ci.created_at.replace(tzinfo=timezone.utc)
         last_ci_age = delta.total_seconds() / 3600
 
     nudge_info = decomposer.detect_stagnation(tasks, last_ci_age, goal.status)
