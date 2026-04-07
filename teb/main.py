@@ -11,7 +11,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from teb import decomposer, executor, storage
-from teb.models import ApiCredential, ExecutionLog, Goal, Task
+from teb.models import ApiCredential, CheckIn, ExecutionLog, Goal, NudgeEvent, OutcomeMetric, Task
 
 
 # ─── Startup / lifespan ───────────────────────────────────────────────────────
@@ -64,6 +64,28 @@ class CredentialCreate(BaseModel):
     auth_header: str = "Authorization"
     auth_value: str = ""
     description: str = ""
+
+
+class CheckInCreate(BaseModel):
+    done_summary: str = ""
+    blockers: str = ""
+
+
+class OutcomeCreate(BaseModel):
+    label: str
+    target_value: float = 0.0
+    unit: str = ""
+
+
+class OutcomeUpdate(BaseModel):
+    current_value: Optional[float] = None
+    label: Optional[str] = None
+    target_value: Optional[float] = None
+    unit: Optional[str] = None
+
+
+class SuggestionAction(BaseModel):
+    status: str  # accepted | dismissed
 
 
 # ─── Frontend ─────────────────────────────────────────────────────────────────
@@ -454,3 +476,189 @@ async def get_task_executions(task_id: int):
         raise HTTPException(status_code=404, detail="Task not found")
     logs = storage.list_execution_logs(task_id)
     return {"task_id": task_id, "logs": [log.to_dict() for log in logs]}
+
+
+# ─── Check-ins ───────────────────────────────────────────────────────────────
+
+@app.post("/api/goals/{goal_id}/checkin", status_code=201)
+async def create_checkin(goal_id: int, body: CheckInCreate):
+    goal = storage.get_goal(goal_id)
+    if not goal:
+        raise HTTPException(status_code=404, detail="Goal not found")
+
+    if not body.done_summary.strip() and not body.blockers.strip():
+        raise HTTPException(status_code=422, detail="Provide done_summary or blockers")
+
+    # Analyze the check-in for coaching feedback
+    coaching = decomposer.analyze_checkin(body.done_summary, body.blockers)
+
+    ci = CheckIn(
+        goal_id=goal_id,
+        done_summary=body.done_summary.strip(),
+        blockers=body.blockers.strip(),
+        mood=coaching["mood_detected"],
+        feedback=coaching["feedback"],
+    )
+    ci = storage.create_checkin(ci)
+
+    return {"checkin": ci.to_dict(), "coaching": coaching}
+
+
+@app.get("/api/goals/{goal_id}/checkins")
+async def list_checkins(goal_id: int, limit: Optional[int] = Query(default=None)):
+    goal = storage.get_goal(goal_id)
+    if not goal:
+        raise HTTPException(status_code=404, detail="Goal not found")
+    checkins = storage.list_checkins(goal_id, limit=limit)
+    return [c.to_dict() for c in checkins]
+
+
+# ─── Nudges ──────────────────────────────────────────────────────────────────
+
+@app.get("/api/goals/{goal_id}/nudge")
+async def get_nudge(goal_id: int):
+    goal = storage.get_goal(goal_id)
+    if not goal:
+        raise HTTPException(status_code=404, detail="Goal not found")
+
+    tasks = storage.list_tasks(goal_id=goal_id)
+    last_ci = storage.get_last_checkin(goal_id)
+
+    last_ci_age: Optional[float] = None
+    if last_ci and last_ci.created_at:
+        from datetime import timezone as tz
+        delta = datetime.now(tz.utc) - last_ci.created_at.replace(tzinfo=tz.utc)
+        last_ci_age = delta.total_seconds() / 3600
+
+    nudge_info = decomposer.detect_stagnation(tasks, last_ci_age, goal.status)
+
+    if nudge_info:
+        ne = NudgeEvent(
+            goal_id=goal_id,
+            nudge_type=nudge_info["nudge_type"],
+            message=nudge_info["message"],
+        )
+        ne = storage.create_nudge(ne)
+        return {"nudge": ne.to_dict()}
+
+    return {"nudge": None, "message": "No nudge needed — you're on track!"}
+
+
+@app.post("/api/nudges/{nudge_id}/acknowledge")
+async def acknowledge_nudge(nudge_id: int):
+    ne = storage.acknowledge_nudge(nudge_id)
+    if not ne:
+        raise HTTPException(status_code=404, detail="Nudge not found")
+    return ne.to_dict()
+
+
+# ─── Outcome Metrics ─────────────────────────────────────────────────────────
+
+@app.post("/api/goals/{goal_id}/outcomes", status_code=201)
+async def create_outcome(goal_id: int, body: OutcomeCreate):
+    goal = storage.get_goal(goal_id)
+    if not goal:
+        raise HTTPException(status_code=404, detail="Goal not found")
+    label = body.label.strip()
+    if not label:
+        raise HTTPException(status_code=422, detail="label must not be empty")
+    om = OutcomeMetric(
+        goal_id=goal_id,
+        label=label,
+        target_value=body.target_value,
+        unit=body.unit.strip(),
+    )
+    om = storage.create_outcome_metric(om)
+    return om.to_dict()
+
+
+@app.get("/api/goals/{goal_id}/outcomes")
+async def list_outcomes(goal_id: int):
+    goal = storage.get_goal(goal_id)
+    if not goal:
+        raise HTTPException(status_code=404, detail="Goal not found")
+    metrics = storage.list_outcome_metrics(goal_id)
+    return [m.to_dict() for m in metrics]
+
+
+@app.patch("/api/outcomes/{metric_id}")
+async def update_outcome(metric_id: int, body: OutcomeUpdate):
+    om = storage.get_outcome_metric(metric_id)
+    if not om:
+        raise HTTPException(status_code=404, detail="Outcome metric not found")
+    if body.current_value is not None:
+        om.current_value = body.current_value
+    if body.label is not None:
+        om.label = body.label.strip()
+    if body.target_value is not None:
+        om.target_value = body.target_value
+    if body.unit is not None:
+        om.unit = body.unit.strip()
+    om = storage.update_outcome_metric(om)
+    return om.to_dict()
+
+
+@app.get("/api/goals/{goal_id}/outcome_suggestions")
+async def outcome_suggestions(goal_id: int):
+    goal = storage.get_goal(goal_id)
+    if not goal:
+        raise HTTPException(status_code=404, detail="Goal not found")
+    return decomposer.suggest_outcome_metrics(goal.title, goal.description)
+
+
+# ─── User Profile ────────────────────────────────────────────────────────────
+
+@app.get("/api/profile")
+async def get_profile():
+    profile = storage.get_or_create_profile()
+    return profile.to_dict()
+
+
+@app.patch("/api/profile")
+async def update_profile(body: dict):
+    profile = storage.get_or_create_profile()
+    for key in ("skills", "available_hours_per_day", "experience_level",
+                "interests", "preferred_learning_style"):
+        if key in body:
+            setattr(profile, key, body[key])
+    profile = storage.update_profile(profile)
+    return profile.to_dict()
+
+
+# ─── Proactive Suggestions ──────────────────────────────────────────────────
+
+@app.get("/api/goals/{goal_id}/suggestions")
+async def get_suggestions(goal_id: int):
+    goal = storage.get_goal(goal_id)
+    if not goal:
+        raise HTTPException(status_code=404, detail="Goal not found")
+
+    # Generate new suggestions if none exist
+    existing = storage.list_suggestions(goal_id, status="pending")
+    if not existing:
+        tasks = storage.list_tasks(goal_id=goal_id)
+        new_suggestions = decomposer.generate_proactive_suggestions(goal, tasks)
+        for s in new_suggestions:
+            storage.create_suggestion(s)
+        existing = storage.list_suggestions(goal_id, status="pending")
+
+    return [s.to_dict() for s in existing]
+
+
+@app.post("/api/suggestions/{suggestion_id}")
+async def act_on_suggestion(suggestion_id: int, body: SuggestionAction):
+    valid = {"accepted", "dismissed"}
+    if body.status not in valid:
+        raise HTTPException(status_code=422, detail=f"status must be one of {valid}")
+    ps = storage.update_suggestion_status(suggestion_id, body.status)
+    if not ps:
+        raise HTTPException(status_code=404, detail="Suggestion not found")
+    return ps.to_dict()
+
+
+# ─── Success Paths (Knowledge Base) ─────────────────────────────────────────
+
+@app.get("/api/knowledge/paths")
+async def list_success_paths(goal_type: Optional[str] = Query(default=None)):
+    paths = storage.list_success_paths(goal_type=goal_type)
+    return [p.to_dict() for p in paths]
