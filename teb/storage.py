@@ -190,3 +190,9 @@ def update_task(task: Task) -> Task:
 def delete_tasks_for_goal(goal_id: int) -> None:
     with _conn() as con:
         con.execute("DELETE FROM tasks WHERE goal_id = ?", (goal_id,))
+
+
+def delete_task(task_id: int) -> None:
+    """Delete a task and its children (CASCADE handles children)."""
+    with _conn() as con:
+        con.execute("DELETE FROM tasks WHERE id = ?", (task_id,))

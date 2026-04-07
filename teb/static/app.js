@@ -33,6 +33,14 @@ const api = {
     }
     return r.json();
   },
+  async del(url) {
+    const r = await fetch(url, { method: 'DELETE' });
+    if (!r.ok) {
+      const err = await r.json().catch(() => ({ detail: r.statusText }));
+      throw new Error(err.detail || r.statusText);
+    }
+    return r.json();
+  },
 };
 
 // ─── State ────────────────────────────────────────────────────────────────────
@@ -196,8 +204,12 @@ function showTasksScreen(goal) {
   currentTasks = goal.tasks || [];
   renderTasks(currentTasks);
   updateProgress(currentTasks);
+  loadFocusTask();
+  loadProgressDetail();
   showScreen('screen-tasks');
 }
+
+const MAX_DECOMPOSE_DEPTH = 3;
 
 function renderTasks(tasks) {
   const topLevel = tasks.filter(t => t.parent_id === null);
@@ -213,35 +225,41 @@ function renderTasks(tasks) {
 
   topLevel.forEach(task => {
     const subtasks = byParent[task.id] || [];
-    container.appendChild(buildTaskCard(task, subtasks));
+    container.appendChild(buildTaskCard(task, subtasks, byParent, 0));
   });
 }
 
-function buildTaskCard(task, subtasks) {
+function buildTaskCard(task, subtasks, byParent, depth) {
   const card = document.createElement('div');
   card.className = `task-card${task.status === 'done' ? ' done-card' : ''}`;
   card.dataset.id = task.id;
 
   const cbClass = task.status === 'done' ? 'checked' : '';
+  const hasSubtasks = subtasks.length > 0;
+  const canDecompose = !hasSubtasks && task.status !== 'done' && depth < MAX_DECOMPOSE_DEPTH;
 
   card.innerHTML = `
     <div class="task-header">
       <div class="task-checkbox ${cbClass}" data-id="${task.id}" title="Mark done"></div>
       <div class="task-info">
         <div class="task-title">${escHtml(task.title)}</div>
-        <div class="task-meta">~${task.estimated_minutes} min${subtasks.length ? ` · ${subtasks.length} sub-tasks` : ''}</div>
+        <div class="task-meta">~${task.estimated_minutes} min${hasSubtasks ? ` · ${subtasks.length} sub-tasks` : ''}</div>
       </div>
       <button class="task-expand-btn" aria-label="expand">▾</button>
     </div>
     <div class="task-body" style="display:none">
       <p class="task-desc">${escHtml(task.description)}</p>
-      <select class="task-status-select" data-id="${task.id}">
-        <option value="todo"${task.status === 'todo' ? ' selected' : ''}>To do</option>
-        <option value="in_progress"${task.status === 'in_progress' ? ' selected' : ''}>In progress</option>
-        <option value="done"${task.status === 'done' ? ' selected' : ''}>Done</option>
-        <option value="skipped"${task.status === 'skipped' ? ' selected' : ''}>Skip</option>
-      </select>
-      ${subtasks.length ? buildSubtaskList(subtasks) : ''}
+      <div class="task-actions">
+        <select class="task-status-select" data-id="${task.id}">
+          <option value="todo"${task.status === 'todo' ? ' selected' : ''}>To do</option>
+          <option value="in_progress"${task.status === 'in_progress' ? ' selected' : ''}>In progress</option>
+          <option value="done"${task.status === 'done' ? ' selected' : ''}>Done</option>
+          <option value="skipped"${task.status === 'skipped' ? ' selected' : ''}>Skip</option>
+        </select>
+        ${canDecompose ? `<button class="btn-break-down" data-id="${task.id}">🔍 Break down further</button>` : ''}
+        <button class="btn-delete-task" data-id="${task.id}" title="Delete task">🗑</button>
+      </div>
+      ${hasSubtasks ? buildSubtaskList(subtasks, byParent, depth + 1) : ''}
     </div>
   `;
 
@@ -261,6 +279,15 @@ function buildTaskCard(task, subtasks) {
     await patchTaskStatus(task.id, e.target.value);
   });
 
+  // Break down button
+  const breakBtn = card.querySelector('.btn-break-down');
+  if (breakBtn) {
+    breakBtn.addEventListener('click', () => decomposeTask(task.id));
+  }
+
+  // Delete button
+  card.querySelector('.btn-delete-task').addEventListener('click', () => deleteTask(task.id));
+
   // Sub-task checkboxes
   card.querySelectorAll('.subtask-cb').forEach(cb => {
     cb.addEventListener('click', () => {
@@ -270,19 +297,38 @@ function buildTaskCard(task, subtasks) {
     });
   });
 
+  // Sub-task break-down buttons
+  card.querySelectorAll('.btn-break-down-sub').forEach(btn => {
+    btn.addEventListener('click', () => decomposeTask(parseInt(btn.dataset.id, 10)));
+  });
+
+  // Sub-task delete buttons
+  card.querySelectorAll('.btn-delete-sub').forEach(btn => {
+    btn.addEventListener('click', () => deleteTask(parseInt(btn.dataset.id, 10)));
+  });
+
   return card;
 }
 
-function buildSubtaskList(subtasks) {
-  const items = subtasks.map(s => `
+function buildSubtaskList(subtasks, byParent, depth) {
+  const items = subtasks.map(s => {
+    const grandkids = (byParent && byParent[s.id]) || [];
+    const hasGrandkids = grandkids.length > 0;
+    const canDecompose = !hasGrandkids && s.status !== 'done' && depth < MAX_DECOMPOSE_DEPTH;
+    return `
     <div class="subtask-item">
       <div class="subtask-cb ${s.status === 'done' ? 'checked' : ''}" data-id="${s.id}"></div>
       <div>
         <div class="subtask-title">${escHtml(s.title)}</div>
-        <div class="subtask-meta">~${s.estimated_minutes} min</div>
+        <div class="subtask-meta">~${s.estimated_minutes} min${hasGrandkids ? ` · ${grandkids.length} sub-tasks` : ''}</div>
+        <div class="subtask-actions">
+          ${canDecompose ? `<button class="btn-break-down-sub" data-id="${s.id}">🔍 Break down</button>` : ''}
+          <button class="btn-delete-sub" data-id="${s.id}" title="Delete">🗑</button>
+        </div>
+        ${hasGrandkids ? buildSubtaskList(grandkids, byParent, depth + 1) : ''}
       </div>
     </div>
-  `).join('');
+  `}).join('');
   return `<div class="subtask-list">${items}</div>`;
 }
 
@@ -295,15 +341,94 @@ async function patchTaskStatus(taskId, status) {
   showError('error-tasks', '');
   try {
     await api.patch(`/api/tasks/${taskId}`, { status });
-    // Refresh goal
-    const goal = await api.get(`/api/goals/${currentGoalId}`);
-    currentTasks = goal.tasks || [];
-    renderTasks(currentTasks);
-    updateProgress(currentTasks);
+    await refreshGoalView();
   } catch (e) {
     showError('error-tasks', e.message);
   }
 }
+
+async function decomposeTask(taskId) {
+  showError('error-tasks', '');
+  try {
+    await api.post(`/api/tasks/${taskId}/decompose`, {});
+    await refreshGoalView();
+  } catch (e) {
+    showError('error-tasks', e.message);
+  }
+}
+
+async function deleteTask(taskId) {
+  if (!confirm('Delete this task and all its sub-tasks? This cannot be undone.')) return;
+  showError('error-tasks', '');
+  try {
+    await api.del(`/api/tasks/${taskId}`);
+    await refreshGoalView();
+  } catch (e) {
+    showError('error-tasks', e.message);
+  }
+}
+
+async function refreshGoalView() {
+  const goal = await api.get(`/api/goals/${currentGoalId}`);
+  currentTasks = goal.tasks || [];
+  renderTasks(currentTasks);
+  updateProgress(currentTasks);
+  loadFocusTask();
+  loadProgressDetail();
+}
+
+async function loadFocusTask() {
+  const banner = document.getElementById('focus-banner');
+  if (!currentGoalId) { banner.style.display = 'none'; return; }
+  try {
+    const res = await api.get(`/api/goals/${currentGoalId}/focus`);
+    if (!res.focus_task) {
+      banner.style.display = 'none';
+      return;
+    }
+    const t = res.focus_task;
+    document.getElementById('focus-title').textContent = t.title;
+    document.getElementById('focus-desc').textContent = t.description;
+    document.getElementById('focus-meta').textContent = `~${t.estimated_minutes} min`;
+    banner.style.display = 'block';
+    banner.dataset.taskId = t.id;
+  } catch (e) {
+    banner.style.display = 'none';
+  }
+}
+
+async function loadProgressDetail() {
+  const el = document.getElementById('progress-detail');
+  if (!currentGoalId) { el.textContent = ''; return; }
+  try {
+    const p = await api.get(`/api/goals/${currentGoalId}/progress`);
+    const parts = [];
+    if (p.done) parts.push(`${p.done} done`);
+    if (p.in_progress) parts.push(`${p.in_progress} in progress`);
+    if (p.todo) parts.push(`${p.todo} remaining`);
+    if (p.estimated_remaining_minutes > 0) {
+      const hrs = Math.floor(p.estimated_remaining_minutes / 60);
+      const mins = p.estimated_remaining_minutes % 60;
+      const timeStr = hrs > 0 ? `${hrs}h ${mins}m` : `${mins}m`;
+      parts.push(`~${timeStr} left`);
+    }
+    el.textContent = parts.join(' · ');
+  } catch (e) {
+    el.textContent = '';
+  }
+}
+
+document.getElementById('btn-focus-done').addEventListener('click', async () => {
+  const banner = document.getElementById('focus-banner');
+  const tid = parseInt(banner.dataset.taskId, 10);
+  if (tid) await patchTaskStatus(tid, 'done');
+});
+
+document.getElementById('btn-focus-start').addEventListener('click', async () => {
+  const banner = document.getElementById('focus-banner');
+  const tid = parseInt(banner.dataset.taskId, 10);
+  if (tid) await patchTaskStatus(tid, 'in_progress');
+});
 
 function updateProgress(tasks) {
   const topLevel = tasks.filter(t => t.parent_id === null);
@@ -335,6 +460,24 @@ document.getElementById('btn-redecompose').addEventListener('click', async () =>
     showError('error-tasks', e.message);
   } finally {
     btn.disabled = false;
+  }
+});
+
+document.getElementById('btn-add-task').addEventListener('click', async () => {
+  if (!currentGoalId) return;
+  const title = prompt('Task title:');
+  if (!title || !title.trim()) return;
+  showError('error-tasks', '');
+  try {
+    await api.post('/api/tasks', {
+      goal_id: currentGoalId,
+      title: title.trim(),
+      description: '',
+      estimated_minutes: 30,
+    });
+    await refreshGoalView();
+  } catch (e) {
+    showError('error-tasks', e.message);
   }
 });
 

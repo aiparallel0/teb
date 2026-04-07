@@ -1,7 +1,7 @@
 """Unit tests for teb.decomposer"""
 import pytest
 
-from teb.models import Goal
+from teb.models import Goal, Task
 from teb.decomposer import (
     _detect_template,
     decompose_template,
@@ -145,3 +145,298 @@ class TestClarifyingQuestions:
         keys = {q.key for q in qs}
         assert "time_per_day" in keys
         assert "timeline" in keys
+
+
+# ─── Task-level decomposition ─────────────────────────────────────────────────
+
+class TestDecomposeTask:
+    def test_decompose_task_returns_subtasks(self):
+        from teb.decomposer import decompose_task
+        parent = Task(goal_id=1, title="Research income options", description="Look into ways to earn", estimated_minutes=60)
+        parent.id = 10
+        subtasks = decompose_task(parent)
+        assert len(subtasks) == 3  # research, execute, verify
+        for s in subtasks:
+            assert s.parent_id == 10
+            assert s.goal_id == 1
+            assert s.estimated_minutes > 0
+            assert s.estimated_minutes <= 25
+
+    def test_decompose_task_order_indices(self):
+        from teb.decomposer import decompose_task
+        parent = Task(goal_id=1, title="Do something", description="", estimated_minutes=45)
+        parent.id = 20
+        subtasks = decompose_task(parent)
+        indices = [s.order_index for s in subtasks]
+        assert indices == sorted(indices)
+        assert indices == [0, 1, 2]
+
+    def test_decompose_task_small_time(self):
+        """Even for a 10-minute task, decomposition should produce valid subtasks."""
+        from teb.decomposer import decompose_task
+        parent = Task(goal_id=1, title="Quick task", description="", estimated_minutes=10)
+        parent.id = 30
+        subtasks = decompose_task(parent)
+        assert len(subtasks) == 3
+        for s in subtasks:
+            assert s.estimated_minutes >= 5
+
+
+# ─── Focus mode ───────────────────────────────────────────────────────────────
+
+class TestGetFocusTask:
+    def test_focus_returns_first_todo(self):
+        from teb.decomposer import get_focus_task
+        tasks = [
+            Task(goal_id=1, title="A", description="", order_index=0, status="todo"),
+            Task(goal_id=1, title="B", description="", order_index=1, status="todo"),
+        ]
+        tasks[0].id = 1
+        tasks[1].id = 2
+        focus = get_focus_task(tasks)
+        assert focus is not None
+        assert focus.title == "A"
+
+    def test_focus_skips_done_tasks(self):
+        from teb.decomposer import get_focus_task
+        tasks = [
+            Task(goal_id=1, title="A", description="", order_index=0, status="done"),
+            Task(goal_id=1, title="B", description="", order_index=1, status="todo"),
+        ]
+        tasks[0].id = 1
+        tasks[1].id = 2
+        focus = get_focus_task(tasks)
+        assert focus is not None
+        assert focus.title == "B"
+
+    def test_focus_prefers_in_progress(self):
+        from teb.decomposer import get_focus_task
+        tasks = [
+            Task(goal_id=1, title="A", description="", order_index=0, status="todo"),
+            Task(goal_id=1, title="B", description="", order_index=1, status="in_progress"),
+        ]
+        tasks[0].id = 1
+        tasks[1].id = 2
+        focus = get_focus_task(tasks)
+        assert focus is not None
+        assert focus.title == "B"
+
+    def test_focus_dives_into_subtasks(self):
+        from teb.decomposer import get_focus_task
+        parent = Task(goal_id=1, title="Parent", description="", order_index=0, status="todo")
+        parent.id = 1
+        child = Task(goal_id=1, title="Child", description="", order_index=0, status="todo", parent_id=1)
+        child.id = 2
+        focus = get_focus_task([parent, child])
+        assert focus is not None
+        assert focus.title == "Child"
+
+    def test_focus_returns_none_when_all_done(self):
+        from teb.decomposer import get_focus_task
+        tasks = [
+            Task(goal_id=1, title="A", description="", order_index=0, status="done"),
+            Task(goal_id=1, title="B", description="", order_index=1, status="skipped"),
+        ]
+        tasks[0].id = 1
+        tasks[1].id = 2
+        assert get_focus_task(tasks) is None
+
+    def test_focus_empty_list(self):
+        from teb.decomposer import get_focus_task
+        assert get_focus_task([]) is None
+
+
+# ─── Progress summary ─────────────────────────────────────────────────────────
+
+class TestProgressSummary:
+    def test_basic_progress(self):
+        from teb.decomposer import get_progress_summary
+        tasks = [
+            Task(goal_id=1, title="A", description="", order_index=0, status="done", estimated_minutes=30),
+            Task(goal_id=1, title="B", description="", order_index=1, status="todo", estimated_minutes=60),
+        ]
+        tasks[0].id = 1
+        tasks[1].id = 2
+        summary = get_progress_summary(tasks)
+        assert summary["total_tasks"] == 2
+        assert summary["done"] == 1
+        assert summary["todo"] == 1
+        assert summary["completion_pct"] == 50
+        assert summary["estimated_remaining_minutes"] == 60
+
+    def test_progress_excludes_decomposed_parents_from_time(self):
+        """When a parent has children, only children's time is counted (no double-counting)."""
+        from teb.decomposer import get_progress_summary
+        parent = Task(goal_id=1, title="P", description="", order_index=0, status="todo", estimated_minutes=30)
+        parent.id = 1
+        child = Task(goal_id=1, title="C", description="", order_index=0, status="todo", parent_id=1, estimated_minutes=15)
+        child.id = 2
+        summary = get_progress_summary([parent, child])
+        assert summary["total_tasks"] == 1  # only top-level
+        # Parent is excluded from time because it has a child — only child's 15 min counted
+        assert summary["estimated_remaining_minutes"] == 15
+
+    def test_empty_progress(self):
+        from teb.decomposer import get_progress_summary
+        summary = get_progress_summary([])
+        assert summary["total_tasks"] == 0
+        assert summary["completion_pct"] == 0
+
+
+# ─── Answer-aware decomposition ───────────────────────────────────────────────
+
+class TestAnswerAwareDecomposition:
+    def test_beginner_gets_longer_estimates(self):
+        """Beginner with answers should get scaled-up task times."""
+        goal_no_answers = _goal("earn money online")
+        goal_beginner = _goal("earn money online")
+        goal_beginner.answers = {"skill_level": "complete beginner", "time_per_day": "30 min", "timeline": "2 weeks"}
+
+        tasks_plain = decompose_template(goal_no_answers)
+        tasks_adapted = decompose_template(goal_beginner)
+
+        # Beginner + 30 min/day → tasks should be shorter per-session (0.5 time scale)
+        # but 1.3x skill multiplier, so net ~0.65x
+        plain_total = sum(t.estimated_minutes for t in tasks_plain)
+        adapted_total = sum(t.estimated_minutes for t in tasks_adapted)
+        assert adapted_total != plain_total  # should be different
+
+    def test_advanced_gets_shorter_estimates(self):
+        goal_advanced = _goal("learn Python")
+        goal_advanced.answers = {"skill_level": "advanced programmer", "time_per_day": "2 hours", "timeline": "no rush"}
+
+        goal_plain = _goal("learn Python")
+
+        tasks_advanced = decompose_template(goal_advanced)
+        tasks_plain = decompose_template(goal_plain)
+
+        advanced_total = sum(t.estimated_minutes for t in tasks_advanced)
+        plain_total = sum(t.estimated_minutes for t in tasks_plain)
+        assert advanced_total < plain_total
+
+    def test_descriptions_include_context(self):
+        goal = _goal("earn money online")
+        goal.answers = {"skill_level": "beginner", "time_per_day": "30 min", "timeline": "2 weeks"}
+
+        tasks = decompose_template(goal)
+        # Descriptions should mention the user's context
+        all_descs = " ".join(t.description for t in tasks)
+        assert "starting out" in all_descs.lower() or "30 min" in all_descs
+
+    def test_no_answers_returns_unchanged_templates(self):
+        """Without answers, decomposition should behave like before."""
+        goal = _goal("earn money online")
+        tasks = decompose_template(goal)
+        # Original template has 6 tasks for make_money_online
+        assert len(tasks) == 6
+        assert tasks[0].estimated_minutes == 60  # original value unchanged
+
+    def test_subtask_templates_also_adapted(self):
+        goal = _goal("earn money online")
+        goal.answers = {"skill_level": "advanced", "time_per_day": "4 hours", "timeline": "no rush"}
+        tasks = decompose_template(goal)
+        tasks_with_subs = [t for t in tasks if getattr(t, "_subtask_templates", [])]
+        assert len(tasks_with_subs) > 0
+        # Subtask templates should also be adapted
+        for t in tasks_with_subs:
+            for sub in t._subtask_templates:
+                # Advanced + 4h/day + long timeline → 0.7 * 1.25 = 0.875x
+                # So a 20-min task should be scaled
+                assert sub.estimated_minutes > 0
+
+
+# ─── Parse minutes ────────────────────────────────────────────────────────────
+
+class TestParseMinutes:
+    def test_parse_hours(self):
+        from teb.decomposer import _parse_minutes
+        assert _parse_minutes("2 hours") == 120
+        assert _parse_minutes("1.5h") == 90
+        assert _parse_minutes("1 hr") == 60
+
+    def test_parse_minutes_text(self):
+        from teb.decomposer import _parse_minutes
+        assert _parse_minutes("30 min") == 30
+        assert _parse_minutes("45 minutes") == 45
+        assert _parse_minutes("15m") == 15
+
+    def test_parse_bare_number(self):
+        from teb.decomposer import _parse_minutes
+        assert _parse_minutes("60") == 60
+
+    def test_parse_empty(self):
+        from teb.decomposer import _parse_minutes
+        assert _parse_minutes("") == 0
+        assert _parse_minutes("no idea") == 0
+
+
+# ─── Context-aware task decomposition ─────────────────────────────────────────
+
+class TestContextAwareTaskDecomposition:
+    """Subtask decomposition should produce context-specific titles, not generic
+    Research/Execute/Verify for every task."""
+
+    def test_research_task_gets_research_specific_subtasks(self):
+        from teb.decomposer import decompose_task
+        parent = Task(goal_id=1, title="Research income options",
+                      description="Look into ways to earn", estimated_minutes=60)
+        parent.id = 10
+        subtasks = decompose_task(parent)
+        titles = [s.title.lower() for s in subtasks]
+        # Should NOT have "Research: Research income options" stuttering
+        assert not any(t.startswith("research:") for t in titles)
+        # Should have meaningful research-specific steps
+        assert any("define" in t or "looking for" in t for t in titles)
+
+    def test_creation_task_gets_creation_subtasks(self):
+        from teb.decomposer import decompose_task
+        parent = Task(goal_id=1, title="Write your bio and service description",
+                      description="Craft a benefit-driven description", estimated_minutes=45)
+        parent.id = 11
+        subtasks = decompose_task(parent)
+        titles = [s.title.lower() for s in subtasks]
+        assert any("outline" in t or "draft" in t for t in titles)
+
+    def test_setup_task_gets_setup_subtasks(self):
+        from teb.decomposer import decompose_task
+        parent = Task(goal_id=1, title="Set up the development environment",
+                      description="Initialize the repository", estimated_minutes=60)
+        parent.id = 12
+        subtasks = decompose_task(parent)
+        titles = [s.title.lower() for s in subtasks]
+        assert any("gather" in t or "requirement" in t or "credential" in t for t in titles)
+
+    def test_outreach_task_gets_outreach_subtasks(self):
+        from teb.decomposer import decompose_task
+        parent = Task(goal_id=1, title="Reach out and get your first customer",
+                      description="Send personalized messages", estimated_minutes=60)
+        parent.id = 13
+        subtasks = decompose_task(parent)
+        titles = [s.title.lower() for s in subtasks]
+        assert any("target" in t or "list" in t for t in titles)
+
+    def test_generic_task_no_stuttering_prefix(self):
+        """No subtask title should just be 'Research: <parent title>'."""
+        from teb.decomposer import decompose_task
+        parent = Task(goal_id=1, title="Pick one niche and commit",
+                      description="Choose the best-fit path", estimated_minutes=30)
+        parent.id = 14
+        subtasks = decompose_task(parent)
+        for s in subtasks:
+            assert not s.title.startswith("Research:")
+            assert not s.title.startswith("Execute:")
+            assert not s.title.startswith("Verify:")
+
+    def test_all_subtasks_have_valid_time(self):
+        from teb.decomposer import decompose_task
+        for title in [
+            "Research income options",
+            "Build the MVP core feature",
+            "Set up your platform",
+            "Schedule workouts",
+            "Track your first week and reflect",
+        ]:
+            parent = Task(goal_id=1, title=title, description="", estimated_minutes=60)
+            parent.id = 99
+            for s in decompose_task(parent):
+                assert 5 <= s.estimated_minutes <= 25, f"{s.title}: {s.estimated_minutes}min"

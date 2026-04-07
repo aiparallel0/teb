@@ -387,22 +387,174 @@ def _template_tasks_to_models(
 
 
 def decompose_template(goal: Goal) -> List[Task]:
-    """Return a flat list of Task objects using template-based decomposition."""
+    """Return a flat list of Task objects using template-based decomposition.
+
+    When the goal has clarifying answers, task descriptions and time estimates
+    are adapted to the user's context (skill level, available time, timeline).
+    """
     template_name = _detect_template(goal)
     template = _TEMPLATES[template_name]
+    profile = _build_user_profile(goal.answers)
 
     tasks: List[Task] = []
     for idx, tt in enumerate(template.tasks):
+        adapted = _adapt_template_task(tt, profile)
         parent = Task(
             goal_id=goal.id,  # type: ignore[arg-type]
-            title=tt.title,
-            description=tt.description,
-            estimated_minutes=tt.estimated_minutes,
+            title=adapted.title,
+            description=adapted.description,
+            estimated_minutes=adapted.estimated_minutes,
             order_index=idx,
         )
-        parent._subtask_templates = tt.subtasks  # type: ignore[attr-defined]
+        parent._subtask_templates = [  # type: ignore[attr-defined]
+            _adapt_template_task(sub, profile) for sub in tt.subtasks
+        ]
         tasks.append(parent)
     return tasks
+
+
+# ─── Answer-aware adaptation ──────────────────────────────────────────────────
+
+@dataclass
+class _UserProfile:
+    """Parsed user context extracted from clarifying answers."""
+    skill_level: str = "unknown"     # beginner | intermediate | advanced | unknown
+    minutes_per_day: int = 60        # parsed from time_per_day answer
+    timeline: str = "medium"         # short (< 1 month) | medium | long | unknown
+    has_technical_skills: bool = False
+    income_urgent: bool = False
+    raw_answers: Dict[str, str] = field(default_factory=dict)
+
+
+def _build_user_profile(answers: Dict[str, str]) -> _UserProfile:
+    """Parse clarifying answers into a structured user profile."""
+    profile = _UserProfile(raw_answers=dict(answers))
+
+    # ─── Skill level ───────────────────────────────────────────────────
+    skill = answers.get("skill_level", "").lower()
+    if any(w in skill for w in ("beginner", "none", "zero", "no experience", "never", "starting")):
+        profile.skill_level = "beginner"
+    elif any(w in skill for w in ("intermediate", "some", "a bit", "familiar", "decent")):
+        profile.skill_level = "intermediate"
+    elif any(w in skill for w in ("advanced", "expert", "professional", "years", "senior")):
+        profile.skill_level = "advanced"
+
+    # ─── Time per day ──────────────────────────────────────────────────
+    time_str = answers.get("time_per_day", "").lower()
+    mins = _parse_minutes(time_str)
+    if mins > 0:
+        profile.minutes_per_day = mins
+
+    # ─── Timeline ──────────────────────────────────────────────────────
+    tl = answers.get("timeline", "").lower()
+    if any(w in tl for w in ("week", "days", "asap", "urgent", "quick", "immediately")):
+        profile.timeline = "short"
+    elif any(w in tl for w in ("month", "1-3", "a few months", "quarter")):
+        profile.timeline = "medium"
+    elif any(w in tl for w in ("year", "no rush", "long", "6 month", "no hurry")):
+        profile.timeline = "long"
+
+    # ─── Technical skills ──────────────────────────────────────────────
+    tech = answers.get("technical_skills", "").lower()
+    if any(w in tech for w in ("code", "python", "javascript", "design", "html", "program", "react",
+                                "developer", "engineer", "writing", "marketing")):
+        profile.has_technical_skills = True
+    elif any(w in tech for w in ("none", "no", "zero", "nothing")):
+        profile.has_technical_skills = False
+
+    # ─── Income urgency ────────────────────────────────────────────────
+    urgency = answers.get("income_urgency", "").lower()
+    if any(w in urgency for w in ("this month", "30 day", "asap", "urgent", "need money now", "immediately")):
+        profile.income_urgent = True
+
+    return profile
+
+
+def _parse_minutes(text: str) -> int:
+    """Best-effort parse of a time string like '30 min', '2 hours', '1.5h'."""
+    # Try "N hours" / "Nh"
+    m = re.search(r"(\d+(?:\.\d+)?)\s*h(?:ours?|r)?", text)
+    if m:
+        return int(float(m.group(1)) * 60)
+    # Try "N minutes" / "Nmin" / "Nm"
+    m = re.search(r"(\d+)\s*m(?:in(?:ute)?s?)?", text)
+    if m:
+        return int(m.group(1))
+    # Try bare number — assume minutes if ≤ 300, else hours
+    m = re.search(r"(\d+)", text)
+    if m:
+        val = int(m.group(1))
+        return val if val <= 300 else val * 60
+    return 0
+
+
+def _time_scale(profile: _UserProfile) -> float:
+    """Return a multiplier to scale task times based on the user's availability.
+
+    If someone has only 30 min/day, tasks should be compressed to fit into
+    short sessions. If they have 4 hours, tasks can be larger.
+    """
+    if profile.minutes_per_day <= 30:
+        return 0.5
+    if profile.minutes_per_day <= 60:
+        return 0.75
+    if profile.minutes_per_day <= 120:
+        return 1.0
+    return 1.25
+
+
+def _skill_adjustment(profile: _UserProfile) -> tuple[float, str]:
+    """Return (time_multiplier, context_note) based on skill level.
+
+    Beginners need more time and more guidance in descriptions.
+    Advanced users can skip basics and move faster.
+    """
+    if profile.skill_level == "beginner":
+        return 1.3, "Since you're starting out, take extra time and don't rush this step."
+    if profile.skill_level == "advanced":
+        return 0.7, "Given your experience, you can move through this quickly."
+    if profile.skill_level == "intermediate":
+        return 1.0, "Adapt the depth to areas where you're less confident."
+    return 1.0, ""
+
+
+def _adapt_template_task(tt: _TemplateTask, profile: _UserProfile) -> _TemplateTask:
+    """Return a new _TemplateTask with time/description adapted to the user profile."""
+    if not profile.raw_answers:
+        # No answers provided — return the original unchanged
+        return tt
+
+    time_factor = _time_scale(profile)
+    skill_mult, skill_note = _skill_adjustment(profile)
+    combined_factor = time_factor * skill_mult
+
+    # Scale time, round to nearest 5, clamp 5..180
+    scaled_minutes = max(5, min(180, round(tt.estimated_minutes * combined_factor / 5) * 5))
+
+    # Build an adapted description
+    desc = tt.description
+    additions: List[str] = []
+    if skill_note:
+        additions.append(skill_note)
+    if profile.minutes_per_day <= 30:
+        additions.append(
+            f"You have ~{profile.minutes_per_day} min/day, so break this into "
+            f"multiple short sessions if needed."
+        )
+    if profile.timeline == "short":
+        additions.append("Your timeline is tight — focus on the essentials and skip nice-to-haves.")
+    elif profile.timeline == "long":
+        additions.append("You have time on your side — aim for depth over speed.")
+
+    if additions:
+        desc = desc + " " + " ".join(additions)
+
+    return _TemplateTask(
+        title=tt.title,
+        description=desc,
+        estimated_minutes=scaled_minutes,
+        subtasks=tt.subtasks,  # subtasks are adapted separately by the caller
+    )
 
 
 def decompose_ai(goal: Goal) -> List[Task]:
@@ -487,3 +639,407 @@ def decompose(goal: Goal) -> List[Task]:
     if config.OPENAI_API_KEY:
         return decompose_ai(goal)
     return decompose_template(goal)
+
+
+# ─── Task-level decomposition ─────────────────────────────────────────────────
+
+def decompose_task(task: Task) -> List[Task]:
+    """
+    Break a single task into smaller sub-tasks.
+
+    Uses AI when OPENAI_API_KEY is set; otherwise uses a template-based
+    approach that splits the task into research → execute → verify steps,
+    each ≤ 25 minutes.
+    """
+    if config.OPENAI_API_KEY:
+        return _decompose_task_ai(task)
+    return _decompose_task_template(task)
+
+
+def _decompose_task_template(task: Task) -> List[Task]:
+    """
+    Template-based single-task decomposition.
+
+    Produces 2-4 context-aware micro-steps based on the task's title/description
+    rather than a generic Research → Execute → Verify pattern.  Each step gets a
+    portion of the parent's estimated time, capped at 25 min.
+    """
+    total = task.estimated_minutes
+    title_lower = task.title.lower()
+    desc_lower = task.description.lower()
+    combined = f"{title_lower} {desc_lower}"
+
+    # Choose a decomposition strategy based on what the task is about
+    # More specific patterns are checked first to avoid false matches
+    if any(w in combined for w in ("set up", "setup", "register", "sign up", "install", "configure")):
+        steps = _decompose_setup_task(task, total)
+    elif any(w in combined for w in ("reach out", "contact", "email", "message", "outreach", "network")):
+        steps = _decompose_outreach_task(task, total)
+    elif any(w in combined for w in ("research", "find", "search", "look up", "identify", "evaluate", "compare")):
+        steps = _decompose_research_task(task, total)
+    elif any(w in combined for w in ("schedule", "plan", "block", "organize", "prioritize")):
+        steps = _decompose_planning_task(task, total)
+    elif any(w in combined for w in ("assess", "measure", "track", "review", "reflect", "check")):
+        steps = _decompose_review_task(task, total)
+    elif any(w in combined for w in ("write", "create", "build", "develop", "design", "implement", "code")):
+        steps = _decompose_creation_task(task, total)
+    elif any(w in combined for w in ("complete", "finish", "do", "work through", "practice", "exercise")):
+        steps = _decompose_execution_task(task, total)
+    else:
+        steps = _decompose_generic_task(task, total)
+
+    return steps
+
+
+def _cap_time(minutes: int) -> int:
+    """Clamp task time to 5..25 minutes."""
+    return max(5, min(25, minutes))
+
+
+def _decompose_research_task(task: Task, total: int) -> List[Task]:
+    half = _cap_time(total // 2)
+    quarter = _cap_time(total // 4)
+    return [
+        Task(
+            goal_id=task.goal_id, parent_id=task.id,
+            title="Define what you're looking for",
+            description=f"Before diving in, write down 2-3 specific questions you need answered about '{task.title}'.",
+            estimated_minutes=quarter, order_index=0,
+        ),
+        Task(
+            goal_id=task.goal_id, parent_id=task.id,
+            title="Gather information from credible sources",
+            description="Search for answers to your questions. Use 2-3 different sources. Take brief notes on key findings.",
+            estimated_minutes=half, order_index=1,
+        ),
+        Task(
+            goal_id=task.goal_id, parent_id=task.id,
+            title="Summarize findings and pick a direction",
+            description="Write a short summary of what you found. Highlight the most actionable insight and decide on your next step.",
+            estimated_minutes=quarter, order_index=2,
+        ),
+    ]
+
+
+def _decompose_creation_task(task: Task, total: int) -> List[Task]:
+    fifth = _cap_time(total // 5)
+    half = _cap_time(total * 2 // 5)
+    return [
+        Task(
+            goal_id=task.goal_id, parent_id=task.id,
+            title="Outline what you're creating",
+            description=f"Sketch the structure or key components before starting work on '{task.title}'. Keep it rough — a list or bullet points is fine.",
+            estimated_minutes=fifth, order_index=0,
+        ),
+        Task(
+            goal_id=task.goal_id, parent_id=task.id,
+            title="Build the first draft or version",
+            description="Work through your outline. Focus on getting something complete rather than perfect — you'll refine after.",
+            estimated_minutes=half, order_index=1,
+        ),
+        Task(
+            goal_id=task.goal_id, parent_id=task.id,
+            title="Review and polish",
+            description="Read through or test what you created. Fix obvious problems and make one quality-of-life improvement.",
+            estimated_minutes=fifth, order_index=2,
+        ),
+    ]
+
+
+def _decompose_setup_task(task: Task, total: int) -> List[Task]:
+    third = _cap_time(total // 3)
+    return [
+        Task(
+            goal_id=task.goal_id, parent_id=task.id,
+            title="Gather requirements and credentials",
+            description=f"Before setting up, confirm what you need: account details, software versions, API keys, etc.",
+            estimated_minutes=third, order_index=0,
+        ),
+        Task(
+            goal_id=task.goal_id, parent_id=task.id,
+            title="Complete the setup steps",
+            description=f"Follow the setup process step by step. If you hit a blocker, note it and move on.",
+            estimated_minutes=third, order_index=1,
+        ),
+        Task(
+            goal_id=task.goal_id, parent_id=task.id,
+            title="Verify everything works",
+            description="Test that the setup is functional. Try the basic operation once end-to-end.",
+            estimated_minutes=third, order_index=2,
+        ),
+    ]
+
+
+def _decompose_planning_task(task: Task, total: int) -> List[Task]:
+    half = _cap_time(total // 2)
+    quarter = _cap_time(total // 4)
+    return [
+        Task(
+            goal_id=task.goal_id, parent_id=task.id,
+            title="List everything that needs to happen",
+            description="Brain-dump all items, appointments, or steps without worrying about order.",
+            estimated_minutes=quarter, order_index=0,
+        ),
+        Task(
+            goal_id=task.goal_id, parent_id=task.id,
+            title="Prioritize and assign time slots",
+            description="Order the items by importance or deadline. Block specific times in your calendar or write time estimates.",
+            estimated_minutes=half, order_index=1,
+        ),
+        Task(
+            goal_id=task.goal_id, parent_id=task.id,
+            title="Set a reminder or checkpoint",
+            description="Make sure you have a trigger to check progress. Set a phone alarm, calendar reminder, or note.",
+            estimated_minutes=quarter, order_index=2,
+        ),
+    ]
+
+
+def _decompose_review_task(task: Task, total: int) -> List[Task]:
+    half = _cap_time(total // 2)
+    quarter = _cap_time(total // 4)
+    return [
+        Task(
+            goal_id=task.goal_id, parent_id=task.id,
+            title="Collect the data or metrics",
+            description=f"Gather the numbers, notes, or observations you need to assess '{task.title}'.",
+            estimated_minutes=quarter, order_index=0,
+        ),
+        Task(
+            goal_id=task.goal_id, parent_id=task.id,
+            title="Analyze what's working and what isn't",
+            description="Compare your results against your goal. Identify one win and one area to improve.",
+            estimated_minutes=half, order_index=1,
+        ),
+        Task(
+            goal_id=task.goal_id, parent_id=task.id,
+            title="Write down one adjustment for next time",
+            description="Based on your analysis, commit to one specific change going forward.",
+            estimated_minutes=quarter, order_index=2,
+        ),
+    ]
+
+
+def _decompose_outreach_task(task: Task, total: int) -> List[Task]:
+    third = _cap_time(total // 3)
+    return [
+        Task(
+            goal_id=task.goal_id, parent_id=task.id,
+            title="Prepare your target list",
+            description="Identify 5-10 specific people or places to reach out to. Find their contact info.",
+            estimated_minutes=third, order_index=0,
+        ),
+        Task(
+            goal_id=task.goal_id, parent_id=task.id,
+            title="Draft and send your messages",
+            description="Write a short, personalized message. Send to your list. Don't over-think — a sent message beats a perfect draft.",
+            estimated_minutes=third, order_index=1,
+        ),
+        Task(
+            goal_id=task.goal_id, parent_id=task.id,
+            title="Log responses and follow up",
+            description="Track who replied in a simple list. Send a follow-up to anyone who didn't respond after 2-3 days.",
+            estimated_minutes=third, order_index=2,
+        ),
+    ]
+
+
+def _decompose_execution_task(task: Task, total: int) -> List[Task]:
+    setup = _cap_time(total // 5)
+    main = _cap_time(total * 3 // 5)
+    wrap = _cap_time(total // 5)
+    return [
+        Task(
+            goal_id=task.goal_id, parent_id=task.id,
+            title="Prepare your workspace and materials",
+            description=f"Get everything you need ready before starting '{task.title}'. Eliminate distractions.",
+            estimated_minutes=setup, order_index=0,
+        ),
+        Task(
+            goal_id=task.goal_id, parent_id=task.id,
+            title="Do the work",
+            description="Focus on completing the task. If you get stuck for more than 5 minutes, skip to the next part and come back.",
+            estimated_minutes=main, order_index=1,
+        ),
+        Task(
+            goal_id=task.goal_id, parent_id=task.id,
+            title="Note what you finished and what's left",
+            description="Write down what you accomplished and any items that still need attention.",
+            estimated_minutes=wrap, order_index=2,
+        ),
+    ]
+
+
+def _decompose_generic_task(task: Task, total: int) -> List[Task]:
+    """Fallback for tasks that don't match a specific pattern."""
+    third = _cap_time(total // 3)
+    return [
+        Task(
+            goal_id=task.goal_id, parent_id=task.id,
+            title=f"Clarify what '{task.title}' requires",
+            description="Write down exactly what 'done' looks like for this task. List the key steps or deliverables.",
+            estimated_minutes=third, order_index=0,
+        ),
+        Task(
+            goal_id=task.goal_id, parent_id=task.id,
+            title="Work through the steps",
+            description="Tackle each item from your list in order. Focus on progress, not perfection.",
+            estimated_minutes=third, order_index=1,
+        ),
+        Task(
+            goal_id=task.goal_id, parent_id=task.id,
+            title="Check your result",
+            description="Compare what you produced against your definition of 'done'. Fix any gaps.",
+            estimated_minutes=third, order_index=2,
+        ),
+    ]
+
+
+def _decompose_task_ai(task: Task) -> List[Task]:
+    """Call an OpenAI-compatible API to break a single task into sub-tasks."""
+    try:
+        from openai import OpenAI  # noqa: PLC0415
+
+        client = OpenAI(
+            api_key=config.OPENAI_API_KEY,
+            base_url=config.OPENAI_BASE_URL,
+        )
+
+        system_prompt = (
+            "You are a task-decomposition assistant. "
+            "Given a task title and description, break it into 2-5 smaller, "
+            "concrete sub-tasks that each take ≤25 minutes. "
+            "Each sub-task must have: title (str), description (str), "
+            "estimated_minutes (int). "
+            "Return ONLY valid JSON: {\"subtasks\": [...]}."
+        )
+        user_prompt = (
+            f"Task: {task.title}\n"
+            f"Description: {task.description}\n"
+            f"Original estimate: {task.estimated_minutes} minutes\n\n"
+            f"Break this into 2-5 concrete, actionable sub-tasks."
+        )
+
+        response = client.chat.completions.create(
+            model=config.MODEL,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            response_format={"type": "json_object"},
+            temperature=0.3,
+        )
+
+        raw = response.choices[0].message.content or "{}"
+        data = json.loads(raw)
+        subtask_list = data if isinstance(data, list) else data.get("subtasks", [])
+        return _parse_task_subtasks(subtask_list, task)
+    except Exception:
+        return _decompose_task_template(task)
+
+
+def _parse_task_subtasks(subtask_list: List[Any], parent: Task) -> List[Task]:
+    result: List[Task] = []
+    for idx, item in enumerate(subtask_list):
+        if not isinstance(item, dict):
+            continue
+        result.append(Task(
+            goal_id=parent.goal_id,
+            parent_id=parent.id,
+            title=str(item.get("title", "Subtask")),
+            description=str(item.get("description", "")),
+            estimated_minutes=min(int(item.get("estimated_minutes", 15)), 25),
+            order_index=idx,
+        ))
+    return result if result else _decompose_task_template(parent)
+
+
+# ─── Focus mode ───────────────────────────────────────────────────────────────
+
+def get_focus_task(tasks: List[Task]) -> Optional[Task]:
+    """
+    Return the single next task the user should work on.
+
+    Strategy:
+      1. If any task is "in_progress", return the deepest (leaf) one.
+      2. Otherwise, return the first "todo" task in order, preferring
+         sub-tasks of the earliest incomplete parent.
+    """
+    if not tasks:
+        return None
+
+    # Build lookup structures
+    by_id: Dict[int, Task] = {t.id: t for t in tasks if t.id is not None}
+    children: Dict[Optional[int], List[Task]] = {}
+    for t in tasks:
+        children.setdefault(t.parent_id, []).append(t)
+
+    # 1. Find in-progress tasks, pick deepest
+    in_progress = [t for t in tasks if t.status == "in_progress"]
+    if in_progress:
+        # Find the one with no in-progress children (deepest)
+        for t in sorted(in_progress, key=lambda x: x.order_index):
+            child_ids = children.get(t.id, [])
+            has_active_child = any(c.status == "in_progress" for c in child_ids)
+            if not has_active_child:
+                return t
+
+    # 2. Walk the tree in order; find first actionable "todo" leaf
+    def _first_todo(parent_id: Optional[int]) -> Optional[Task]:
+        kids = children.get(parent_id, [])
+        kids_sorted = sorted(kids, key=lambda x: (x.order_index, x.id or 0))
+        for kid in kids_sorted:
+            if kid.status in ("done", "skipped"):
+                continue
+            # If this task has children, recurse into them
+            grandkids = children.get(kid.id, [])
+            actionable_grandkids = [g for g in grandkids if g.status not in ("done", "skipped")]
+            if actionable_grandkids:
+                deeper = _first_todo(kid.id)
+                if deeper:
+                    return deeper
+            # Leaf or no actionable children → this is the focus task
+            if kid.status == "todo":
+                return kid
+        return None
+
+    return _first_todo(None)
+
+
+def get_progress_summary(tasks: List[Task]) -> Dict[str, Any]:
+    """
+    Return progress statistics for a set of tasks.
+
+    Includes counts by status, completion percentage, and estimated
+    remaining time.  Parents that have been decomposed into children are
+    excluded from the time estimate to avoid double-counting.
+    """
+    top_level = [t for t in tasks if t.parent_id is None]
+
+    # Identify tasks that have children (decomposed parents)
+    parent_ids: Set[int] = set()
+    for t in tasks:
+        if t.parent_id is not None:
+            parent_ids.add(t.parent_id)
+
+    total = len(top_level)
+    done = sum(1 for t in top_level if t.status in ("done", "skipped"))
+    in_progress = sum(1 for t in top_level if t.status == "in_progress")
+    todo = sum(1 for t in top_level if t.status == "todo")
+    pct = round((done / total) * 100) if total else 0
+
+    # Only count leaf tasks (those without children) for time estimation
+    remaining_minutes = sum(
+        t.estimated_minutes
+        for t in tasks
+        if t.status not in ("done", "skipped") and (t.id is None or t.id not in parent_ids)
+    )
+
+    return {
+        "total_tasks": total,
+        "done": done,
+        "in_progress": in_progress,
+        "todo": todo,
+        "completion_pct": pct,
+        "estimated_remaining_minutes": remaining_minutes,
+    }

@@ -40,6 +40,16 @@ class GoalCreate(BaseModel):
 class TaskPatch(BaseModel):
     status: Optional[str] = None
     notes: Optional[str] = None   # stored in description for simplicity
+    title: Optional[str] = None
+    order_index: Optional[int] = None
+
+
+class TaskCreate(BaseModel):
+    goal_id: int
+    title: str
+    description: str = ""
+    estimated_minutes: int = 30
+    parent_id: Optional[int] = None
 
 
 class ClarifyAnswer(BaseModel):
@@ -131,6 +141,80 @@ async def decompose_goal(goal_id: int):
     return {"goal_id": goal_id, "tasks": saved}
 
 
+# ─── Task-level decomposition ─────────────────────────────────────────────────
+
+_MAX_DECOMPOSE_DEPTH = 3  # Maximum nesting depth for task decomposition
+
+
+@app.post("/api/tasks/{task_id}/decompose")
+async def decompose_task(task_id: int):
+    task = storage.get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    # Don't re-decompose if already has children
+    existing = storage.list_tasks(goal_id=task.goal_id)
+    has_children = any(t.parent_id == task_id for t in existing)
+    if has_children:
+        raise HTTPException(status_code=409, detail="Task already has sub-tasks")
+
+    # Enforce depth limit
+    depth = _get_task_depth(task, existing)
+    if depth >= _MAX_DECOMPOSE_DEPTH:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Maximum decomposition depth ({_MAX_DECOMPOSE_DEPTH}) reached",
+        )
+
+    subtasks = decomposer.decompose_task(task)
+
+    saved: list[dict] = []
+    for sub in subtasks:
+        saved_sub = storage.create_task(sub)
+        saved.append(saved_sub.to_dict())
+
+    return {"task_id": task_id, "subtasks": saved}
+
+
+def _get_task_depth(task: Task, all_tasks: list[Task]) -> int:
+    """Return the depth of a task in the hierarchy (0 = top-level)."""
+    by_id = {t.id: t for t in all_tasks if t.id is not None}
+    depth = 0
+    current = task
+    while current.parent_id is not None and current.parent_id in by_id:
+        depth += 1
+        current = by_id[current.parent_id]
+    return depth
+
+
+# ─── Focus mode ───────────────────────────────────────────────────────────────
+
+@app.get("/api/goals/{goal_id}/focus")
+async def get_focus(goal_id: int):
+    goal = storage.get_goal(goal_id)
+    if not goal:
+        raise HTTPException(status_code=404, detail="Goal not found")
+    tasks = storage.list_tasks(goal_id=goal_id)
+    focus = decomposer.get_focus_task(tasks)
+    if focus is None:
+        return {"focus_task": None, "message": "All tasks completed — well done!"}
+    return {"focus_task": focus.to_dict()}
+
+
+# ─── Progress summary ─────────────────────────────────────────────────────────
+
+@app.get("/api/goals/{goal_id}/progress")
+async def get_progress(goal_id: int):
+    goal = storage.get_goal(goal_id)
+    if not goal:
+        raise HTTPException(status_code=404, detail="Goal not found")
+    tasks = storage.list_tasks(goal_id=goal_id)
+    summary = decomposer.get_progress_summary(tasks)
+    summary["goal_id"] = goal_id
+    summary["goal_status"] = goal.status
+    return summary
+
+
 # ─── Clarifying questions ─────────────────────────────────────────────────────
 
 @app.get("/api/goals/{goal_id}/next_question")
@@ -171,6 +255,37 @@ async def list_tasks(
     return [t.to_dict() for t in storage.list_tasks(goal_id=goal_id, status=status)]
 
 
+@app.post("/api/tasks", status_code=201)
+async def create_task_manual(body: TaskCreate):
+    """Create a custom user task (not from decomposition)."""
+    goal = storage.get_goal(body.goal_id)
+    if not goal:
+        raise HTTPException(status_code=404, detail="Goal not found")
+    title = body.title.strip()
+    if not title:
+        raise HTTPException(status_code=422, detail="title must not be empty")
+    if body.parent_id is not None:
+        parent = storage.get_task(body.parent_id)
+        if not parent:
+            raise HTTPException(status_code=404, detail="Parent task not found")
+        if parent.goal_id != body.goal_id:
+            raise HTTPException(status_code=422, detail="Parent task belongs to a different goal")
+    # Determine order_index: append after existing siblings
+    existing = storage.list_tasks(goal_id=body.goal_id)
+    siblings = [t for t in existing if t.parent_id == body.parent_id]
+    next_order = max((s.order_index for s in siblings), default=-1) + 1
+    task = Task(
+        goal_id=body.goal_id,
+        parent_id=body.parent_id,
+        title=title,
+        description=body.description.strip(),
+        estimated_minutes=max(1, body.estimated_minutes),
+        order_index=next_order,
+    )
+    task = storage.create_task(task)
+    return task.to_dict()
+
+
 @app.patch("/api/tasks/{task_id}")
 async def update_task(task_id: int, body: TaskPatch):
     task = storage.get_task(task_id)
@@ -185,6 +300,15 @@ async def update_task(task_id: int, body: TaskPatch):
 
     if body.notes is not None:
         task.description = body.notes
+
+    if body.title is not None:
+        stripped = body.title.strip()
+        if not stripped:
+            raise HTTPException(status_code=422, detail="title must not be empty")
+        task.title = stripped
+
+    if body.order_index is not None:
+        task.order_index = body.order_index
 
     # Update the goal's status if all tasks are done
     task = storage.update_task(task)
@@ -203,3 +327,12 @@ async def update_task(task_id: int, body: TaskPatch):
             storage.update_goal(goal)
 
     return task.to_dict()
+
+
+@app.delete("/api/tasks/{task_id}", status_code=200)
+async def delete_task(task_id: int):
+    task = storage.get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    storage.delete_task(task_id)
+    return {"deleted": task_id}

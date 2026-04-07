@@ -57,8 +57,13 @@ GET    /api/goals/{id}                Get goal + tasks
 POST   /api/goals/{id}/decompose      Decompose goal into tasks
 GET    /api/goals/{id}/next_question  Get next clarifying question
 POST   /api/goals/{id}/clarify        Submit answer to a clarifying question
+GET    /api/goals/{id}/focus          Get the single next task to work on (focus mode)
+GET    /api/goals/{id}/progress       Get completion stats and estimated time remaining
 GET    /api/tasks?goal_id=&status=    List tasks (filterable)
-PATCH  /api/tasks/{id}                Update task status/notes
+POST   /api/tasks                     Create a custom task manually
+PATCH  /api/tasks/{id}                Update task status/notes/title/order
+DELETE /api/tasks/{id}                Delete a task and its children
+POST   /api/tasks/{id}/decompose      Break a task into smaller sub-tasks (max depth 3)
 ```
 
 Example:
