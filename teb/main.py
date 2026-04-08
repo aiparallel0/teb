@@ -83,6 +83,12 @@ async def lifespan(app: FastAPI):
     storage.reset_all_daily_spending()
     # Clear rate-limit buckets on each fresh start (also ensures clean test runs)
     _rate_buckets.clear()
+    # Warn if JWT secret is the insecure default
+    if config.JWT_SECRET == "change-me-in-production-not-safe":
+        logger.warning(
+            "TEB_JWT_SECRET is set to the default insecure value. "
+            "Set a strong secret via environment variable before deploying."
+        )
     yield
 
 
@@ -294,8 +300,9 @@ def _get_task_for_user(task_id: int, user_id: int) -> Task:
 async def health_check():
     """Health check — returns DB status for monitoring."""
     try:
-        # Quick DB connectivity check
-        storage.list_goals(user_id=-1)  # no-op query, verifies DB is alive
+        # Lightweight DB connectivity check via a trivial query
+        with storage._conn() as con:
+            con.execute("SELECT 1")
         db_ok = True
     except Exception:
         db_ok = False
