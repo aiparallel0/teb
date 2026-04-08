@@ -8,11 +8,40 @@
 </head>
 <body>
   <div id="app">
-    <!-- Landing screen -->
-    <section id="screen-landing" class="screen active">
+    <!-- Auth screen -->
+    <section id="screen-auth" class="screen">
       <header class="hero">
         <h1>teb</h1>
         <p class="tagline">Turn your vague goals into focused, actionable tasks.</p>
+      </header>
+      <div class="card" id="auth-card">
+        <h2 id="auth-title">Sign in</h2>
+        <label for="auth-email">Email</label>
+        <input id="auth-email" type="email" placeholder="you@example.com" autocomplete="email" />
+        <label for="auth-password" class="mt">Password</label>
+        <input id="auth-password" type="password" placeholder="••••••" autocomplete="current-password" />
+        <button id="btn-auth-submit" class="btn-primary mt">Sign in</button>
+        <p class="auth-toggle mt" style="text-align:center;font-size:.85rem;color:var(--muted)">
+          <span id="auth-toggle-text">Don't have an account?</span>
+          <a href="#" id="auth-toggle-link">Register</a>
+        </p>
+        <p class="auth-skip mt" style="text-align:center;font-size:.85rem">
+          <a href="#" id="auth-skip-link">Skip — continue without account</a>
+        </p>
+        <div class="error" id="error-auth"></div>
+      </div>
+    </section>
+
+    <!-- Landing screen -->
+    <section id="screen-landing" class="screen">
+      <header class="hero">
+        <h1>teb</h1>
+        <p class="tagline">Turn your vague goals into focused, actionable tasks.</p>
+        <div id="user-bar" class="user-bar" style="display:none">
+          <span id="user-email"></span>
+          <button id="btn-settings" class="btn-secondary btn-sm">⚙ Settings</button>
+          <button id="btn-logout" class="btn-secondary btn-sm">Sign out</button>
+        </div>
       </header>
       <div class="card">
         <label for="goal-title">What do you want to achieve?</label>
@@ -44,7 +73,7 @@
       </div>
     </section>
 
-    <!-- Tasks screen -->
+    <!-- Tasks screen (includes drip mode + all-tasks toggle) -->
     <section id="screen-tasks" class="screen">
       <div class="tasks-header">
         <a class="back-link" id="back-from-tasks">← Back</a>
@@ -58,20 +87,53 @@
         <div class="progress-detail" id="progress-detail"></div>
       </div>
 
-      <!-- Focus mode banner -->
-      <div id="focus-banner" class="focus-banner" style="display:none">
-        <div class="focus-label">🎯 Focus now</div>
-        <div class="focus-title" id="focus-title"></div>
-        <div class="focus-desc" id="focus-desc"></div>
-        <div class="focus-meta" id="focus-meta"></div>
-        <button class="btn-primary btn-sm" id="btn-focus-done">Mark done ✓</button>
-        <button class="btn-secondary btn-sm" id="btn-focus-start">Start working →</button>
+      <!-- Drip mode: single task card -->
+      <div id="drip-section" class="drip-section">
+        <div id="drip-card" class="drip-card" style="display:none">
+          <div class="drip-label">📋 Your next task</div>
+          <div class="drip-title" id="drip-title"></div>
+          <div class="drip-desc" id="drip-desc"></div>
+          <div class="drip-meta" id="drip-meta"></div>
+          <div id="drip-skip-suggestion" class="drip-skip-suggestion" style="display:none"></div>
+          <div id="drip-adaptive-question" class="drip-adaptive-q" style="display:none">
+            <label id="drip-q-text"></label>
+            <input id="drip-q-answer" type="text" placeholder="" />
+            <button id="btn-drip-q-submit" class="btn-secondary btn-sm">Submit</button>
+          </div>
+          <div id="drip-stall-msg" class="drip-stall-msg" style="display:none"></div>
+          <div class="drip-actions">
+            <button class="btn-primary" id="btn-drip-done">Done — give me the next task ✓</button>
+            <button class="btn-secondary btn-sm" id="btn-drip-skip">Skip this task</button>
+          </div>
+        </div>
+        <div id="drip-done-msg" style="display:none;text-align:center;padding:2rem 0">
+          <h3>🎉 All tasks completed — well done!</h3>
+        </div>
+        <div class="drip-message" id="drip-message"></div>
       </div>
 
-      <div id="task-list" class="task-list"></div>
-      <div class="task-list-actions mt">
-        <button id="btn-add-task" class="btn-secondary">+ Add a task</button>
-        <button id="btn-redecompose" class="btn-secondary">↻ Re-generate tasks</button>
+      <!-- Toggle to show all tasks -->
+      <div class="view-toggle mt">
+        <button id="btn-toggle-view" class="btn-secondary btn-sm">Show all tasks</button>
+      </div>
+
+      <!-- Full task list (hidden by default in drip mode) -->
+      <div id="all-tasks-section" style="display:none">
+        <!-- Focus mode banner -->
+        <div id="focus-banner" class="focus-banner" style="display:none">
+          <div class="focus-label">🎯 Focus now</div>
+          <div class="focus-title" id="focus-title"></div>
+          <div class="focus-desc" id="focus-desc"></div>
+          <div class="focus-meta" id="focus-meta"></div>
+          <button class="btn-primary btn-sm" id="btn-focus-done">Mark done ✓</button>
+          <button class="btn-secondary btn-sm" id="btn-focus-start">Start working →</button>
+        </div>
+
+        <div id="task-list" class="task-list"></div>
+        <div class="task-list-actions mt">
+          <button id="btn-add-task" class="btn-secondary">+ Add a task</button>
+          <button id="btn-redecompose" class="btn-secondary">↻ Re-generate tasks</button>
+        </div>
       </div>
       <div class="error" id="error-tasks"></div>
 
@@ -106,6 +168,50 @@
         <button class="btn-secondary btn-sm" id="btn-nudge-ack">Got it</button>
       </div>
     </section>
+
+    <!-- Settings modal -->
+    <div id="settings-modal" class="modal" style="display:none">
+      <div class="modal-content card">
+        <div class="modal-header">
+          <h2>⚙ Settings</h2>
+          <button id="btn-close-settings" class="btn-close">&times;</button>
+        </div>
+
+        <h3>Telegram Notifications</h3>
+        <label for="tg-bot-token">Bot Token</label>
+        <input id="tg-bot-token" type="text" placeholder="123456:ABC-DEF..." />
+        <label for="tg-chat-id" class="mt">Chat ID</label>
+        <input id="tg-chat-id" type="text" placeholder="-100123456789" />
+        <div class="mt">
+          <button id="btn-tg-test" class="btn-secondary btn-sm">Test Telegram</button>
+          <button id="btn-tg-save" class="btn-primary btn-sm">Save Telegram</button>
+        </div>
+        <div class="error" id="error-tg"></div>
+
+        <hr class="mt" />
+
+        <h3 class="mt">Webhook Notifications</h3>
+        <label for="wh-url">Webhook URL</label>
+        <input id="wh-url" type="url" placeholder="https://example.com/webhook" />
+        <div class="mt">
+          <button id="btn-wh-test" class="btn-secondary btn-sm">Test Webhook</button>
+          <button id="btn-wh-save" class="btn-primary btn-sm">Save Webhook</button>
+        </div>
+        <div class="error" id="error-wh"></div>
+
+        <hr class="mt" />
+
+        <h3 class="mt">Notification Preferences</h3>
+        <div id="notif-toggles" class="notif-toggles">
+          <label><input type="checkbox" id="notif-nudges" checked /> Nudges</label>
+          <label><input type="checkbox" id="notif-tasks" checked /> Task updates</label>
+          <label><input type="checkbox" id="notif-spending" checked /> Spending requests</label>
+          <label><input type="checkbox" id="notif-checkins" /> Check-in reminders</label>
+        </div>
+
+        <div id="existing-configs" class="mt"></div>
+      </div>
+    </div>
   </div>
 
   <script src="/static/app.js"></script>

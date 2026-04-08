@@ -1118,6 +1118,15 @@ async def get_goal_insights(goal_id: int):
         raise HTTPException(status_code=404, detail="Goal not found")
     paths = storage.list_success_paths()
     insights = decomposer.apply_success_paths(goal, paths)
+
+    # P2.2: increment_success_path_reuse when paths influence a new decomposition
+    if insights:
+        template_name = decomposer._detect_template(goal)
+        relevant = [sp for sp in paths if sp.goal_type == template_name]
+        for sp in relevant:
+            if sp.id is not None:
+                storage.increment_success_path_reuse(sp.id)
+
     return {"goal_id": goal_id, "insights": insights}
 
 
@@ -1470,5 +1479,73 @@ async def telegram_webhook(body: TelegramUpdate):
             "reason": reason,
         })
         return {"ok": True, "action": "denied", "request_id": request_id}
+
+    # P3.4: Telegram bot drip flow commands
+    # /goal <text> — create a new goal
+    goal_match = _re.match(r"^/goal\s+(.+)$", text, _re.S)
+    if goal_match:
+        goal_text = goal_match.group(1).strip()
+        goal = Goal(title=goal_text, description="Created via Telegram")
+        goal = storage.create_goal(goal)
+        # Start decomposition
+        try:
+            decomposer.decompose(goal)
+            goal.status = "decomposed"
+            storage.update_goal(goal)
+        except Exception:
+            pass
+        return {"ok": True, "action": "goal_created", "goal_id": goal.id}
+
+    # /next — get next drip task for most recent goal
+    if text == "/next":
+        goals = storage.list_goals()
+        if not goals:
+            return {"ok": True, "message": "No goals yet. Use /goal <description> to create one."}
+        goal = goals[0]
+        tasks = storage.list_tasks(goal.id)  # type: ignore[arg-type]
+        drip = decomposer.drip_next_task(goal, tasks)
+        if drip and drip.get("task"):
+            task_data = drip["task"]
+            messaging.send_notification("drip_task", {
+                "title": task_data.get("title", ""),
+                "description": task_data.get("description", ""),
+                "estimated_minutes": task_data.get("estimated_minutes", 0),
+            })
+        return {"ok": True, "action": "drip_next", "drip": drip}
+
+    # /done — mark current task as done and get next
+    if text == "/done":
+        goals = storage.list_goals()
+        if not goals:
+            return {"ok": True, "message": "No goals yet."}
+        goal = goals[0]
+        tasks = storage.list_tasks(goal.id)  # type: ignore[arg-type]
+        focus = decomposer.get_focus_task(tasks)
+        if focus:
+            focus.status = "done"
+            storage.update_task(focus)
+            tasks = storage.list_tasks(goal.id)  # type: ignore[arg-type]
+            drip = decomposer.drip_next_task(goal, tasks, completed_task=focus)
+            if drip and drip.get("task"):
+                messaging.send_notification("drip_task", {
+                    "title": drip["task"].get("title", ""),
+                    "description": drip["task"].get("description", ""),
+                    "estimated_minutes": drip["task"].get("estimated_minutes", 0),
+                })
+            return {"ok": True, "action": "task_done", "drip": drip}
+        return {"ok": True, "message": "No current task to mark done."}
+
+    # /skip — skip current task
+    if text == "/skip":
+        goals = storage.list_goals()
+        if not goals:
+            return {"ok": True, "message": "No goals yet."}
+        goal = goals[0]
+        tasks = storage.list_tasks(goal.id)  # type: ignore[arg-type]
+        focus = decomposer.get_focus_task(tasks)
+        if focus:
+            focus.status = "skipped"
+            storage.update_task(focus)
+        return {"ok": True, "action": "task_skipped"}
 
     return {"ok": True}
