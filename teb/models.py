@@ -374,3 +374,97 @@ class Integration:
             "common_endpoints": _json.loads(self.common_endpoints) if self.common_endpoints else [],
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }
+
+
+# ─── Financial Execution ────────────────────────────────────────────────────
+
+@dataclass
+class SpendingBudget:
+    """Budget configuration for autonomous financial execution."""
+    goal_id: int
+    daily_limit: float = 0.0           # max spend per day in dollars
+    total_limit: float = 0.0           # max total spend for this goal
+    category: str = "general"          # general | hosting | domain | marketing | tools | services
+    require_approval: bool = True      # whether each transaction needs manual approval
+    spent_today: float = 0.0
+    spent_total: float = 0.0
+    id: Optional[int] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "goal_id": self.goal_id,
+            "daily_limit": self.daily_limit,
+            "total_limit": self.total_limit,
+            "category": self.category,
+            "require_approval": self.require_approval,
+            "spent_today": self.spent_today,
+            "spent_total": self.spent_total,
+            "remaining_daily": max(0, self.daily_limit - self.spent_today),
+            "remaining_total": max(0, self.total_limit - self.spent_total),
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+
+@dataclass
+class SpendingRequest:
+    """A request to spend money as part of task execution."""
+    task_id: int
+    budget_id: int
+    amount: float
+    currency: str = "USD"
+    description: str = ""              # what the money is for
+    service: str = ""                  # which service (stripe, namecheap, etc.)
+    status: str = "pending"            # pending | approved | denied | executed | failed
+    denial_reason: str = ""
+    id: Optional[int] = None
+    created_at: Optional[datetime] = None
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "task_id": self.task_id,
+            "budget_id": self.budget_id,
+            "amount": self.amount,
+            "currency": self.currency,
+            "description": self.description,
+            "service": self.service,
+            "status": self.status,
+            "denial_reason": self.denial_reason,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+# ─── Messaging Configuration ────────────────────────────────────────────────
+
+@dataclass
+class MessagingConfig:
+    """Configuration for external messaging channels (Telegram, webhooks)."""
+    channel: str                       # telegram | webhook
+    config_json: str = "{}"            # channel-specific config (bot token, chat id, webhook url, etc.)
+    enabled: bool = True
+    notify_nudges: bool = True         # send nudge notifications
+    notify_tasks: bool = True          # send task completion notifications
+    notify_spending: bool = True       # send spending approval requests
+    notify_checkins: bool = False      # send check-in reminders
+    id: Optional[int] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+    def to_dict(self) -> dict:
+        import json as _json
+        return {
+            "id": self.id,
+            "channel": self.channel,
+            "config": _json.loads(self.config_json) if self.config_json else {},
+            "enabled": self.enabled,
+            "notify_nudges": self.notify_nudges,
+            "notify_tasks": self.notify_tasks,
+            "notify_spending": self.notify_spending,
+            "notify_checkins": self.notify_checkins,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+        }
