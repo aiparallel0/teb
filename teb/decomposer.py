@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set
 
 from teb import config
-from teb.models import Goal, ProactiveSuggestion, Task
+from teb.models import Goal, ProactiveSuggestion, SuccessPath, Task
 
 
 # ─── Clarifying Questions ─────────────────────────────────────────────────────
@@ -1294,3 +1294,357 @@ def generate_proactive_suggestions(
         ))
 
     return suggestions
+
+
+# ─── Adaptive Micro-Tasking (Drip Mode) ──────────────────────────────────────
+
+_INITIAL_QUESTIONS_LIMIT = 5  # Ask up to 5 questions upfront, then drip
+
+
+def get_next_drip_question(goal: Goal) -> Optional[ClarifyingQuestion]:
+    """
+    In drip mode, return the next clarifying question — but only up to
+    _INITIAL_QUESTIONS_LIMIT upfront.  After that, questions are asked
+    adaptively based on completed tasks.
+    """
+    all_questions = get_clarifying_questions(goal)
+    answered_keys = set(goal.answers.keys())
+    unanswered = [q for q in all_questions if q.key not in answered_keys]
+
+    if not unanswered:
+        return None
+
+    # In drip mode, only serve up to INITIAL_QUESTIONS_LIMIT upfront
+    answered_count = len(answered_keys)
+    if answered_count < _INITIAL_QUESTIONS_LIMIT:
+        return unanswered[0]
+
+    # After the limit, remaining questions become "adaptive" — they're
+    # returned when the system decides to ask them based on task progress.
+    return None
+
+
+def drip_next_task(
+    goal: Goal,
+    tasks: List[Task],
+    completed_task: Optional[Task] = None,
+) -> Optional[Dict[str, Any]]:
+    """
+    Adaptive drip: return the next single task to work on.
+
+    Unlike full decomposition, drip mode:
+    1. Gives exactly one task at a time
+    2. Adapts the next task based on what the user completed
+    3. If no tasks exist yet, creates the first one from the template
+    4. If the last task was completed, generates the next logical one
+
+    Returns a dict with:
+        - "task": the next Task to create/focus on (as dict), or None if done
+        - "adaptive_question": an optional follow-up question to ask
+        - "message": context about why this task was chosen
+    """
+    # Build profile from answers
+    profile = _build_user_profile(goal.answers)
+    template_name = _detect_template(goal)
+    template = _TEMPLATES[template_name]
+
+    top_level = [t for t in tasks if t.parent_id is None]
+    done_count = sum(1 for t in top_level if t.status in ("done", "skipped"))
+    total_template_tasks = len(template.tasks)
+
+    # If there's already a todo or in_progress task, return focus on it
+    focus = get_focus_task(tasks)
+    if focus and focus.status in ("todo", "in_progress"):
+        return {
+            "task": focus.to_dict(),
+            "is_new": False,
+            "adaptive_question": None,
+            "message": f"Continue working on your current task ({done_count}/{total_template_tasks} completed).",
+        }
+
+    # If all template tasks are done, we're complete
+    if done_count >= total_template_tasks:
+        return {
+            "task": None,
+            "is_new": False,
+            "adaptive_question": None,
+            "message": "All tasks completed — well done! 🎉",
+        }
+
+    # Determine which template task comes next
+    next_index = done_count
+    if next_index >= total_template_tasks:
+        return {
+            "task": None,
+            "is_new": False,
+            "adaptive_question": None,
+            "message": "All planned tasks are done!",
+        }
+
+    # Adapt the next template task
+    tt = template.tasks[next_index]
+    adapted = _adapt_template_task(tt, profile)
+
+    # If the completed task gave us signals, adapt further
+    message = f"Task {next_index + 1} of {total_template_tasks}."
+    if completed_task:
+        message = _drip_adaptation_message(completed_task, adapted, done_count, total_template_tasks)
+
+    new_task = Task(
+        goal_id=goal.id,  # type: ignore[arg-type]
+        title=adapted.title,
+        description=adapted.description,
+        estimated_minutes=adapted.estimated_minutes,
+        order_index=next_index,
+    )
+
+    # Attach subtask templates if the template task has them
+    if tt.subtasks:
+        new_task._subtask_templates = [  # type: ignore[attr-defined]
+            _adapt_template_task(sub, profile) for sub in tt.subtasks
+        ]
+
+    # Check if we should ask an adaptive question
+    adaptive_q = _get_adaptive_question(goal, done_count, template_name)
+
+    return {
+        "task": new_task.to_dict(),
+        "is_new": True,
+        "adaptive_question": {"key": adaptive_q.key, "text": adaptive_q.text, "hint": adaptive_q.hint} if adaptive_q else None,
+        "message": message,
+    }
+
+
+def _drip_adaptation_message(
+    completed: Task,
+    next_task: _TemplateTask,
+    done_count: int,
+    total: int,
+) -> str:
+    """Generate a contextual message based on what was just completed."""
+    pct = round((done_count / total) * 100) if total > 0 else 0
+    parts = [f"Great work completing \"{completed.title}\"! ({pct}% done)"]
+
+    if pct >= 50:
+        parts.append("You're past the halfway point — momentum is building!")
+    elif pct >= 25:
+        parts.append("Solid progress. Each task gets you closer.")
+
+    parts.append(f"Next up: \"{next_task.title}\"")
+    return " ".join(parts)
+
+
+def _get_adaptive_question(
+    goal: Goal,
+    tasks_completed: int,
+    template_name: str,
+) -> Optional[ClarifyingQuestion]:
+    """
+    After the initial 5 questions, drip additional questions based on progress.
+
+    This creates a more natural conversation flow where questions are asked
+    at relevant moments rather than all upfront.
+    """
+    answered = set(goal.answers.keys())
+
+    # After completing 2 tasks, ask about pace
+    if tasks_completed == 2 and "pace_feedback" not in answered:
+        return ClarifyingQuestion(
+            key="pace_feedback",
+            text="How are the tasks feeling so far — too easy, about right, or too challenging?",
+            hint="e.g. too easy, just right, a bit overwhelming…",
+        )
+
+    # After completing 4 tasks, ask about focus
+    if tasks_completed == 4 and "focus_area" not in answered:
+        return ClarifyingQuestion(
+            key="focus_area",
+            text="Which part of this goal are you enjoying most? We can lean into that.",
+            hint="e.g. the research part, the hands-on work, outreach…",
+        )
+
+    # Money-specific: after 3 tasks, ask about first earnings
+    if template_name == "make_money_online" and tasks_completed == 3 and "first_earnings" not in answered:
+        return ClarifyingQuestion(
+            key="first_earnings",
+            text="Have you earned anything yet, even a small amount? What worked?",
+            hint="e.g. $0 so far, $50 from a freelance gig, etc.",
+        )
+
+    return None
+
+
+# ─── Success Path Learning ──────────────────────────────────────────────────
+
+def capture_success_path(goal: Goal, tasks: List[Task]) -> Optional[SuccessPath]:
+    """
+    Automatically capture a success path when a goal is completed.
+
+    Extracts the sequence of completed tasks (with their actual completion
+    order and any notes) and saves it as a reusable pattern for future
+    users with similar goals.
+
+    Returns the created SuccessPath, or None if the goal isn't complete.
+    """
+    if goal.status != "done":
+        return None
+
+    template_name = _detect_template(goal)
+    top_level = [t for t in tasks if t.parent_id is None]
+    completed = [t for t in top_level if t.status in ("done", "skipped")]
+
+    if not completed:
+        return None
+
+    # Build step summaries from completed tasks
+    steps = []
+    for t in sorted(completed, key=lambda x: x.order_index):
+        step = {
+            "title": t.title,
+            "description": t.description[:200],
+            "estimated_minutes": t.estimated_minutes,
+            "status": t.status,
+        }
+        # Include subtask info
+        children = [c for c in tasks if c.parent_id == t.id]
+        if children:
+            step["subtasks_completed"] = sum(1 for c in children if c.status in ("done", "skipped"))
+            step["subtasks_total"] = len(children)
+        steps.append(step)
+
+    # Build outcome summary from task progression
+    total_tasks = len(top_level)
+    done_tasks = len(completed)
+    skipped_tasks = sum(1 for t in completed if t.status == "skipped")
+
+    outcome_parts = [f"Completed {done_tasks}/{total_tasks} tasks"]
+    if skipped_tasks > 0:
+        outcome_parts.append(f"({skipped_tasks} skipped)")
+    if goal.answers:
+        # Include relevant context from answers
+        skill = goal.answers.get("skill_level", "")
+        if skill:
+            outcome_parts.append(f"Skill level: {skill}")
+        timeline = goal.answers.get("timeline", "")
+        if timeline:
+            outcome_parts.append(f"Timeline: {timeline}")
+
+    return SuccessPath(
+        goal_type=template_name,
+        steps_json=json.dumps(steps),
+        outcome_summary=". ".join(outcome_parts),
+        source_goal_id=goal.id,
+    )
+
+
+def apply_success_paths(
+    goal: Goal,
+    success_paths: List[SuccessPath],
+) -> List[Dict[str, Any]]:
+    """
+    Analyze existing success paths to provide recommendations for a new goal.
+
+    Returns a list of insights derived from successful completions:
+    - Which steps were most commonly completed vs skipped
+    - Average task counts and time estimates
+    - Tips from patterns in successful paths
+    """
+    if not success_paths:
+        return []
+
+    template_name = _detect_template(goal)
+    relevant = [sp for sp in success_paths if sp.goal_type == template_name]
+
+    if not relevant:
+        return []
+
+    insights: List[Dict[str, Any]] = []
+
+    # Analyze step patterns across successful paths
+    step_titles: Dict[str, int] = {}
+    skip_titles: Dict[str, int] = {}
+
+    for sp in relevant:
+        steps = json.loads(sp.steps_json) if sp.steps_json else []
+        for step in steps:
+            title = step.get("title", "")
+            if title:
+                step_titles[title] = step_titles.get(title, 0) + 1
+                if step.get("status") == "skipped":
+                    skip_titles[title] = skip_titles.get(title, 0) + 1
+
+    # Find most commonly completed steps
+    if step_titles:
+        most_common = sorted(step_titles.items(), key=lambda x: x[1], reverse=True)[:3]
+        insights.append({
+            "type": "popular_steps",
+            "message": "Most successful users completed these steps first",
+            "steps": [{"title": t, "times_completed": c} for t, c in most_common],
+        })
+
+    # Find commonly skipped steps
+    if skip_titles:
+        most_skipped = sorted(skip_titles.items(), key=lambda x: x[1], reverse=True)[:2]
+        insights.append({
+            "type": "commonly_skipped",
+            "message": "These steps are often skipped — consider if they're worth your time",
+            "steps": [{"title": t, "times_skipped": c} for t, c in most_skipped],
+        })
+
+    # Reuse count as social proof
+    total_reused = sum(sp.times_reused for sp in relevant)
+    if total_reused > 0:
+        insights.append({
+            "type": "social_proof",
+            "message": f"This approach has been successfully used {total_reused + len(relevant)} times by others.",
+        })
+
+    return insights
+
+
+def validate_spending(
+    amount: float,
+    budget_daily_limit: float,
+    budget_total_limit: float,
+    spent_today: float,
+    spent_total: float,
+) -> Dict[str, Any]:
+    """
+    Validate whether a spending request fits within budget limits.
+
+    Returns a dict with "allowed" (bool), "reason" (str), and
+    "remaining_daily" / "remaining_total".
+    """
+    remaining_daily = budget_daily_limit - spent_today
+    remaining_total = budget_total_limit - spent_total
+
+    if amount <= 0:
+        return {
+            "allowed": False,
+            "reason": "Amount must be positive",
+            "remaining_daily": remaining_daily,
+            "remaining_total": remaining_total,
+        }
+
+    if amount > remaining_daily:
+        return {
+            "allowed": False,
+            "reason": f"Exceeds daily limit. Remaining today: ${remaining_daily:.2f}",
+            "remaining_daily": remaining_daily,
+            "remaining_total": remaining_total,
+        }
+
+    if amount > remaining_total:
+        return {
+            "allowed": False,
+            "reason": f"Exceeds total budget. Remaining: ${remaining_total:.2f}",
+            "remaining_daily": remaining_daily,
+            "remaining_total": remaining_total,
+        }
+
+    return {
+        "allowed": True,
+        "reason": "Within budget limits",
+        "remaining_daily": remaining_daily - amount,
+        "remaining_total": remaining_total - amount,
+    }

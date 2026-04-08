@@ -10,10 +10,11 @@ from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from teb import agents, browser, decomposer, executor, integrations, storage
+from teb import agents, browser, decomposer, executor, integrations, messaging, storage
 from teb.models import (
     ApiCredential, BrowserAction, CheckIn, ExecutionLog,
-    Goal, NudgeEvent, OutcomeMetric, Task,
+    Goal, MessagingConfig, NudgeEvent, OutcomeMetric,
+    SpendingBudget, SpendingRequest, Task,
 )
 
 
@@ -90,6 +91,56 @@ class OutcomeUpdate(BaseModel):
 
 class SuggestionAction(BaseModel):
     status: str  # accepted | dismissed
+
+
+class BudgetCreate(BaseModel):
+    goal_id: int
+    daily_limit: float = 50.0
+    total_limit: float = 500.0
+    category: str = "general"
+    require_approval: bool = True
+
+
+class BudgetUpdate(BaseModel):
+    daily_limit: Optional[float] = None
+    total_limit: Optional[float] = None
+    require_approval: Optional[bool] = None
+
+
+class SpendingRequestCreate(BaseModel):
+    task_id: int
+    amount: float
+    description: str = ""
+    service: str = ""
+    currency: str = "USD"
+
+
+class SpendingAction(BaseModel):
+    action: str          # approve | deny
+    reason: str = ""
+
+
+class MessagingConfigCreate(BaseModel):
+    channel: str         # telegram | webhook
+    config: dict = {}    # channel-specific config
+    notify_nudges: bool = True
+    notify_tasks: bool = True
+    notify_spending: bool = True
+    notify_checkins: bool = False
+
+
+class MessagingConfigUpdate(BaseModel):
+    config: Optional[dict] = None
+    enabled: Optional[bool] = None
+    notify_nudges: Optional[bool] = None
+    notify_tasks: Optional[bool] = None
+    notify_spending: Optional[bool] = None
+    notify_checkins: Optional[bool] = None
+
+
+class DripClarifyAnswer(BaseModel):
+    key: str
+    answer: str
 
 
 # ─── Frontend ─────────────────────────────────────────────────────────────────
@@ -355,11 +406,23 @@ async def update_task(task_id: int, body: TaskPatch):
         if goal and goal.status != "done":
             goal.status = "done"
             storage.update_goal(goal)
+            # Auto-capture success path when goal completes
+            sp = decomposer.capture_success_path(goal, all_tasks)
+            if sp:
+                storage.create_success_path(sp)
+            # Notify goal completion
+            messaging.send_notification("goal_complete", {"goal_title": goal.title})
     elif any(t.status == "in_progress" for t in all_tasks):
         goal = storage.get_goal(task.goal_id)
         if goal and goal.status == "decomposed":
             goal.status = "in_progress"
             storage.update_goal(goal)
+
+    # Notify on task completion or failure
+    if body.status == "done":
+        messaging.send_notification("task_done", {"title": task.title, "task_id": task.id})
+    elif body.status == "failed":
+        messaging.send_notification("task_failed", {"title": task.title, "task_id": task.id})
 
     return task.to_dict()
 
@@ -542,6 +605,8 @@ async def get_nudge(goal_id: int):
             message=nudge_info["message"],
         )
         ne = storage.create_nudge(ne)
+        # Send nudge notification via external messaging
+        messaging.send_notification("nudge", {"message": ne.message, "goal_id": goal_id})
         return {"nudge": ne.to_dict()}
 
     return {"nudge": None, "message": "No nudge needed — you're on track!"}
@@ -833,3 +898,395 @@ async def get_service_endpoints(service_name: str):
     if not endpoints:
         raise HTTPException(status_code=404, detail=f"No endpoints known for '{service_name}'")
     return {"service_name": service_name, "endpoints": endpoints}
+
+
+# ─── Adaptive Micro-Tasking (Drip Mode) ─────────────────────────────────────
+
+@app.get("/api/goals/{goal_id}/drip")
+async def drip_next(goal_id: int):
+    """
+    Get the next single task in drip mode.
+
+    Drip mode gives one task at a time and adapts based on what the user
+    has completed.  It may also include an adaptive follow-up question.
+    """
+    goal = storage.get_goal(goal_id)
+    if not goal:
+        raise HTTPException(status_code=404, detail="Goal not found")
+    tasks = storage.list_tasks(goal_id=goal_id)
+
+    # Find the most recently completed task for context
+    completed = [t for t in tasks if t.status in ("done", "skipped")]
+    last_completed = max(completed, key=lambda t: t.updated_at or t.created_at, default=None) if completed else None
+
+    result = decomposer.drip_next_task(goal, tasks, completed_task=last_completed)
+    if not result:
+        return {"task": None, "message": "No more tasks."}
+
+    # If it's a new task, persist it
+    if result.get("is_new") and result.get("task"):
+        task_data = result["task"]
+        new_task = Task(
+            goal_id=goal_id,
+            title=task_data["title"],
+            description=task_data["description"],
+            estimated_minutes=task_data["estimated_minutes"],
+            order_index=task_data["order_index"],
+        )
+        saved = storage.create_task(new_task)
+        result["task"] = saved.to_dict()
+
+        # Also create subtasks if they exist
+        subtask_templates = getattr(new_task, "_subtask_templates", None)
+        # Note: subtask_templates won't persist through to_dict/from_dict.
+        # The drip_next_task attached them to the Task object before to_dict.
+
+        # Send drip notification
+        messaging.send_notification("drip_task", {
+            "title": saved.title,
+            "description": saved.description,
+            "estimated_minutes": saved.estimated_minutes,
+        })
+
+        # Update goal status
+        if goal.status in ("drafting", "clarifying", "decomposed"):
+            goal.status = "in_progress"
+            storage.update_goal(goal)
+
+    return result
+
+
+@app.get("/api/goals/{goal_id}/drip/question")
+async def drip_question(goal_id: int):
+    """Get the next drip-mode clarifying question (first 5 upfront)."""
+    goal = storage.get_goal(goal_id)
+    if not goal:
+        raise HTTPException(status_code=404, detail="Goal not found")
+    q = decomposer.get_next_drip_question(goal)
+    if q is None:
+        return {"done": True, "question": None}
+    return {"done": False, "question": {"key": q.key, "text": q.text, "hint": q.hint}}
+
+
+@app.post("/api/goals/{goal_id}/drip/clarify")
+async def drip_clarify(goal_id: int, body: DripClarifyAnswer):
+    """Submit an answer to a drip-mode clarifying question."""
+    goal = storage.get_goal(goal_id)
+    if not goal:
+        raise HTTPException(status_code=404, detail="Goal not found")
+    goal.answers[body.key] = body.answer
+    goal.status = "clarifying"
+    storage.update_goal(goal)
+    next_q = decomposer.get_next_drip_question(goal)
+    if next_q is None:
+        return {"done": True, "next_question": None}
+    return {
+        "done": False,
+        "next_question": {"key": next_q.key, "text": next_q.text, "hint": next_q.hint},
+    }
+
+
+# ─── Success Path Learning ─────────────────────────────────────────────────
+
+@app.get("/api/goals/{goal_id}/insights")
+async def get_goal_insights(goal_id: int):
+    """
+    Get insights from success paths of similar completed goals.
+
+    Uses the knowledge base of successful completions to recommend
+    which steps to focus on and which are commonly skipped.
+    """
+    goal = storage.get_goal(goal_id)
+    if not goal:
+        raise HTTPException(status_code=404, detail="Goal not found")
+    paths = storage.list_success_paths()
+    insights = decomposer.apply_success_paths(goal, paths)
+    return {"goal_id": goal_id, "insights": insights}
+
+
+# ─── Financial Execution Pipeline ───────────────────────────────────────────
+
+@app.post("/api/budgets", status_code=201)
+async def create_budget(body: BudgetCreate):
+    """Create a spending budget for a goal."""
+    goal = storage.get_goal(body.goal_id)
+    if not goal:
+        raise HTTPException(status_code=404, detail="Goal not found")
+
+    if body.daily_limit < 0 or body.total_limit < 0:
+        raise HTTPException(status_code=422, detail="Limits must be non-negative")
+
+    valid_categories = {"general", "hosting", "domain", "marketing", "tools", "services"}
+    if body.category not in valid_categories:
+        raise HTTPException(status_code=422, detail=f"category must be one of {valid_categories}")
+
+    budget = SpendingBudget(
+        goal_id=body.goal_id,
+        daily_limit=body.daily_limit,
+        total_limit=body.total_limit,
+        category=body.category,
+        require_approval=body.require_approval,
+    )
+    budget = storage.create_spending_budget(budget)
+    return budget.to_dict()
+
+
+@app.get("/api/goals/{goal_id}/budgets")
+async def list_budgets(goal_id: int):
+    """List all spending budgets for a goal."""
+    goal = storage.get_goal(goal_id)
+    if not goal:
+        raise HTTPException(status_code=404, detail="Goal not found")
+    budgets = storage.list_spending_budgets(goal_id)
+    return [b.to_dict() for b in budgets]
+
+
+@app.patch("/api/budgets/{budget_id}")
+async def update_budget(budget_id: int, body: BudgetUpdate):
+    """Update a spending budget's limits or approval requirement."""
+    budget = storage.get_spending_budget(budget_id)
+    if not budget:
+        raise HTTPException(status_code=404, detail="Budget not found")
+
+    if body.daily_limit is not None:
+        if body.daily_limit < 0:
+            raise HTTPException(status_code=422, detail="daily_limit must be non-negative")
+        budget.daily_limit = body.daily_limit
+    if body.total_limit is not None:
+        if body.total_limit < 0:
+            raise HTTPException(status_code=422, detail="total_limit must be non-negative")
+        budget.total_limit = body.total_limit
+    if body.require_approval is not None:
+        budget.require_approval = body.require_approval
+
+    budget = storage.update_spending_budget(budget)
+    return budget.to_dict()
+
+
+@app.post("/api/spending/request", status_code=201)
+async def create_spending_request(body: SpendingRequestCreate):
+    """
+    Request to spend money on a task.
+
+    Validates against the goal's budget limits. If the budget requires
+    approval, the request is created as 'pending'. If no approval is
+    needed and the amount is within limits, it's auto-approved.
+    """
+    task = storage.get_task(body.task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    if body.amount <= 0:
+        raise HTTPException(status_code=422, detail="amount must be positive")
+
+    # Find applicable budget
+    category = _guess_spending_category(body.service)
+    budget = storage.find_spending_budget(task.goal_id, category)
+    if not budget:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No budget found for goal {task.goal_id}. Create one first via POST /api/budgets",
+        )
+
+    # Validate against limits
+    validation = decomposer.validate_spending(
+        body.amount, budget.daily_limit, budget.total_limit,
+        budget.spent_today, budget.spent_total,
+    )
+
+    if not validation["allowed"]:
+        raise HTTPException(status_code=422, detail=validation["reason"])
+
+    # Create the spending request
+    initial_status = "pending" if budget.require_approval else "approved"
+    req = SpendingRequest(
+        task_id=body.task_id,
+        budget_id=budget.id,  # type: ignore[arg-type]
+        amount=body.amount,
+        currency=body.currency,
+        description=body.description,
+        service=body.service,
+        status=initial_status,
+    )
+    req = storage.create_spending_request(req)
+
+    # If auto-approved, update budget spending
+    if initial_status == "approved":
+        budget.spent_today += body.amount
+        budget.spent_total += body.amount
+        storage.update_spending_budget(budget)
+
+    # Notify about spending request (if pending approval)
+    if initial_status == "pending":
+        messaging.send_notification("spending_request", {
+            "request_id": req.id,
+            "amount": req.amount,
+            "description": req.description,
+            "service": req.service,
+            "task_title": task.title,
+        })
+
+    return {
+        "request": req.to_dict(),
+        "budget_remaining": {
+            "daily": max(0, budget.daily_limit - budget.spent_today),
+            "total": max(0, budget.total_limit - budget.spent_total),
+        },
+        "auto_approved": initial_status == "approved",
+    }
+
+
+@app.post("/api/spending/{request_id}/action")
+async def action_spending_request(request_id: int, body: SpendingAction):
+    """Approve or deny a pending spending request."""
+    req = storage.get_spending_request(request_id)
+    if not req:
+        raise HTTPException(status_code=404, detail="Spending request not found")
+
+    if req.status != "pending":
+        raise HTTPException(status_code=409, detail=f"Request is already {req.status}")
+
+    valid_actions = {"approve", "deny"}
+    if body.action not in valid_actions:
+        raise HTTPException(status_code=422, detail=f"action must be one of {valid_actions}")
+
+    if body.action == "approve":
+        req.status = "approved"
+        # Update budget
+        budget = storage.get_spending_budget(req.budget_id)
+        if budget:
+            budget.spent_today += req.amount
+            budget.spent_total += req.amount
+            storage.update_spending_budget(budget)
+        messaging.send_notification("spending_approved", {
+            "amount": req.amount,
+            "description": req.description,
+        })
+    else:
+        req.status = "denied"
+        req.denial_reason = body.reason
+        messaging.send_notification("spending_denied", {
+            "amount": req.amount,
+            "description": req.description,
+            "reason": body.reason,
+        })
+
+    storage.update_spending_request(req)
+    return req.to_dict()
+
+
+@app.get("/api/goals/{goal_id}/spending")
+async def list_goal_spending(goal_id: int, status: Optional[str] = Query(default=None)):
+    """List all spending requests for a goal's tasks."""
+    goal = storage.get_goal(goal_id)
+    if not goal:
+        raise HTTPException(status_code=404, detail="Goal not found")
+    tasks = storage.list_tasks(goal_id=goal_id)
+    all_requests: list[dict] = []
+    for task in tasks:
+        if task.id is not None:
+            reqs = storage.list_spending_requests(task_id=task.id, status=status)
+            all_requests.extend(r.to_dict() for r in reqs)
+    return all_requests
+
+
+def _guess_spending_category(service: str) -> str:
+    """Guess the spending category from a service name."""
+    service_lower = service.lower()
+    if any(w in service_lower for w in ("namecheap", "godaddy", "domain", "cloudflare")):
+        return "domain"
+    if any(w in service_lower for w in ("vercel", "aws", "heroku", "digitalocean", "hosting")):
+        return "hosting"
+    if any(w in service_lower for w in ("google ads", "facebook ads", "twitter ads", "marketing", "ads")):
+        return "marketing"
+    if any(w in service_lower for w in ("github", "openai", "tool", "software", "saas")):
+        return "tools"
+    if any(w in service_lower for w in ("stripe", "paypal", "sendgrid", "twilio")):
+        return "services"
+    return "general"
+
+
+# ─── External Messaging ─────────────────────────────────────────────────────
+
+@app.post("/api/messaging/config", status_code=201)
+async def create_messaging_config(body: MessagingConfigCreate):
+    """Configure a messaging channel (Telegram or webhook)."""
+    import json as _json
+
+    valid_channels = {"telegram", "webhook"}
+    if body.channel not in valid_channels:
+        raise HTTPException(status_code=422, detail=f"channel must be one of {valid_channels}")
+
+    # Validate channel-specific config
+    if body.channel == "telegram":
+        if "bot_token" not in body.config or "chat_id" not in body.config:
+            raise HTTPException(
+                status_code=422,
+                detail="Telegram config requires 'bot_token' and 'chat_id'",
+            )
+    elif body.channel == "webhook":
+        if "url" not in body.config:
+            raise HTTPException(status_code=422, detail="Webhook config requires 'url'")
+
+    cfg = MessagingConfig(
+        channel=body.channel,
+        config_json=_json.dumps(body.config),
+        notify_nudges=body.notify_nudges,
+        notify_tasks=body.notify_tasks,
+        notify_spending=body.notify_spending,
+        notify_checkins=body.notify_checkins,
+    )
+    cfg = storage.create_messaging_config(cfg)
+    return cfg.to_dict()
+
+
+@app.get("/api/messaging/configs")
+async def list_messaging_configs():
+    """List all messaging configurations."""
+    configs = storage.list_messaging_configs()
+    return [c.to_dict() for c in configs]
+
+
+@app.patch("/api/messaging/config/{config_id}")
+async def update_messaging_config_endpoint(config_id: int, body: MessagingConfigUpdate):
+    """Update a messaging configuration."""
+    import json as _json
+
+    cfg = storage.get_messaging_config(config_id)
+    if not cfg:
+        raise HTTPException(status_code=404, detail="Messaging config not found")
+
+    if body.config is not None:
+        cfg.config_json = _json.dumps(body.config)
+    if body.enabled is not None:
+        cfg.enabled = body.enabled
+    if body.notify_nudges is not None:
+        cfg.notify_nudges = body.notify_nudges
+    if body.notify_tasks is not None:
+        cfg.notify_tasks = body.notify_tasks
+    if body.notify_spending is not None:
+        cfg.notify_spending = body.notify_spending
+    if body.notify_checkins is not None:
+        cfg.notify_checkins = body.notify_checkins
+
+    cfg = storage.update_messaging_config(cfg)
+    return cfg.to_dict()
+
+
+@app.delete("/api/messaging/config/{config_id}", status_code=200)
+async def delete_messaging_config_endpoint(config_id: int):
+    """Delete a messaging configuration."""
+    cfg = storage.get_messaging_config(config_id)
+    if not cfg:
+        raise HTTPException(status_code=404, detail="Messaging config not found")
+    storage.delete_messaging_config(config_id)
+    return {"deleted": config_id}
+
+
+@app.post("/api/messaging/test/{config_id}")
+async def test_messaging(config_id: int):
+    """Send a test message to a specific messaging channel."""
+    result = messaging.send_test_message(config_id)
+    if not result.get("success"):
+        raise HTTPException(status_code=400, detail=result.get("error", "Test message failed"))
+    return result
