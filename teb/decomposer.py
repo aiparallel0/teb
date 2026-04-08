@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Set
 
 from teb import config
@@ -90,6 +91,71 @@ _BUILD_QUESTIONS: List[ClarifyingQuestion] = [
         key="target_users",
         text="Who is the primary user of this project — you, a specific audience, or the general public?",
         hint="e.g. just me, small team, general public…",
+    ),
+]
+
+_BOOK_QUESTIONS: List[ClarifyingQuestion] = [
+    ClarifyingQuestion(
+        key="book_genre",
+        text="What kind of book? Fiction, non-fiction, technical, self-help?",
+        hint="e.g. sci-fi novel, how-to guide, memoir…",
+    ),
+    ClarifyingQuestion(
+        key="book_length",
+        text="Roughly how long do you envision it — short (~20k words), medium (~50k), or long (~80k+)?",
+        hint="e.g. short, medium, full novel…",
+    ),
+]
+
+_STARTUP_QUESTIONS: List[ClarifyingQuestion] = [
+    ClarifyingQuestion(
+        key="startup_idea",
+        text="What problem does your startup solve, and for whom?",
+        hint="e.g. helps freelancers track invoices, simplifies meal planning for parents…",
+    ),
+    ClarifyingQuestion(
+        key="startup_stage",
+        text="Where are you now — just an idea, have a prototype, or already have users?",
+        hint="e.g. idea stage, MVP built, 50 beta users…",
+    ),
+]
+
+_JOB_QUESTIONS: List[ClarifyingQuestion] = [
+    ClarifyingQuestion(
+        key="job_target",
+        text="What kind of role or industry are you targeting?",
+        hint="e.g. software engineer at a startup, marketing manager, remote data analyst…",
+    ),
+    ClarifyingQuestion(
+        key="job_timeline",
+        text="How urgently do you need a new job?",
+        hint="e.g. within a month, 3-6 months, exploring options…",
+    ),
+]
+
+_HEALTH_QUESTIONS: List[ClarifyingQuestion] = [
+    ClarifyingQuestion(
+        key="health_focus",
+        text="What aspect of health do you want to improve most?",
+        hint="e.g. sleep, nutrition, stress, energy levels, chronic condition…",
+    ),
+    ClarifyingQuestion(
+        key="health_constraints",
+        text="Any constraints or conditions to keep in mind?",
+        hint="e.g. bad knees, vegetarian, limited time, budget…",
+    ),
+]
+
+_SIDE_PROJECT_QUESTIONS: List[ClarifyingQuestion] = [
+    ClarifyingQuestion(
+        key="project_type",
+        text="What kind of side project — creative, technical, business, or something else?",
+        hint="e.g. YouTube channel, open-source tool, Etsy shop, podcast…",
+    ),
+    ClarifyingQuestion(
+        key="project_hours",
+        text="How many hours per week can you dedicate to this alongside other commitments?",
+        hint="e.g. 5 hours, 10 hours, weekends only…",
     ),
 ]
 
@@ -294,6 +360,172 @@ _TEMPLATES: Dict[str, _Template] = {
                20),
         ],
     ),
+
+    "write_book": _Template(
+        name="write_book",
+        questions=_BOOK_QUESTIONS + _GENERIC_QUESTIONS,
+        tasks=[
+            _t("Define your book concept and outline",
+               "Write a one-paragraph summary of your book: what it's about, who it's for, "
+               "and what the reader will take away. Then sketch a chapter-by-chapter outline.",
+               90,
+               [
+                   _t("Write a one-paragraph book summary", "Describe the core idea, audience, and takeaway.", 20),
+                   _t("Draft a chapter outline", "List 8-12 chapters with a sentence each on what they cover.", 60),
+               ]),
+            _t("Set a daily writing target and schedule",
+               "Decide how many words you'll write per day (500-1000 is common for beginners). "
+               "Block that time in your calendar.",
+               20),
+            _t("Write the first chapter / first 2000 words",
+               "Get the first words on paper. Don't edit, just write. "
+               "The goal is momentum, not perfection.",
+               120),
+            _t("Build a writing habit — complete 5 consecutive writing sessions",
+               "Stick to your daily schedule for 5 days in a row. Track your word count.",
+               60),
+            _t("Get early feedback on your first 5000 words",
+               "Share your draft with 1-2 trusted readers. Ask what's working and what's confusing.",
+               45),
+            _t("Complete first draft",
+               "Keep writing until you've finished all chapters. Aim for completion, not perfection.",
+               90),
+            _t("Revise and edit",
+               "Read through the full draft. Fix structure issues, cut filler, strengthen weak sections.",
+               120),
+            _t("Prepare for publishing",
+               "Research publishing options (self-publish, query agents, or online platforms). "
+               "Format your manuscript accordingly.",
+               60),
+        ],
+    ),
+
+    "launch_startup": _Template(
+        name="launch_startup",
+        questions=_STARTUP_QUESTIONS + _GENERIC_QUESTIONS,
+        tasks=[
+            _t("Validate the problem exists",
+               "Talk to 5-10 potential customers. Ask about their pain points — don't pitch. "
+               "Document what you hear.",
+               90,
+               [
+                   _t("Identify 10 potential customers to interview",
+                      "Find people who match your target audience. Reach out via email, social, or in person.", 30),
+                   _t("Conduct 5 customer interviews",
+                      "Ask open-ended questions about their problems. Take notes. Look for patterns.", 60),
+               ]),
+            _t("Define your MVP scope",
+               "Based on customer feedback, identify the smallest thing you can build that solves "
+               "the core problem. Write it down as a feature list (max 3-5 features).",
+               45),
+            _t("Build a landing page",
+               "Create a simple page explaining your solution with a signup form. "
+               "Use a no-code tool or a simple template.",
+               90),
+            _t("Build or prototype the MVP",
+               "Build the minimum product. Prioritise speed over perfection. "
+               "Ship something real people can use within 2-4 weeks.",
+               120),
+            _t("Get 5 early users and collect feedback",
+               "Launch to a small group. Watch how they use it. Ask what's broken or missing.",
+               60),
+            _t("Iterate based on feedback",
+               "Fix the top 3 issues users reported. Add the one feature most requested.",
+               90),
+        ],
+    ),
+
+    "find_job": _Template(
+        name="find_job",
+        questions=_JOB_QUESTIONS + _GENERIC_QUESTIONS,
+        tasks=[
+            _t("Update your resume/CV",
+               "Tailor your resume to the roles you're targeting. Use action verbs, quantify results, "
+               "and keep it to 1-2 pages.",
+               60),
+            _t("Optimize your LinkedIn/portfolio",
+               "Update headline, summary, and experience. Add a profile photo. "
+               "Connect with people in your target industry.",
+               45),
+            _t("Research target companies and roles",
+               "Identify 10-20 companies you'd like to work for. "
+               "Look at their job boards, culture, and recent news.",
+               60),
+            _t("Apply to 5 positions with tailored applications",
+               "For each application, customize your cover letter and highlight relevant experience.",
+               90),
+            _t("Prepare for interviews",
+               "Practice common interview questions for your role. "
+               "Prepare 3-5 stories using the STAR method.",
+               60,
+               [
+                   _t("Research common interview questions", "Find 10 questions typical for your target role.", 20),
+                   _t("Practice answers out loud", "Rehearse your responses. Time yourself.", 40),
+               ]),
+            _t("Network actively",
+               "Reach out to 5 people in your target companies or industry. "
+               "Ask for informational interviews, not job referrals.",
+               45),
+            _t("Follow up on applications and track progress",
+               "Keep a spreadsheet of applications, dates, and statuses. Follow up after 1 week.",
+               30),
+        ],
+    ),
+
+    "improve_health": _Template(
+        name="improve_health",
+        questions=_HEALTH_QUESTIONS + _GENERIC_QUESTIONS,
+        tasks=[
+            _t("Assess your current baseline",
+               "Record where you are now: sleep quality, energy levels, diet habits, exercise frequency, "
+               "stress level. Be honest — this is just a starting point.",
+               30),
+            _t("Pick one area to focus on first",
+               "Don't try to fix everything at once. Choose the area with the highest impact: "
+               "sleep, nutrition, movement, or stress management.",
+               20),
+            _t("Set one measurable goal for the next 2 weeks",
+               "e.g. 'Sleep 7+ hours 5 nights/week', 'Walk 30 min daily', 'Cook 4 dinners at home'.",
+               15),
+            _t("Build the habit — stick to it for 7 days",
+               "Focus on consistency, not perfection. Track each day with a simple checkmark.",
+               30),
+            _t("Check in on progress and adjust",
+               "After 7 days, review what worked and what didn't. Adjust the goal if needed.",
+               20),
+            _t("Add a second healthy habit",
+               "Once the first habit is stable, add another. Stack habits for compound effect.",
+               30),
+        ],
+    ),
+
+    "side_project": _Template(
+        name="side_project",
+        questions=_SIDE_PROJECT_QUESTIONS + _GENERIC_QUESTIONS,
+        tasks=[
+            _t("Define the project scope and goal",
+               "Write down exactly what you want to build/create and what 'done' looks like. "
+               "Keep scope small enough to finish in 4-8 weeks.",
+               30),
+            _t("Research similar projects for inspiration",
+               "Find 3-5 existing projects in the same space. Note what they do well and what's missing.",
+               45),
+            _t("Set up your workspace and tools",
+               "Create the repo/workspace/account/channel. Install the tools you need. "
+               "Get the boilerplate out of the way.",
+               60),
+            _t("Complete the first deliverable",
+               "Build/create the first tangible piece: first episode, first feature, first product listing.",
+               90),
+            _t("Share it publicly and get feedback",
+               "Post it where your target audience hangs out. Ask for honest feedback.",
+               30),
+            _t("Iterate and build a routine",
+               "Based on feedback, improve and keep shipping regularly. "
+               "Set a cadence (weekly, bi-weekly) and stick to it.",
+               60),
+        ],
+    ),
 }
 
 
@@ -320,18 +552,37 @@ _BUILD_QUALIFIERS = re.compile(
     r"\b(app|application|website|web.?site|tool|project|product|saas|api|bot|script|software)\b",
     re.I,
 )
+_BOOK_KEYWORDS = re.compile(r"\b(book|write|novel|manuscript|author|publish|memoir|ebook)\b", re.I)
+_STARTUP_KEYWORDS = re.compile(r"\b(startup|start.?up|company|found|co-?found|venture|business)\b", re.I)
+_JOB_KEYWORDS = re.compile(r"\b(job|career|hire|employ|resume|interview|apply|position|role)\b", re.I)
+_HEALTH_KEYWORDS = re.compile(
+    r"\b(health|sleep|nutrition|stress|energy|wellness|mental.?health|well.?being|meditat)\b", re.I,
+)
+_SIDE_PROJECT_KEYWORDS = re.compile(
+    r"\b(side.?project|hobby|personal.?project|passion.?project|weekend.?project|tinker|experiment)\b", re.I,
+)
 
 
 def _detect_template(goal: Goal) -> str:
     text = f"{goal.title} {goal.description}"
     if _MONEY_KEYWORDS.search(text) and _MONEY_ONLINE_QUALIFIERS.search(text):
         return "make_money_online"
+    if _BOOK_KEYWORDS.search(text) and re.search(r"\b(write|book|novel|manuscript|author|publish|memoir|ebook)\b", text, re.I):
+        return "write_book"
+    if _STARTUP_KEYWORDS.search(text):
+        return "launch_startup"
+    if _JOB_KEYWORDS.search(text):
+        return "find_job"
     if _FIT_KEYWORDS.search(text):
         return "get_fit"
     if _BUILD_KEYWORDS.search(text) and _BUILD_QUALIFIERS.search(text):
         return "build_project"
     if _LEARN_KEYWORDS.search(text):
         return "learn_skill"
+    if _HEALTH_KEYWORDS.search(text):
+        return "improve_health"
+    if _SIDE_PROJECT_KEYWORDS.search(text):
+        return "side_project"
     return "generic"
 
 
@@ -1337,11 +1588,15 @@ def drip_next_task(
     2. Adapts the next task based on what the user completed
     3. If no tasks exist yet, creates the first one from the template
     4. If the last task was completed, generates the next logical one
+    5. P2.3: Adapts time estimates based on actual vs estimated completion time
+    6. P2.3: Detects stalls and surfaces smaller sub-task versions
+    7. P2.2: Flags tasks commonly skipped by others
 
     Returns a dict with:
         - "task": the next Task to create/focus on (as dict), or None if done
         - "adaptive_question": an optional follow-up question to ask
         - "message": context about why this task was chosen
+        - "skip_suggestion": optional hint that others skip this task
     """
     # Build profile from answers
     profile = _build_user_profile(goal.answers)
@@ -1352,9 +1607,19 @@ def drip_next_task(
     done_count = sum(1 for t in top_level if t.status in ("done", "skipped"))
     total_template_tasks = len(template.tasks)
 
-    # If there's already a todo or in_progress task, return focus on it
+    # P2.3: Detect stall — if there's a current task that hasn't been completed in >2 days
     focus = get_focus_task(tasks)
     if focus and focus.status in ("todo", "in_progress"):
+        stall_info = _detect_task_stall(focus)
+        if stall_info:
+            return {
+                "task": focus.to_dict(),
+                "is_new": False,
+                "adaptive_question": None,
+                "message": stall_info["message"],
+                "stall_detected": True,
+                "sub_task_suggestion": stall_info.get("sub_task"),
+            }
         return {
             "task": focus.to_dict(),
             "is_new": False,
@@ -1385,6 +1650,16 @@ def drip_next_task(
     tt = template.tasks[next_index]
     adapted = _adapt_template_task(tt, profile)
 
+    # P2.3: Scale time estimates based on user's pace
+    time_scale = _compute_time_scale(tasks)
+    if time_scale != 1.0:
+        adapted = _TemplateTask(
+            title=adapted.title,
+            description=adapted.description,
+            estimated_minutes=max(5, round(adapted.estimated_minutes * time_scale)),
+            subtasks=adapted.subtasks,
+        )
+
     # If the completed task gave us signals, adapt further
     message = f"Task {next_index + 1} of {total_template_tasks}."
     if completed_task:
@@ -1407,12 +1682,101 @@ def drip_next_task(
     # Check if we should ask an adaptive question
     adaptive_q = _get_adaptive_question(goal, done_count, template_name)
 
-    return {
+    # P2.2: Check if this task is commonly skipped by others
+    skip_suggestion = _check_skip_rate(template_name, tt.title)
+
+    result: Dict[str, Any] = {
         "task": new_task.to_dict(),
         "is_new": True,
         "adaptive_question": {"key": adaptive_q.key, "text": adaptive_q.text, "hint": adaptive_q.hint} if adaptive_q else None,
         "message": message,
     }
+    if skip_suggestion:
+        result["skip_suggestion"] = skip_suggestion
+
+    return result
+
+
+def _detect_task_stall(task: Task) -> Optional[Dict[str, Any]]:
+    """P2.3: Check if a task has been stalled for more than 2 days."""
+    if not task.updated_at:
+        return None
+    from datetime import timedelta
+    now = datetime.now(timezone.utc)
+    task_time = task.updated_at.replace(tzinfo=timezone.utc) if task.updated_at.tzinfo is None else task.updated_at
+    age = now - task_time
+    if age > timedelta(days=2):
+        days = age.days
+        # Suggest a smaller sub-task
+        sub_task = {
+            "title": f"Quick win: Spend 15 minutes on \"{task.title}\"",
+            "description": f"Instead of finishing the whole task, just spend 15 minutes making any progress. "
+                          f"Open the file, write one paragraph, do one small step. "
+                          f"It's been {days} days — starting is the hardest part.",
+            "estimated_minutes": 15,
+        }
+        return {
+            "message": f"It's been {days} days since you last worked on this. "
+                       f"Want to try a smaller version to get momentum?",
+            "sub_task": sub_task,
+        }
+    return None
+
+
+def _compute_time_scale(tasks: List[Task]) -> float:
+    """P2.3: Compute scaling factor based on actual vs estimated completion times.
+
+    If the user consistently finishes faster, return < 1.0.
+    If consistently slower, return > 1.0.
+    Returns 1.0 if not enough data.
+    """
+    completed = [t for t in tasks if t.status == "done" and t.created_at and t.updated_at]
+    if len(completed) < 2:
+        return 1.0
+
+    ratios = []
+    for t in completed:
+        created = t.created_at.replace(tzinfo=timezone.utc) if t.created_at.tzinfo is None else t.created_at
+        updated = t.updated_at.replace(tzinfo=timezone.utc) if t.updated_at.tzinfo is None else t.updated_at
+        actual_minutes = (updated - created).total_seconds() / 60
+        if t.estimated_minutes > 0 and actual_minutes > 0:
+            ratios.append(actual_minutes / t.estimated_minutes)
+
+    if not ratios:
+        return 1.0
+
+    avg_ratio = sum(ratios) / len(ratios)
+    # Clamp to reasonable range
+    return max(0.5, min(2.0, avg_ratio))
+
+
+def _check_skip_rate(template_name: str, task_title: str) -> Optional[str]:
+    """P2.2: Check if this task is commonly skipped in success paths."""
+    try:
+        from teb import storage as _storage
+        paths = _storage.list_success_paths(goal_type=template_name)
+    except Exception:
+        return None
+
+    if len(paths) < 2:
+        return None
+
+    skip_count = 0
+    total = len(paths)
+    for sp in paths:
+        raw = json.loads(sp.steps_json) if sp.steps_json else {}
+        if isinstance(raw, dict):
+            devs = raw.get("deviations", {})
+            if task_title in devs.get("skipped_template_tasks", []):
+                skip_count += 1
+        elif isinstance(raw, list):
+            for step in raw:
+                if step.get("title") == task_title and step.get("status") == "skipped":
+                    skip_count += 1
+
+    if total > 0 and skip_count / total >= 0.5:
+        return f"Many people skip this step ({skip_count}/{total}). Still want to include it?"
+    return None
 
 
 def _drip_adaptation_message(
@@ -1484,6 +1848,9 @@ def capture_success_path(goal: Goal, tasks: List[Task]) -> Optional[SuccessPath]
     order and any notes) and saves it as a reusable pattern for future
     users with similar goals.
 
+    P2.2: Also captures deviation patterns — which tasks were skipped,
+    reordered, or added manually compared to the template.
+
     Returns the created SuccessPath, or None if the goal isn't complete.
     """
     if goal.status != "done":
@@ -1496,21 +1863,40 @@ def capture_success_path(goal: Goal, tasks: List[Task]) -> Optional[SuccessPath]
     if not completed:
         return None
 
+    # Get template task titles for deviation analysis
+    template = _TEMPLATES.get(template_name)
+    template_titles = [tt.title for tt in template.tasks] if template else []
+
     # Build step summaries from completed tasks
     steps = []
     for t in sorted(completed, key=lambda x: x.order_index):
-        step = {
+        step: Dict[str, Any] = {
             "title": t.title,
             "description": t.description[:200],
             "estimated_minutes": t.estimated_minutes,
             "status": t.status,
         }
+        # Track if this was a template task or user-added
+        step["from_template"] = t.title in template_titles
         # Include subtask info
         children = [c for c in tasks if c.parent_id == t.id]
         if children:
             step["subtasks_completed"] = sum(1 for c in children if c.status in ("done", "skipped"))
             step["subtasks_total"] = len(children)
         steps.append(step)
+
+    # P2.2: Compute deviations
+    actual_titles = [s["title"] for s in steps]
+    skipped_template_tasks = [t for t in template_titles if t not in actual_titles
+                              and t not in [x.title for x in top_level]]
+    added_tasks = [s["title"] for s in steps if not s.get("from_template")]
+
+    deviations: Dict[str, Any] = {
+        "skipped_template_tasks": skipped_template_tasks,
+        "added_tasks": added_tasks,
+        "template_task_count": len(template_titles),
+        "actual_task_count": len(top_level),
+    }
 
     # Build outcome summary from task progression
     total_tasks = len(top_level)
@@ -1529,9 +1915,12 @@ def capture_success_path(goal: Goal, tasks: List[Task]) -> Optional[SuccessPath]
         if timeline:
             outcome_parts.append(f"Timeline: {timeline}")
 
+    # Store deviations in the steps_json alongside step data
+    path_data = {"steps": steps, "deviations": deviations}
+
     return SuccessPath(
         goal_type=template_name,
-        steps_json=json.dumps(steps),
+        steps_json=json.dumps(path_data),
         outcome_summary=". ".join(outcome_parts),
         source_goal_id=goal.id,
     )
@@ -1548,6 +1937,7 @@ def apply_success_paths(
     - Which steps were most commonly completed vs skipped
     - Average task counts and time estimates
     - Tips from patterns in successful paths
+    - P2.2: Deviation patterns — commonly skipped template tasks
     """
     if not success_paths:
         return []
@@ -1563,9 +1953,19 @@ def apply_success_paths(
     # Analyze step patterns across successful paths
     step_titles: Dict[str, int] = {}
     skip_titles: Dict[str, int] = {}
+    skipped_template_tasks: Dict[str, int] = {}
 
     for sp in relevant:
-        steps = json.loads(sp.steps_json) if sp.steps_json else []
+        raw = json.loads(sp.steps_json) if sp.steps_json else []
+        # Handle both old format (list of steps) and new format (dict with steps+deviations)
+        if isinstance(raw, dict):
+            steps = raw.get("steps", [])
+            devs = raw.get("deviations", {})
+            for t_title in devs.get("skipped_template_tasks", []):
+                skipped_template_tasks[t_title] = skipped_template_tasks.get(t_title, 0) + 1
+        else:
+            steps = raw
+
         for step in steps:
             title = step.get("title", "")
             if title:
@@ -1589,6 +1989,15 @@ def apply_success_paths(
             "type": "commonly_skipped",
             "message": "These steps are often skipped — consider if they're worth your time",
             "steps": [{"title": t, "times_skipped": c} for t, c in most_skipped],
+        })
+
+    # P2.2: Surface template tasks that are commonly skipped entirely
+    if skipped_template_tasks:
+        most_dropped = sorted(skipped_template_tasks.items(), key=lambda x: x[1], reverse=True)[:3]
+        insights.append({
+            "type": "template_deviations",
+            "message": "Many people skip these template tasks — you might want to as well",
+            "tasks": [{"title": t, "times_skipped": c, "total_paths": len(relevant)} for t, c in most_dropped],
         })
 
     # Reuse count as social proof
