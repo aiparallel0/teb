@@ -309,7 +309,7 @@ class TestDiscoveryAPI:
     def test_discover_catalog(self):
         r = client.get("/api/discover/catalog")
         assert r.status_code == 200
-        assert len(r.json()) >= 15  # 20 services in catalog
+        assert len(r.json()) >= 15  # At least 15 of the 20+ services in catalog
 
     def test_record_discovered_service(self):
         headers = _register_user("disc_rec@teb.test")

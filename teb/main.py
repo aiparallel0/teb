@@ -1577,12 +1577,17 @@ async def telegram_webhook(body: TelegramUpdate, request: Request):
             )
         return {"ok": True, "action": "goal_created", "goal_id": goal.id}
 
+    # ── Helper: resolve goal from session ─────────────────────────────────────
+    def _goal_from_session(cid: str) -> Optional[Goal]:
+        """Return the goal bound to a Telegram chat session, or None."""
+        session = storage.get_telegram_session(cid)
+        if session and session.get("goal_id"):
+            return storage.get_goal(session["goal_id"])
+        return None
+
     # ── /next ─────────────────────────────────────────────────────────────────
     if text == "/next":
-        session = storage.get_telegram_session(chat_id)
-        goal = None
-        if session and session.get("goal_id"):
-            goal = storage.get_goal(session["goal_id"])
+        goal = _goal_from_session(chat_id)
         if not goal:
             _reply("No goal is selected for this chat. Use /goal <description> to create one.")
             return {"ok": True, "message": "No selected goal"}
@@ -1604,10 +1609,7 @@ async def telegram_webhook(body: TelegramUpdate, request: Request):
 
     # ── /done ─────────────────────────────────────────────────────────────────
     if text == "/done":
-        session = storage.get_telegram_session(chat_id)
-        goal = None
-        if session and session.get("goal_id"):
-            goal = storage.get_goal(session["goal_id"])
+        goal = _goal_from_session(chat_id)
         if not goal:
             _reply("No goal is selected for this chat. Use /goal <description> to create one.")
             return {"ok": True, "message": "No selected goal"}
@@ -1635,10 +1637,7 @@ async def telegram_webhook(body: TelegramUpdate, request: Request):
 
     # ── /skip ─────────────────────────────────────────────────────────────────
     if text == "/skip":
-        session = storage.get_telegram_session(chat_id)
-        goal = None
-        if session and session.get("goal_id"):
-            goal = storage.get_goal(session["goal_id"])
+        goal = _goal_from_session(chat_id)
         if not goal:
             _reply("No goal is selected for this chat. Use /goal <description> to create one.")
             return {"ok": True, "message": "No selected goal"}

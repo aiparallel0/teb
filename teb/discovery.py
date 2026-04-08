@@ -419,12 +419,16 @@ def ai_discover_services(goal_text: str) -> List[Dict[str, Any]]:
         if not config.has_ai():
             return []
 
+        # Build category list dynamically from catalog
+        categories = sorted({s.get("category", "") for s in _DISCOVERABLE_SERVICES if s.get("category")})
+        category_list = ", ".join(categories)
+
         prompt = f"""Given this user goal: "{goal_text}"
 
 Suggest 3-5 specific online tools or services (not generic advice) that would help accomplish this goal.
 For each, provide:
 - service_name (lowercase, no spaces)
-- category (one of: no-code, automation, freelancing, e-commerce, banking, learning, hosting, design, marketing, productivity, analytics, development, social, ai)
+- category (one of: {category_list})
 - description (one sentence)
 - url (the service website)
 - capabilities (list of 3-5 things it can do)

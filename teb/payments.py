@@ -142,6 +142,11 @@ class MercuryProvider(PaymentProvider):
         except (json.JSONDecodeError, TypeError):
             recipient_data = {"name": recipient}
 
+        import hashlib
+        stable_key = hashlib.sha256(
+            f"{account_id}:{amount}:{recipient_data.get('account_number', '')}:{recipient_data.get('name', '')}".encode()
+        ).hexdigest()[:32]
+
         payload = {
             "amount": amount,
             "payee": {
@@ -150,7 +155,7 @@ class MercuryProvider(PaymentProvider):
                 "routingNumber": recipient_data.get("routing_number", ""),
             },
             "note": description,
-            "idempotencyKey": f"teb-{account_id}-{amount}-{description[:20]}",
+            "idempotencyKey": f"teb-{stable_key}",
         }
 
         try:

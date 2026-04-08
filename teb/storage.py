@@ -1428,7 +1428,7 @@ def get_messaging_config(config_id: int) -> Optional[MessagingConfig]:
 
 def list_messaging_configs(enabled_only: bool = False, user_id: Optional[int] = None) -> List[MessagingConfig]:
     query = "SELECT * FROM messaging_configs"
-    conditions: list[str] = []
+    conditions: List[str] = []
     params: list = []
     if enabled_only:
         conditions.append("enabled = 1")
