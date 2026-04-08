@@ -1,5 +1,5 @@
 import os
-from typing import Optional
+from typing import List, Optional
 
 OPENAI_API_KEY: Optional[str] = os.getenv("OPENAI_API_KEY")
 OPENAI_BASE_URL: str = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
@@ -25,6 +25,16 @@ JWT_EXPIRE_HOURS: int = int(os.getenv("TEB_JWT_EXPIRE_HOURS", "168"))  # 7 days
 
 # Credential encryption key (Fernet, base64-encoded 32 bytes)
 SECRET_KEY: Optional[str] = os.getenv("TEB_SECRET_KEY")
+
+# CORS — comma-separated origins, or "*" (default: allow all for dev)
+CORS_ORIGINS: List[str] = [
+    o.strip()
+    for o in os.getenv("TEB_CORS_ORIGINS", "*").split(",")
+    if o.strip()
+]
+
+# Logging
+LOG_LEVEL: str = os.getenv("TEB_LOG_LEVEL", "INFO")
 
 
 def get_ai_provider() -> Optional[str]:

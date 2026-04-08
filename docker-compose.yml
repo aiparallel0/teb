@@ -1,0 +1,21 @@
+services:
+  teb:
+    build: .
+    ports:
+      - "8000:8000"
+    volumes:
+      # Persist the SQLite database outside the container
+      - teb-data:/app/data
+    environment:
+      - DATABASE_URL=sqlite:///data/teb.db
+      - TEB_JWT_SECRET=${TEB_JWT_SECRET:?Set TEB_JWT_SECRET in .env}
+      # Uncomment and set your AI provider keys:
+      # - OPENAI_API_KEY=${OPENAI_API_KEY}
+      # - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      # - TEB_CORS_ORIGINS=https://yourdomain.com
+    env_file:
+      - .env
+    restart: unless-stopped
+
+volumes:
+  teb-data:

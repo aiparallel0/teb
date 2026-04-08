@@ -1,26 +1,76 @@
 from __future__ import annotations
 
+import collections
 import json
 import logging
+import logging.config
 import os
+import time
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
 from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from teb import agents, auth, browser, decomposer, executor, integrations, messaging, storage
+from teb import agents, auth, browser, config, decomposer, executor, integrations, messaging, storage
 from teb.models import (
     ApiCredential, BrowserAction, CheckIn, ExecutionLog,
     Goal, MessagingConfig, NudgeEvent, OutcomeMetric,
     SpendingBudget, SpendingRequest, Task,
 )
 
+# ─── Logging ──────────────────────────────────────────────────────────────────
+logging.config.dictConfig({
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": {
+        "standard": {
+            "format": "%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        },
+    },
+    "handlers": {
+        "console": {
+            "class": "logging.StreamHandler",
+            "formatter": "standard",
+        },
+    },
+    "root": {
+        "level": config.LOG_LEVEL,
+        "handlers": ["console"],
+    },
+})
 logger = logging.getLogger(__name__)
+
+
+# ─── Rate limiting (in-memory, per IP) ────────────────────────────────────────
+
+_RATE_WINDOW = 60   # seconds
+_RATE_LIMIT = 20    # max auth requests per window per IP
+# bucket: IP -> deque of timestamps
+_rate_buckets: dict[str, collections.deque] = {}
+
+
+def _check_rate_limit(request: Request) -> None:
+    """Raise 429 if caller exceeds the per-IP rate limit."""
+    ip = request.client.host if request.client else "unknown"
+    now = time.monotonic()
+    bucket = _rate_buckets.setdefault(ip, collections.deque())
+    # Purge timestamps outside the window
+    while bucket and bucket[0] <= now - _RATE_WINDOW:
+        bucket.popleft()
+    if len(bucket) >= _RATE_LIMIT:
+        raise HTTPException(status_code=429, detail="Too many requests")
+    bucket.append(now)
+
+
+def reset_rate_limits() -> None:
+    """Clear all rate-limit buckets. Called on startup and available for tests."""
+    _rate_buckets.clear()
 
 
 # ─── Startup / lifespan ───────────────────────────────────────────────────────
@@ -31,10 +81,21 @@ async def lifespan(app: FastAPI):
     integrations.seed_integrations()
     # Reset stale daily spending counters from previous day(s)
     storage.reset_all_daily_spending()
+    # Clear rate-limit buckets on each fresh start (also ensures clean test runs)
+    _rate_buckets.clear()
     yield
 
 
 app = FastAPI(title="teb — Task Execution Bridge", lifespan=lifespan)
+
+# ─── CORS ─────────────────────────────────────────────────────────────────────
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=config.CORS_ORIGINS,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # Static files
 _STATIC_DIR = Path(__file__).parent / "static"
@@ -227,11 +288,31 @@ def _get_task_for_user(task_id: int, user_id: int) -> Task:
     return task
 
 
+# ─── Health check ─────────────────────────────────────────────────────────────
+
+@app.get("/health")
+async def health_check():
+    """Health check — returns DB status for monitoring."""
+    try:
+        # Quick DB connectivity check
+        storage.list_goals(user_id=-1)  # no-op query, verifies DB is alive
+        db_ok = True
+    except Exception:
+        db_ok = False
+    status = "healthy" if db_ok else "degraded"
+    code = 200 if db_ok else 503
+    return JSONResponse(
+        status_code=code,
+        content={"status": status, "database": "ok" if db_ok else "error"},
+    )
+
+
 # ─── Auth ─────────────────────────────────────────────────────────────────────
 
 @app.post("/api/auth/register", status_code=201)
-async def register(body: AuthRegister):
+async def register(body: AuthRegister, request: Request):
     """Register a new user and return a JWT token."""
+    _check_rate_limit(request)
     try:
         result = auth.register_user(body.email, body.password)
     except ValueError as exc:
@@ -240,8 +321,9 @@ async def register(body: AuthRegister):
 
 
 @app.post("/api/auth/login")
-async def login(body: AuthLogin):
+async def login(body: AuthLogin, request: Request):
     """Log in and return a JWT token."""
+    _check_rate_limit(request)
     try:
         result = auth.login_user(body.email, body.password)
     except ValueError as exc:
