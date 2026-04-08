@@ -14,9 +14,12 @@ from teb.models import (
     ExecutionLog,
     Goal,
     Integration,
+    MessagingConfig,
     NudgeEvent,
     OutcomeMetric,
     ProactiveSuggestion,
+    SpendingBudget,
+    SpendingRequest,
     SuccessPath,
     Task,
     UserProfile,
@@ -219,6 +222,48 @@ def init_db() -> None:
                 capabilities     TEXT    NOT NULL DEFAULT '[]',
                 common_endpoints TEXT    NOT NULL DEFAULT '[]',
                 created_at       TEXT    NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS spending_budgets (
+                id               INTEGER PRIMARY KEY AUTOINCREMENT,
+                goal_id          INTEGER NOT NULL REFERENCES goals(id) ON DELETE CASCADE,
+                daily_limit      REAL    NOT NULL DEFAULT 0,
+                total_limit      REAL    NOT NULL DEFAULT 0,
+                category         TEXT    NOT NULL DEFAULT 'general',
+                require_approval INTEGER NOT NULL DEFAULT 1,
+                spent_today      REAL    NOT NULL DEFAULT 0,
+                spent_total      REAL    NOT NULL DEFAULT 0,
+                created_at       TEXT    NOT NULL,
+                updated_at       TEXT    NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS spending_requests (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                task_id         INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+                budget_id       INTEGER NOT NULL REFERENCES spending_budgets(id) ON DELETE CASCADE,
+                amount          REAL    NOT NULL,
+                currency        TEXT    NOT NULL DEFAULT 'USD',
+                description     TEXT    NOT NULL DEFAULT '',
+                service         TEXT    NOT NULL DEFAULT '',
+                status          TEXT    NOT NULL DEFAULT 'pending',
+                denial_reason   TEXT    NOT NULL DEFAULT '',
+                created_at      TEXT    NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_spending_requests_task
+                ON spending_requests(task_id, created_at DESC);
+
+            CREATE TABLE IF NOT EXISTS messaging_configs (
+                id               INTEGER PRIMARY KEY AUTOINCREMENT,
+                channel          TEXT    NOT NULL,
+                config_json      TEXT    NOT NULL DEFAULT '{}',
+                enabled          INTEGER NOT NULL DEFAULT 1,
+                notify_nudges    INTEGER NOT NULL DEFAULT 1,
+                notify_tasks     INTEGER NOT NULL DEFAULT 1,
+                notify_spending  INTEGER NOT NULL DEFAULT 1,
+                notify_checkins  INTEGER NOT NULL DEFAULT 0,
+                created_at       TEXT    NOT NULL,
+                updated_at       TEXT    NOT NULL
             );
         """)
 
@@ -945,3 +990,246 @@ def list_integrations(category: Optional[str] = None) -> List[Integration]:
 def delete_integration(integration_id: int) -> None:
     with _conn() as con:
         con.execute("DELETE FROM integrations WHERE id = ?", (integration_id,))
+
+
+# ─── Spending Budgets ────────────────────────────────────────────────────────
+
+def _row_to_spending_budget(row: sqlite3.Row) -> SpendingBudget:
+    return SpendingBudget(
+        id=row["id"],
+        goal_id=row["goal_id"],
+        daily_limit=row["daily_limit"],
+        total_limit=row["total_limit"],
+        category=row["category"],
+        require_approval=bool(row["require_approval"]),
+        spent_today=row["spent_today"],
+        spent_total=row["spent_total"],
+        created_at=datetime.fromisoformat(row["created_at"]),
+        updated_at=datetime.fromisoformat(row["updated_at"]),
+    )
+
+
+def create_spending_budget(budget: SpendingBudget) -> SpendingBudget:
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        cur = con.execute(
+            """INSERT INTO spending_budgets
+               (goal_id, daily_limit, total_limit, category, require_approval,
+                spent_today, spent_total, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (budget.goal_id, budget.daily_limit, budget.total_limit,
+             budget.category, int(budget.require_approval),
+             budget.spent_today, budget.spent_total, now, now),
+        )
+        budget.id = cur.lastrowid
+        budget.created_at = datetime.fromisoformat(now)
+        budget.updated_at = datetime.fromisoformat(now)
+    return budget
+
+
+def get_spending_budget(budget_id: int) -> Optional[SpendingBudget]:
+    with _conn() as con:
+        row = con.execute(
+            "SELECT * FROM spending_budgets WHERE id = ?", (budget_id,),
+        ).fetchone()
+    return _row_to_spending_budget(row) if row else None
+
+
+def list_spending_budgets(goal_id: int) -> List[SpendingBudget]:
+    with _conn() as con:
+        rows = con.execute(
+            "SELECT * FROM spending_budgets WHERE goal_id = ? ORDER BY category ASC",
+            (goal_id,),
+        ).fetchall()
+    return [_row_to_spending_budget(r) for r in rows]
+
+
+def find_spending_budget(goal_id: int, category: str) -> Optional[SpendingBudget]:
+    """Find a budget for a specific goal and category, falling back to 'general'."""
+    with _conn() as con:
+        row = con.execute(
+            "SELECT * FROM spending_budgets WHERE goal_id = ? AND category = ?",
+            (goal_id, category),
+        ).fetchone()
+        if row:
+            return _row_to_spending_budget(row)
+        # Fall back to general budget
+        row = con.execute(
+            "SELECT * FROM spending_budgets WHERE goal_id = ? AND category = 'general'",
+            (goal_id,),
+        ).fetchone()
+    return _row_to_spending_budget(row) if row else None
+
+
+def update_spending_budget(budget: SpendingBudget) -> SpendingBudget:
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        con.execute(
+            """UPDATE spending_budgets
+               SET daily_limit=?, total_limit=?, category=?, require_approval=?,
+                   spent_today=?, spent_total=?, updated_at=?
+               WHERE id=?""",
+            (budget.daily_limit, budget.total_limit, budget.category,
+             int(budget.require_approval), budget.spent_today, budget.spent_total,
+             now, budget.id),
+        )
+    budget.updated_at = datetime.fromisoformat(now)
+    return budget
+
+
+def reset_daily_spending(goal_id: int) -> None:
+    """Reset spent_today to 0 for all budgets of a goal (call daily)."""
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        con.execute(
+            "UPDATE spending_budgets SET spent_today = 0, updated_at = ? WHERE goal_id = ?",
+            (now, goal_id),
+        )
+
+
+# ─── Spending Requests ───────────────────────────────────────────────────────
+
+def _row_to_spending_request(row: sqlite3.Row) -> SpendingRequest:
+    return SpendingRequest(
+        id=row["id"],
+        task_id=row["task_id"],
+        budget_id=row["budget_id"],
+        amount=row["amount"],
+        currency=row["currency"],
+        description=row["description"],
+        service=row["service"],
+        status=row["status"],
+        denial_reason=row["denial_reason"],
+        created_at=datetime.fromisoformat(row["created_at"]),
+    )
+
+
+def create_spending_request(req: SpendingRequest) -> SpendingRequest:
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        cur = con.execute(
+            """INSERT INTO spending_requests
+               (task_id, budget_id, amount, currency, description, service, status, denial_reason, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (req.task_id, req.budget_id, req.amount, req.currency,
+             req.description, req.service, req.status, req.denial_reason, now),
+        )
+        req.id = cur.lastrowid
+        req.created_at = datetime.fromisoformat(now)
+    return req
+
+
+def get_spending_request(request_id: int) -> Optional[SpendingRequest]:
+    with _conn() as con:
+        row = con.execute(
+            "SELECT * FROM spending_requests WHERE id = ?", (request_id,),
+        ).fetchone()
+    return _row_to_spending_request(row) if row else None
+
+
+def list_spending_requests(
+    task_id: Optional[int] = None,
+    budget_id: Optional[int] = None,
+    status: Optional[str] = None,
+) -> List[SpendingRequest]:
+    query = "SELECT * FROM spending_requests WHERE 1=1"
+    params: list = []
+    if task_id is not None:
+        query += " AND task_id = ?"
+        params.append(task_id)
+    if budget_id is not None:
+        query += " AND budget_id = ?"
+        params.append(budget_id)
+    if status is not None:
+        query += " AND status = ?"
+        params.append(status)
+    query += " ORDER BY created_at DESC"
+    with _conn() as con:
+        rows = con.execute(query, params).fetchall()
+    return [_row_to_spending_request(r) for r in rows]
+
+
+def update_spending_request(req: SpendingRequest) -> SpendingRequest:
+    with _conn() as con:
+        con.execute(
+            """UPDATE spending_requests
+               SET status = ?, denial_reason = ?
+               WHERE id = ?""",
+            (req.status, req.denial_reason, req.id),
+        )
+    return req
+
+
+# ─── Messaging Configs ───────────────────────────────────────────────────────
+
+def _row_to_messaging_config(row: sqlite3.Row) -> MessagingConfig:
+    return MessagingConfig(
+        id=row["id"],
+        channel=row["channel"],
+        config_json=row["config_json"],
+        enabled=bool(row["enabled"]),
+        notify_nudges=bool(row["notify_nudges"]),
+        notify_tasks=bool(row["notify_tasks"]),
+        notify_spending=bool(row["notify_spending"]),
+        notify_checkins=bool(row["notify_checkins"]),
+        created_at=datetime.fromisoformat(row["created_at"]),
+        updated_at=datetime.fromisoformat(row["updated_at"]),
+    )
+
+
+def create_messaging_config(cfg: MessagingConfig) -> MessagingConfig:
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        cur = con.execute(
+            """INSERT INTO messaging_configs
+               (channel, config_json, enabled, notify_nudges, notify_tasks,
+                notify_spending, notify_checkins, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (cfg.channel, cfg.config_json, int(cfg.enabled),
+             int(cfg.notify_nudges), int(cfg.notify_tasks),
+             int(cfg.notify_spending), int(cfg.notify_checkins), now, now),
+        )
+        cfg.id = cur.lastrowid
+        cfg.created_at = datetime.fromisoformat(now)
+        cfg.updated_at = datetime.fromisoformat(now)
+    return cfg
+
+
+def get_messaging_config(config_id: int) -> Optional[MessagingConfig]:
+    with _conn() as con:
+        row = con.execute(
+            "SELECT * FROM messaging_configs WHERE id = ?", (config_id,),
+        ).fetchone()
+    return _row_to_messaging_config(row) if row else None
+
+
+def list_messaging_configs(enabled_only: bool = False) -> List[MessagingConfig]:
+    query = "SELECT * FROM messaging_configs"
+    params: list = []
+    if enabled_only:
+        query += " WHERE enabled = 1"
+    query += " ORDER BY created_at ASC"
+    with _conn() as con:
+        rows = con.execute(query, params).fetchall()
+    return [_row_to_messaging_config(r) for r in rows]
+
+
+def update_messaging_config(cfg: MessagingConfig) -> MessagingConfig:
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        con.execute(
+            """UPDATE messaging_configs
+               SET channel=?, config_json=?, enabled=?, notify_nudges=?,
+                   notify_tasks=?, notify_spending=?, notify_checkins=?, updated_at=?
+               WHERE id=?""",
+            (cfg.channel, cfg.config_json, int(cfg.enabled),
+             int(cfg.notify_nudges), int(cfg.notify_tasks),
+             int(cfg.notify_spending), int(cfg.notify_checkins), now, cfg.id),
+        )
+    cfg.updated_at = datetime.fromisoformat(now)
+    return cfg
+
+
+def delete_messaging_config(config_id: int) -> None:
+    with _conn() as con:
+        con.execute("DELETE FROM messaging_configs WHERE id = ?", (config_id,))
