@@ -469,6 +469,7 @@ class MessagingConfig:
     notify_tasks: bool = True          # send task completion notifications
     notify_spending: bool = True       # send spending approval requests
     notify_checkins: bool = False      # send check-in reminders
+    user_id: Optional[int] = None      # FK to users; scopes config to owner
     id: Optional[int] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
@@ -484,6 +485,7 @@ class MessagingConfig:
             "notify_tasks": self.notify_tasks,
             "notify_spending": self.notify_spending,
             "notify_checkins": self.notify_checkins,
+            "user_id": self.user_id,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
         }

@@ -1766,9 +1766,16 @@ def _check_skip_rate(template_name: str, task_title: str) -> Optional[str]:
     for sp in paths:
         raw = json.loads(sp.steps_json) if sp.steps_json else {}
         if isinstance(raw, dict):
+            # Check deviations.skipped_template_tasks
             devs = raw.get("deviations", {})
             if task_title in devs.get("skipped_template_tasks", []):
                 skip_count += 1
+            # Also check steps list in the new dict format
+            elif "steps" in raw:
+                for step in raw["steps"]:
+                    if step.get("title") == task_title and step.get("status") == "skipped":
+                        skip_count += 1
+                        break
         elif isinstance(raw, list):
             for step in raw:
                 if step.get("title") == task_title and step.get("status") == "skipped":

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import os
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -865,12 +867,7 @@ async def act_on_suggestion(suggestion_id: int, body: SuggestionAction, request:
     return ps.to_dict()
 
 
-# ─── Success Paths (Knowledge Base) ─────────────────────────────────────────
-
-@app.get("/api/knowledge/paths")
-async def list_success_paths(goal_type: Optional[str] = Query(default=None)):
-    paths = storage.list_success_paths(goal_type=goal_type)
-    return [p.to_dict() for p in paths]
+# ─── Success Paths (Knowledge Base) — see /api/knowledge/* endpoints below ──
 
 
 # ─── Multi-Agent Delegation ─────────────────────────────────────────────────
@@ -1287,10 +1284,16 @@ async def create_spending_request(body: SpendingRequestCreate, request: Request)
 @app.post("/api/spending/{request_id}/action")
 async def action_spending_request(request_id: int, body: SpendingAction, request: Request):
     """Approve or deny a pending spending request."""
-    _require_user(request)
+    uid = _require_user(request)
     req = storage.get_spending_request(request_id)
     if not req:
         raise HTTPException(status_code=404, detail="Spending request not found")
+
+    # Verify ownership: the requesting user must own the task's goal
+    task = storage.get_task(req.task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    _get_task_for_user(task.id, uid)
 
     if req.status != "pending":
         raise HTTPException(status_code=409, detail=f"Request is already {req.status}")
@@ -1360,7 +1363,7 @@ def _guess_spending_category(service: str) -> str:
 async def create_messaging_config(body: MessagingConfigCreate, request: Request):
     """Configure a messaging channel (Telegram or webhook)."""
     import json as _json
-    _require_user(request)
+    uid = _require_user(request)
 
     valid_channels = {"telegram", "webhook"}
     if body.channel not in valid_channels:
@@ -1384,6 +1387,7 @@ async def create_messaging_config(body: MessagingConfigCreate, request: Request)
         notify_tasks=body.notify_tasks,
         notify_spending=body.notify_spending,
         notify_checkins=body.notify_checkins,
+        user_id=uid,
     )
     cfg = storage.create_messaging_config(cfg)
     return cfg.to_dict()
@@ -1391,9 +1395,9 @@ async def create_messaging_config(body: MessagingConfigCreate, request: Request)
 
 @app.get("/api/messaging/configs")
 async def list_messaging_configs(request: Request):
-    """List all messaging configurations."""
-    _require_user(request)
-    configs = storage.list_messaging_configs()
+    """List messaging configurations for the current user."""
+    uid = _require_user(request)
+    configs = storage.list_messaging_configs(user_id=uid)
     return [c.to_dict() for c in configs]
 
 
@@ -1401,11 +1405,13 @@ async def list_messaging_configs(request: Request):
 async def update_messaging_config_endpoint(config_id: int, body: MessagingConfigUpdate, request: Request):
     """Update a messaging configuration."""
     import json as _json
-    _require_user(request)
+    uid = _require_user(request)
 
     cfg = storage.get_messaging_config(config_id)
     if not cfg:
         raise HTTPException(status_code=404, detail="Messaging config not found")
+    if cfg.user_id is not None and cfg.user_id != uid:
+        raise HTTPException(status_code=403, detail="Not authorized")
 
     if body.config is not None:
         cfg.config_json = _json.dumps(body.config)
@@ -1427,10 +1433,12 @@ async def update_messaging_config_endpoint(config_id: int, body: MessagingConfig
 @app.delete("/api/messaging/config/{config_id}", status_code=200)
 async def delete_messaging_config_endpoint(config_id: int, request: Request):
     """Delete a messaging configuration."""
-    _require_user(request)
+    uid = _require_user(request)
     cfg = storage.get_messaging_config(config_id)
     if not cfg:
         raise HTTPException(status_code=404, detail="Messaging config not found")
+    if cfg.user_id is not None and cfg.user_id != uid:
+        raise HTTPException(status_code=403, detail="Not authorized")
     storage.delete_messaging_config(config_id)
     return {"deleted": config_id}
 
@@ -1438,7 +1446,10 @@ async def delete_messaging_config_endpoint(config_id: int, request: Request):
 @app.post("/api/messaging/test/{config_id}")
 async def test_messaging(config_id: int, request: Request):
     """Send a test message to a specific messaging channel."""
-    _require_user(request)
+    uid = _require_user(request)
+    cfg = storage.get_messaging_config(config_id)
+    if cfg and cfg.user_id is not None and cfg.user_id != uid:
+        raise HTTPException(status_code=403, detail="Not authorized")
     result = messaging.send_test_message(config_id)
     if not result.get("success"):
         raise HTTPException(status_code=400, detail=result.get("error", "Test message failed"))
@@ -1446,14 +1457,23 @@ async def test_messaging(config_id: int, request: Request):
 
 
 @app.post("/api/messaging/telegram/webhook")
-async def telegram_webhook(body: TelegramUpdate):
+async def telegram_webhook(body: TelegramUpdate, request: Request):
     """
     Inbound Telegram webhook endpoint.
 
     Handles /approve, /deny, /goal, /next, /done, /skip commands and maintains
     per-chat conversation state for the full drip question flow.
     Sends a reply back to the user via the Bot API after each command.
+
+    Validates the X-Telegram-Bot-Api-Secret-Token header when
+    TEB_TELEGRAM_SECRET_TOKEN is configured.
     """
+    # ── Telegram secret token verification ────────────────────────────────
+    expected_secret = os.getenv("TEB_TELEGRAM_SECRET_TOKEN", "")
+    if expected_secret:
+        incoming_secret = request.headers.get("x-telegram-bot-api-secret-token", "")
+        if incoming_secret != expected_secret:
+            raise HTTPException(status_code=403, detail="Invalid Telegram secret token")
     import re as _re
     import json as _json
 
@@ -1557,17 +1577,20 @@ async def telegram_webhook(body: TelegramUpdate):
             )
         return {"ok": True, "action": "goal_created", "goal_id": goal.id}
 
+    # ── Helper: resolve goal from session ─────────────────────────────────────
+    def _goal_from_session(cid: str) -> Optional[Goal]:
+        """Return the goal bound to a Telegram chat session, or None."""
+        session = storage.get_telegram_session(cid)
+        if session and session.get("goal_id"):
+            return storage.get_goal(session["goal_id"])
+        return None
+
     # ── /next ─────────────────────────────────────────────────────────────────
     if text == "/next":
-        session = storage.get_telegram_session(chat_id)
-        if session and session.get("goal_id"):
-            goal = storage.get_goal(session["goal_id"])
-        else:
-            goals = storage.list_goals()
-            goal = goals[0] if goals else None
+        goal = _goal_from_session(chat_id)
         if not goal:
-            _reply("No goals yet. Use /goal <description> to create one.")
-            return {"ok": True, "message": "No goals"}
+            _reply("No goal is selected for this chat. Use /goal <description> to create one.")
+            return {"ok": True, "message": "No selected goal"}
         tasks = storage.list_tasks(goal.id)  # type: ignore[arg-type]
         drip = decomposer.drip_next_task(goal, tasks)
         if drip and drip.get("task"):
@@ -1586,15 +1609,10 @@ async def telegram_webhook(body: TelegramUpdate):
 
     # ── /done ─────────────────────────────────────────────────────────────────
     if text == "/done":
-        session = storage.get_telegram_session(chat_id)
-        if session and session.get("goal_id"):
-            goal = storage.get_goal(session["goal_id"])
-        else:
-            goals = storage.list_goals()
-            goal = goals[0] if goals else None
+        goal = _goal_from_session(chat_id)
         if not goal:
-            _reply("No goals yet.")
-            return {"ok": True, "message": "No goals"}
+            _reply("No goal is selected for this chat. Use /goal <description> to create one.")
+            return {"ok": True, "message": "No selected goal"}
         tasks = storage.list_tasks(goal.id)  # type: ignore[arg-type]
         focus = decomposer.get_focus_task(tasks)
         if focus:
@@ -1619,15 +1637,10 @@ async def telegram_webhook(body: TelegramUpdate):
 
     # ── /skip ─────────────────────────────────────────────────────────────────
     if text == "/skip":
-        session = storage.get_telegram_session(chat_id)
-        if session and session.get("goal_id"):
-            goal = storage.get_goal(session["goal_id"])
-        else:
-            goals = storage.list_goals()
-            goal = goals[0] if goals else None
+        goal = _goal_from_session(chat_id)
         if not goal:
-            _reply("No goals yet.")
-            return {"ok": True, "message": "No goals"}
+            _reply("No goal is selected for this chat. Use /goal <description> to create one.")
+            return {"ok": True, "message": "No selected goal"}
         tasks = storage.list_tasks(goal.id)  # type: ignore[arg-type]
         focus = decomposer.get_focus_task(tasks)
         if focus:
@@ -1672,3 +1685,344 @@ async def telegram_webhook(body: TelegramUpdate):
         "/deny <id> [reason] — deny a spending request"
     )
     return {"ok": True}
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Payment Integration
+# ═══════════════════════════════════════════════════════════════════════════════
+
+from teb import payments as _payments  # noqa: E402
+
+
+class PaymentAccountCreate(BaseModel):
+    provider: str
+    account_id: str = ""
+    config: dict = {}
+
+
+class PaymentExecute(BaseModel):
+    provider: str
+    amount: float
+    currency: str = "USD"
+    recipient: str = ""
+    description: str = ""
+    spending_request_id: Optional[int] = None
+
+
+@app.get("/api/payments/providers")
+async def list_payment_providers(request: Request):
+    """List available payment providers and their configuration status."""
+    _require_user(request)
+    return _payments.list_providers()
+
+
+@app.post("/api/payments/accounts", status_code=201)
+async def create_payment_account(body: PaymentAccountCreate, request: Request):
+    """Register a payment account (Mercury, Stripe) for the current user."""
+    import json as _json
+    uid = _require_user(request)
+    valid_providers = {"mercury", "stripe"}
+    if body.provider not in valid_providers:
+        raise HTTPException(status_code=422, detail=f"provider must be one of {valid_providers}")
+    account = storage.create_payment_account(
+        user_id=uid,
+        provider=body.provider,
+        account_id=body.account_id,
+        config_json=_json.dumps(body.config),
+    )
+    return account
+
+
+@app.get("/api/payments/accounts")
+async def list_payment_accounts(request: Request):
+    """List payment accounts for the current user."""
+    uid = _require_user(request)
+    return storage.list_payment_accounts(uid)
+
+
+@app.get("/api/payments/balance/{provider}")
+async def get_payment_balance(provider: str, request: Request):
+    """Get account balance for a payment provider."""
+    uid = _require_user(request)
+    result = _payments.get_account_balance(uid, provider)
+    if result.get("error"):
+        raise HTTPException(status_code=400, detail=result["error"])
+    return result
+
+
+@app.post("/api/payments/execute")
+async def execute_payment(body: PaymentExecute, request: Request):
+    """Execute a real payment through a configured provider.
+
+    The user must have a registered and enabled payment account for the
+    specified provider. If a spending_request_id is given, the payment
+    is linked to that approval-gated spending request.
+    """
+    uid = _require_user(request)
+    result = _payments.execute_payment(
+        user_id=uid,
+        provider_name=body.provider,
+        amount=body.amount,
+        currency=body.currency,
+        recipient=body.recipient,
+        description=body.description,
+        spending_request_id=body.spending_request_id,
+    )
+    if result.get("status") == "failed":
+        raise HTTPException(status_code=400, detail=result.get("error", "Payment failed"))
+    return result
+
+
+@app.get("/api/payments/transactions/{account_id}")
+async def list_payment_transactions(account_id: int, request: Request):
+    """List transactions for a payment account."""
+    uid = _require_user(request)
+    account = storage.get_payment_account(account_id)
+    if not account or account["user_id"] != uid:
+        raise HTTPException(status_code=404, detail="Payment account not found")
+    return storage.list_payment_transactions(account_id)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Tool / Service Discovery
+# ═══════════════════════════════════════════════════════════════════════════════
+
+from teb import discovery as _discovery  # noqa: E402
+
+
+@app.get("/api/discover/services")
+async def discover_services(request: Request, q: Optional[str] = Query(default=None)):
+    """Discover tools and services relevant to a goal or query.
+
+    Pass ?q=<goal text> to discover services for a specific goal,
+    or omit to discover based on the user's existing goals.
+    """
+    uid = _get_user_id(request)
+    if q:
+        return _discovery.discover_for_goal(q)
+    if uid:
+        return _discovery.discover_for_user(uid)
+    return []
+
+
+@app.get("/api/discover/services/ai")
+async def ai_discover_services(request: Request, q: str = Query(...)):
+    """Use AI to discover new tools/services for a goal (requires AI key)."""
+    _require_user(request)
+    return _discovery.ai_discover_services(q)
+
+
+@app.get("/api/discover/catalog")
+async def list_discovery_catalog():
+    """List the full built-in discovery catalog (no auth required)."""
+    return [
+        {
+            "service_name": s["service_name"],
+            "category": s.get("category", ""),
+            "description": s.get("description", ""),
+            "url": s.get("url", ""),
+            "skill_level": s.get("skill_level", ""),
+        }
+        for s in _discovery._DISCOVERABLE_SERVICES
+    ]
+
+
+@app.post("/api/discover/record", status_code=201)
+async def record_discovered_service(request: Request):
+    """Record a newly discovered service for future recommendations."""
+    _require_user(request)
+    body = await request.json()
+    return _discovery.record_discovery(
+        service_name=body.get("service_name", ""),
+        category=body.get("category", ""),
+        description=body.get("description", ""),
+        url=body.get("url", ""),
+        capabilities=body.get("capabilities", []),
+        discovered_by=body.get("discovered_by", "user"),
+        relevance_score=body.get("relevance_score", 0.5),
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# User Behavior Inference & Abandonment Detection
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+@app.get("/api/users/me/behaviors")
+async def list_user_behaviors(request: Request, behavior_type: Optional[str] = Query(default=None)):
+    """List behavior patterns detected for the current user."""
+    uid = _require_user(request)
+    return storage.list_user_behaviors(uid, behavior_type)
+
+
+@app.get("/api/users/me/abandonment")
+async def detect_abandonment(request: Request):
+    """Detect stalled goals and suggest rerouting for the current user.
+
+    Checks for:
+    - Goals with no activity in 3+ days
+    - Tasks stuck in 'in_progress' for 2+ days
+    - High skip rates indicating discomfort
+    """
+    uid = _require_user(request)
+    goals = storage.list_goals(user_id=uid)
+    stalled: list[dict] = []
+    now = datetime.now(timezone.utc)
+
+    for goal in goals:
+        if goal.status in ("done", "drafting"):
+            continue
+
+        tasks = storage.list_tasks(goal.id)
+        done_count = sum(1 for t in tasks if t.status == "done")
+        skip_count = sum(1 for t in tasks if t.status == "skipped")
+        in_progress = [t for t in tasks if t.status == "in_progress"]
+        total = len(tasks)
+
+        days_since_update = 0
+        if goal.updated_at:
+            days_since_update = (now - goal.updated_at).days
+
+        issues: list[str] = []
+        suggestions: list[str] = []
+
+        # Stale goal (no update in 3+ days)
+        if days_since_update >= 3:
+            issues.append(f"No activity for {days_since_update} days")
+            suggestions.append("Consider breaking the next task into smaller steps")
+            # Record behavior
+            storage.record_user_behavior(uid, "stalled", f"goal_{goal.id}", f"{days_since_update}_days")
+
+        # High skip rate
+        if total > 2 and skip_count / total > 0.4:
+            issues.append(f"High skip rate ({skip_count}/{total} tasks skipped)")
+            suggestions.append("These tasks may not match your skills — try discovering alternative approaches")
+            storage.record_user_behavior(uid, "high_skip_rate", f"goal_{goal.id}",
+                                        f"{skip_count}/{total}")
+
+        # Stuck tasks
+        for t in in_progress:
+            if t.created_at:
+                task_days = (now - t.created_at).days
+                if task_days >= 2:
+                    issues.append(f"Task '{t.title}' stuck for {task_days} days")
+                    suggestions.append(f"Try a 15-min quick win: break '{t.title}' into a tiny first step")
+                    storage.record_user_behavior(uid, "avoids", t.title.lower().split()[0] if t.title else "unknown")
+
+        if issues:
+            stalled.append({
+                "goal_id": goal.id,
+                "goal_title": goal.title,
+                "progress": f"{done_count}/{total} done",
+                "days_since_update": days_since_update,
+                "issues": issues,
+                "suggestions": suggestions,
+            })
+
+    return {"stalled_goals": stalled, "total_stalled": len(stalled)}
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Persistent Agent Memory
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+@app.get("/api/agents/memory/{agent_type}")
+async def get_agent_memory(agent_type: str, request: Request,
+                           goal_type: Optional[str] = Query(default=None)):
+    """Get persistent memories for an agent."""
+    _require_user(request)
+    return storage.list_agent_memories(agent_type, goal_type or "")
+
+
+@app.post("/api/agents/memory", status_code=201)
+async def store_agent_memory(request: Request):
+    """Store a memory for an agent (what worked, what didn't)."""
+    _require_user(request)
+    body = await request.json()
+    return storage.create_agent_memory(
+        agent_type=body.get("agent_type", "coordinator"),
+        goal_type=body.get("goal_type", ""),
+        memory_key=body.get("memory_key", ""),
+        memory_value=body.get("memory_value", ""),
+        confidence=body.get("confidence", 1.0),
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Success Path Knowledge Graph (MVP)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+@app.get("/api/knowledge/paths")
+async def list_knowledge_paths(request: Request,
+                               goal_type: Optional[str] = Query(default=None)):
+    """List success paths as a knowledge graph — encoding experience of multiple users.
+
+    Returns proven paths ranked by reuse count, along with common deviations.
+    """
+    _require_user(request)
+    try:
+        paths = storage.list_success_paths(goal_type=goal_type) if goal_type else storage.list_success_paths()
+    except Exception:
+        paths = []
+
+    result = []
+    for sp in paths:
+        steps = json.loads(sp.steps_json) if sp.steps_json else {}
+        deviations = {}
+        if isinstance(steps, dict):
+            deviations = steps.get("deviations", {})
+            steps_list = steps.get("steps", [])
+        elif isinstance(steps, list):
+            steps_list = steps
+        else:
+            steps_list = []
+
+        result.append({
+            "id": sp.id,
+            "goal_type": sp.goal_type,
+            "outcome_summary": sp.outcome_summary,
+            "times_reused": sp.times_reused,
+            "steps_count": len(steps_list),
+            "steps": steps_list[:10],  # First 10 steps as preview
+            "deviations": deviations,
+            "source_goal_id": sp.source_goal_id,
+        })
+
+    # Sort by reuse count
+    result.sort(key=lambda x: x["times_reused"], reverse=True)
+    return {"paths": result, "total": len(result)}
+
+
+@app.get("/api/knowledge/recommend/{goal_type}")
+async def recommend_path(goal_type: str, request: Request):
+    """Recommend the best proven path for a goal type.
+
+    Returns the most-reused success path for this goal type, effectively
+    encoding the experience of many users into a recommended plan.
+    """
+    _require_user(request)
+    try:
+        paths = storage.list_success_paths(goal_type=goal_type)
+    except Exception:
+        paths = []
+
+    if not paths:
+        return {"recommendation": None, "message": f"No proven paths yet for '{goal_type}'"}
+
+    # Pick the most reused
+    best = max(paths, key=lambda p: p.times_reused)
+    steps = json.loads(best.steps_json) if best.steps_json else {}
+    steps_list = steps.get("steps", steps) if isinstance(steps, dict) else steps
+
+    return {
+        "recommendation": {
+            "path_id": best.id,
+            "goal_type": best.goal_type,
+            "outcome_summary": best.outcome_summary,
+            "times_reused": best.times_reused,
+            "steps": steps_list,
+        },
+        "total_paths": len(paths),
+    }
