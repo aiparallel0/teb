@@ -1775,6 +1775,13 @@ def _check_skip_rate(template_name: str, task_title: str) -> Optional[str]:
                     skip_count += 1
 
     if total > 0 and skip_count / total >= 0.5:
+        # P2.2: increment reuse counter for all paths that informed this decision
+        for sp in paths:
+            if sp.id is not None:
+                try:
+                    _storage.increment_success_path_reuse(sp.id)
+                except Exception:
+                    pass
         return f"Many people skip this step ({skip_count}/{total}). Still want to include it?"
     return None
 

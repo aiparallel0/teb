@@ -219,6 +219,36 @@ def send_notification(
     return {"sent": sent, "failed": failed, "channels": channels}
 
 
+def send_telegram_message(
+    bot_token: str,
+    chat_id: str,
+    text: str,
+    reply_markup: Optional[Dict[str, Any]] = None,
+) -> bool:
+    """
+    Send a direct Telegram message using a bot token and chat_id.
+
+    Used to reply to inbound webhook commands.  Returns True on success.
+    """
+    if not bot_token or not chat_id:
+        return False
+    url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+    payload: Dict[str, Any] = {
+        "chat_id": chat_id,
+        "text": text,
+        "parse_mode": "Markdown",
+    }
+    if reply_markup is not None:
+        payload["reply_markup"] = reply_markup
+    try:
+        with httpx.Client(timeout=10) as client:
+            resp = client.post(url, json=payload)
+            return resp.status_code == 200
+    except Exception as exc:  # pragma: no cover
+        logger.warning("Telegram direct send failed: %s", exc)
+        return False
+
+
 def send_test_message(config_id: int) -> Dict[str, Any]:
     """Send a test message to a specific messaging config."""
     cfg = storage.get_messaging_config(config_id)

@@ -277,6 +277,13 @@ def init_db() -> None:
                 created_at       TEXT    NOT NULL,
                 updated_at       TEXT    NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS telegram_sessions (
+                chat_id              TEXT    PRIMARY KEY,
+                goal_id              INTEGER REFERENCES goals(id) ON DELETE CASCADE,
+                state                TEXT    NOT NULL DEFAULT 'idle',
+                pending_question_key TEXT    DEFAULT NULL,
+                updated_at           TEXT    NOT NULL
+            );
         """)
 
 
@@ -713,6 +720,13 @@ def list_nudges(goal_id: int, unacknowledged_only: bool = False) -> List[NudgeEv
     return [_row_to_nudge(r) for r in rows]
 
 
+def get_nudge(nudge_id: int) -> Optional[NudgeEvent]:
+    """Get a single nudge event by ID."""
+    with _conn() as con:
+        row = con.execute("SELECT * FROM nudge_events WHERE id = ?", (nudge_id,)).fetchone()
+    return _row_to_nudge(row) if row else None
+
+
 def acknowledge_nudge(nudge_id: int) -> Optional[NudgeEvent]:
     with _conn() as con:
         row = con.execute("SELECT * FROM nudge_events WHERE id = ?", (nudge_id,)).fetchone()
@@ -1141,7 +1155,9 @@ def list_spending_budgets(goal_id: int) -> List[SpendingBudget]:
             "SELECT * FROM spending_budgets WHERE goal_id = ? ORDER BY category ASC",
             (goal_id,),
         ).fetchall()
-    return [_row_to_spending_budget(r) for r in rows]
+    budgets = [_row_to_spending_budget(r) for r in rows]
+    # Auto-reset stale daily counters on every listing
+    return [maybe_reset_daily_spending(b) for b in budgets]
 
 
 def find_spending_budget(goal_id: int, category: str) -> Optional[SpendingBudget]:
@@ -1344,3 +1360,60 @@ def update_messaging_config(cfg: MessagingConfig) -> MessagingConfig:
 def delete_messaging_config(config_id: int) -> None:
     with _conn() as con:
         con.execute("DELETE FROM messaging_configs WHERE id = ?", (config_id,))
+
+
+# ─── Telegram Sessions ───────────────────────────────────────────────────────
+
+def get_telegram_session(chat_id: str) -> Optional[dict]:
+    """Get the session state for a Telegram chat."""
+    with _conn() as con:
+        row = con.execute(
+            "SELECT * FROM telegram_sessions WHERE chat_id = ?", (chat_id,)
+        ).fetchone()
+    if row:
+        return {
+            "chat_id": row["chat_id"],
+            "goal_id": row["goal_id"],
+            "state": row["state"],
+            "pending_question_key": row["pending_question_key"],
+        }
+    return None
+
+
+def upsert_telegram_session(
+    chat_id: str,
+    goal_id: Optional[int],
+    state: str,
+    pending_question_key: Optional[str] = None,
+) -> None:
+    """Create or update the session for a Telegram chat."""
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        con.execute(
+            """INSERT INTO telegram_sessions (chat_id, goal_id, state, pending_question_key, updated_at)
+               VALUES (?, ?, ?, ?, ?)
+               ON CONFLICT(chat_id) DO UPDATE SET
+                   goal_id=excluded.goal_id,
+                   state=excluded.state,
+                   pending_question_key=excluded.pending_question_key,
+                   updated_at=excluded.updated_at""",
+            (chat_id, goal_id, state, pending_question_key, now),
+        )
+
+
+def delete_telegram_session(chat_id: str) -> None:
+    """Remove the session for a Telegram chat."""
+    with _conn() as con:
+        con.execute("DELETE FROM telegram_sessions WHERE chat_id = ?", (chat_id,))
+
+
+def reset_all_daily_spending() -> None:
+    """Reset spent_today for all budgets where the last update was on a previous day."""
+    today = datetime.now(timezone.utc).date().isoformat()
+    with _conn() as con:
+        con.execute(
+            """UPDATE spending_budgets
+               SET spent_today = 0, updated_at = ?
+               WHERE spent_today > 0 AND date(updated_at) < date(?)""",
+            (datetime.now(timezone.utc).isoformat(), today),
+        )

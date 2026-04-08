@@ -44,9 +44,19 @@ def anyio_backend():
     return "asyncio"
 
 
+async def _get_auth_headers(c) -> dict:
+    """Register (or login) a test user and return auth headers."""
+    r = await c.post("/api/auth/register", json={"email": "citest@teb.test", "password": "testpass123"})
+    if r.status_code not in (200, 201):
+        r = await c.post("/api/auth/login", json={"email": "citest@teb.test", "password": "testpass123"})
+    return {"Authorization": f"Bearer {r.json()['token']}"}
+
+
 @pytest_asyncio.fixture
 async def client():
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as c:
+        headers = await _get_auth_headers(c)
+        c.headers.update(headers)
         yield c
 
 

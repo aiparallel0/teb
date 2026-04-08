@@ -151,6 +151,21 @@ def _generate_plan_ai(
             for c in credentials
         )
 
+        # Include budget context if available so the AI can factor in cost constraints
+        budget_context = ""
+        if task.goal_id:
+            try:
+                from teb import storage as _storage  # noqa: PLC0415
+                budgets = _storage.list_spending_budgets(task.goal_id)
+                if budgets:
+                    lines = [
+                        f"  - ${b.daily_limit:.2f}/day, ${b.total_limit:.2f} total ({b.category})"
+                        for b in budgets
+                    ]
+                    budget_context = "\nSpending budgets for this goal:\n" + "\n".join(lines)
+            except Exception:
+                pass
+
         system_prompt = (
             "You are an API execution planner. Given a task and available API credentials, "
             "determine if the task can be accomplished via API calls. "
@@ -182,7 +197,8 @@ def _generate_plan_ai(
         user_prompt = (
             f"Task: {task.title}\n"
             f"Description: {task.description}\n\n"
-            f"Available APIs:\n{cred_descriptions}\n\n"
+            f"Available APIs:\n{cred_descriptions}"
+            f"{budget_context}\n\n"
             f"Can this task be executed via the available APIs? If so, produce the plan."
         )
 
