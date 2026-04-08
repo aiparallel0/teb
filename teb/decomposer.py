@@ -544,7 +544,7 @@ _LEARN_KEYWORDS = re.compile(
     re.I,
 )
 _FIT_KEYWORDS = re.compile(
-    r"\b(fit|work(?:ing)?\s*out|exercise|health|weight|gym|run|jog|muscle|physique|diet|cardio|strength)\b",
+    r"\b(fit|work(?:ing)?\s*out|exercise|weight|gym|run|jog|muscle|physique|diet|cardio|strength)\b",
     re.I,
 )
 _BUILD_KEYWORDS = re.compile(r"\b(build|create|develop|make|code|program|launch|ship)\b", re.I)
@@ -575,6 +575,8 @@ def _detect_template(goal: Goal) -> str:
         return "find_job"
     if _FIT_KEYWORDS.search(text):
         return "get_fit"
+    if _HEALTH_KEYWORDS.search(text):
+        return "improve_health"
     if _BUILD_KEYWORDS.search(text) and _BUILD_QUALIFIERS.search(text):
         return "build_project"
     if _LEARN_KEYWORDS.search(text):
