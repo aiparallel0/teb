@@ -286,3 +286,91 @@ class AgentHandoff:
             "status": self.status,
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }
+
+
+# ─── Agent Messages (inter-agent collaboration) ────────────────────────────
+
+@dataclass
+class AgentMessage:
+    """A message exchanged between agents during orchestration for deeper collaboration."""
+    goal_id: int
+    from_agent: str
+    to_agent: str
+    message_type: str = "info"         # info | request | response | context
+    content: str = ""
+    in_reply_to: Optional[int] = None  # id of message this replies to
+    id: Optional[int] = None
+    created_at: Optional[datetime] = None
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "goal_id": self.goal_id,
+            "from_agent": self.from_agent,
+            "to_agent": self.to_agent,
+            "message_type": self.message_type,
+            "content": self.content,
+            "in_reply_to": self.in_reply_to,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+# ─── Browser Actions ────────────────────────────────────────────────────────
+
+@dataclass
+class BrowserAction:
+    """A record of a browser automation action performed on behalf of the user."""
+    task_id: int
+    action_type: str                   # navigate | click | type | extract | screenshot | wait
+    target: str = ""                   # URL, CSS selector, or description
+    value: str = ""                    # text to type, or extracted content
+    status: str = "pending"            # pending | success | error
+    error: str = ""
+    screenshot_path: str = ""          # path to screenshot if taken
+    id: Optional[int] = None
+    created_at: Optional[datetime] = None
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "task_id": self.task_id,
+            "action_type": self.action_type,
+            "target": self.target,
+            "value": self.value,
+            "status": self.status,
+            "error": self.error,
+            "screenshot_path": self.screenshot_path,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+# ─── Integration Registry ───────────────────────────────────────────────────
+
+@dataclass
+class Integration:
+    """A pre-built integration with a known service (Stripe, Namecheap, etc.)."""
+    service_name: str                  # e.g. "stripe", "namecheap", "vercel"
+    category: str = "general"          # payment | hosting | domain | email | social | analytics | ai
+    base_url: str = ""
+    auth_type: str = "api_key"         # api_key | bearer | oauth2
+    auth_header: str = "Authorization"
+    docs_url: str = ""
+    capabilities: str = ""             # JSON array of capability strings
+    common_endpoints: str = ""         # JSON array of endpoint pattern objects
+    id: Optional[int] = None
+    created_at: Optional[datetime] = None
+
+    def to_dict(self) -> dict:
+        import json as _json
+        return {
+            "id": self.id,
+            "service_name": self.service_name,
+            "category": self.category,
+            "base_url": self.base_url,
+            "auth_type": self.auth_type,
+            "auth_header": self.auth_header,
+            "docs_url": self.docs_url,
+            "capabilities": _json.loads(self.capabilities) if self.capabilities else [],
+            "common_endpoints": _json.loads(self.common_endpoints) if self.common_endpoints else [],
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }

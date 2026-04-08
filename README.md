@@ -17,11 +17,13 @@ Then tracks whether you actually earned any money.
 
 **What makes teb different:**
 
-- **Not just planning but executing** — via API orchestration, teb doesn't just tell you what to do, it does it for you when APIs are available
+- **Not just planning but executing** — via API orchestration and browser automation, teb doesn't just tell you what to do, it does it for you
+- **Browser automation** — when APIs aren't available, teb generates and executes browser-based plans (navigate, click, type, extract) via Playwright
 - **Not generic but experience-aware** — persistent user profiles learn your skills, pace, and style across goals; a knowledge base of successful paths means each new user benefits from what worked before
 - **Not advisory but accountable** — outcome metrics track real results (revenue earned, clients acquired), not just tasks checked off
 - **Proactively discovers actions you didn't think of** — rule-based and AI-powered suggestion engine surfaces opportunities, optimizations, and risks
-- **Multi-agent delegation** — specialized AI agents (marketing, web dev, outreach, research, finance) collaborate and delegate to each other to tackle your goal from every angle
+- **Multi-agent delegation with deep collaboration** — specialized AI agents (marketing, web dev, outreach, research, finance) collaborate via message passing, share context, and delegate to each other
+- **Pre-built integration catalog** — ships with knowledge of 10 popular services (Stripe, Namecheap, Vercel, SendGrid, GitHub, Cloudflare, Twitter, LinkedIn, Plausible, OpenAI) for smarter execution plans
 
 ---
 
@@ -99,6 +101,13 @@ GET    /api/knowledge/paths           List successful execution paths (knowledge
 GET    /api/agents                    List all agent types and their capabilities
 POST   /api/goals/{id}/orchestrate    Run multi-agent delegation on a goal
 GET    /api/goals/{id}/handoffs       View agent delegation chain for a goal
+GET    /api/goals/{id}/messages       View inter-agent messages (collaboration log)
+POST   /api/tasks/{id}/browser        Execute a task via browser automation
+GET    /api/tasks/{id}/browser_actions View browser automation actions for a task
+GET    /api/integrations              List known service integrations (filterable by category)
+GET    /api/integrations/catalog      Get the built-in integration catalog
+GET    /api/integrations/match?q=     Find integrations matching a task description
+GET    /api/integrations/{name}/endpoints  Get common API endpoints for a service
 ```
 
 ### Task Execution Example
@@ -183,10 +192,49 @@ curl http://localhost:8000/api/agents
 
 **How orchestration works:**
 1. **Coordinator** analyzes your goal and creates a high-level strategy
-2. Coordinator **delegates** to specialist agents (e.g., marketing, web_dev, outreach)
-3. Each specialist produces **concrete tasks** and may sub-delegate to other specialists
-4. Example chain: `coordinator → marketing → web_dev` (marketing asks web_dev to build a landing page)
-5. All handoffs are logged for full traceability
+2. Coordinator **sends messages** to specialist agents for coordination context
+3. Coordinator **delegates** to specialist agents (e.g., marketing, web_dev, outreach)
+4. Each specialist reads messages from other agents, produces **concrete tasks**, and may sub-delegate
+5. Example chain: `coordinator → marketing → web_dev` (marketing asks web_dev to build a landing page)
+6. All handoffs and inter-agent messages are logged for full traceability
+
+### Browser Automation Example
+
+```bash
+# Execute a task via browser automation (instead of API calls)
+curl -X POST http://localhost:8000/api/tasks/1/browser
+# Returns: plan (steps: navigate, click, type, etc.), actions taken, success/failure
+
+# View browser actions for a task
+curl http://localhost:8000/api/tasks/1/browser_actions
+```
+
+**How browser automation works:**
+1. AI generates a step-by-step browser plan (navigate, click, type, extract, screenshot, wait)
+2. If **Playwright** is installed, steps are executed in a headless browser automatically
+3. If Playwright is not installed, the plan is returned as a guided walkthrough the user can follow
+4. All actions are logged in `browser_actions` for traceability
+
+### Integration Registry Example
+
+```bash
+# List all known service integrations
+curl http://localhost:8000/api/integrations
+# Returns: stripe, namecheap, vercel, sendgrid, github, cloudflare, twitter, linkedin, plausible, openai
+
+# Find integrations matching a task
+curl "http://localhost:8000/api/integrations/match?q=accept+payments+online"
+# Returns: stripe (best match), plus others
+
+# Get common API endpoints for a service
+curl http://localhost:8000/api/integrations/stripe/endpoints
+# Returns: POST /v1/customers, POST /v1/payment_intents, etc.
+
+# Filter integrations by category
+curl "http://localhost:8000/api/integrations?category=payment"
+```
+
+**Built-in integrations:** Stripe (payment), Namecheap (domain), Vercel (hosting), SendGrid (email), GitHub (development), Cloudflare (hosting), Twitter (social), LinkedIn (social), Plausible (analytics), OpenAI (AI).
 
 ---
 
@@ -213,26 +261,30 @@ Without an AI key (`ANTHROPIC_API_KEY` or `OPENAI_API_KEY`), teb operates in **t
 
 ```
 teb/
-├── main.py        FastAPI app + REST endpoints (goals, tasks, coaching, execution, agents)
-├── models.py      Goal, Task, CheckIn, OutcomeMetric, NudgeEvent, UserProfile,
-│                  SuccessPath, ProactiveSuggestion, ApiCredential, ExecutionLog, AgentHandoff
-├── storage.py     SQLite data access layer (raw sqlite3, 11 tables)
-├── decomposer.py  Template-based + AI decomposition engine + coaching + proactive suggestions
-├── executor.py    AI-powered task execution engine (API calls via httpx)
-├── agents.py      Multi-agent delegation system (coordinator + 5 specialist agents)
-├── ai_client.py   Unified AI client (Anthropic Claude + OpenAI)
-├── config.py      Environment variable configuration
+├── main.py          FastAPI app + REST endpoints (goals, tasks, coaching, execution, browser, agents)
+├── models.py        Goal, Task, CheckIn, OutcomeMetric, NudgeEvent, UserProfile,
+│                    SuccessPath, ProactiveSuggestion, ApiCredential, ExecutionLog,
+│                    AgentHandoff, AgentMessage, BrowserAction, Integration
+├── storage.py       SQLite data access layer (raw sqlite3, 14 tables)
+├── decomposer.py    Template-based + AI decomposition engine + coaching + proactive suggestions
+├── executor.py      AI-powered task execution engine (API calls via httpx)
+├── browser.py       Browser automation engine (AI plan generation + Playwright execution)
+├── agents.py        Multi-agent delegation system with inter-agent messaging
+├── integrations.py  Pre-built integration catalog (10 services) + matching engine
+├── ai_client.py     Unified AI client (Anthropic Claude + OpenAI)
+├── config.py        Environment variable configuration
 ├── templates/
-│   └── index.html Single-page frontend
+│   └── index.html   Single-page frontend
 └── static/
-    ├── app.js     Vanilla JS frontend logic
-    └── style.css  CSS styling
+    ├── app.js       Vanilla JS frontend logic
+    └── style.css    CSS styling
 tests/
-├── test_decomposer.py  Unit tests for decomposition logic
-├── test_executor.py    Unit tests for execution engine
-├── test_checkin.py     Tests for coaching, nudges, outcomes, suggestions
-├── test_agents.py      Tests for multi-agent delegation system
-└── test_api.py         Integration tests for API endpoints
+├── test_decomposer.py           Unit tests for decomposition logic
+├── test_executor.py             Unit tests for execution engine
+├── test_checkin.py              Tests for coaching, nudges, outcomes, suggestions
+├── test_agents.py               Tests for multi-agent delegation system
+├── test_browser_integrations.py Tests for browser automation, integrations, agent messaging
+└── test_api.py                  Integration tests for API endpoints
 ```
 
 ### Multi-Agent Delegation
@@ -244,13 +296,15 @@ User goal: "earn money online"
     │
     ▼
 ┌─────────────┐
-│ Coordinator │  Analyzes goal → creates strategy
+│ Coordinator │  Analyzes goal → creates strategy → sends coordination messages
 └──────┬──────┘
-       │ delegates to specialists:
+       │ delegates to specialists (with shared context):
        ├──► Marketing Agent → positioning, content, SEO
-       │         └──► Web Dev Agent → build landing page
-       │         └──► Outreach Agent → run campaigns
+       │    ├── 💬 messages Web Dev: "Need landing page with email capture"
+       │    └──► Web Dev Agent → build landing page (reads Marketing's message)
+       │    └──► Outreach Agent → run campaigns
        ├──► Research Agent → market validation, competitors
+       │    └── 💬 messages Marketing: "Found untapped niche in X"
        ├──► Web Dev Agent → hosting, domain, deployment
        ├──► Outreach Agent → cold outreach, lead gen
        └──► Finance Agent → budgeting, pricing, payments
@@ -259,17 +313,31 @@ User goal: "earn money online"
 Each agent:
 - Has a specific domain of expertise
 - Produces concrete, actionable tasks
+- **Sends messages** to other agents for coordination (shared context, requests, responses)
 - Can delegate to other agents (up to 3 levels deep)
+- Reads outputs from previously completed agents for enriched context
 - Works in AI mode (Claude/OpenAI) or template mode (offline)
-- All handoffs are logged for full traceability
+- All handoffs and messages are logged for full traceability
 
 ### How Execution Works
 
+**API execution:**
 1. **Register APIs**: User adds API credentials (Namecheap, Stripe, GitHub, etc.)
 2. **AI Plans**: When `POST /api/tasks/{id}/execute` is called, AI analyzes the task + available APIs and produces a step-by-step execution plan
 3. **Execute**: Each step (API call) is executed sequentially via httpx
 4. **Log**: Every action is recorded in `execution_logs` — what was called, what happened, success/failure
 5. **Status**: Task is marked `done` on success, `failed` on error
+
+**Browser automation** (when APIs aren't enough):
+1. **AI Plans**: When `POST /api/tasks/{id}/browser` is called, AI generates a browser automation plan (navigate, click, type, extract, screenshot, wait)
+2. **Playwright execution**: If Playwright is installed, steps execute in a headless browser automatically
+3. **Manual fallback**: Without Playwright, the plan is returned as guided steps the user can follow
+4. **Log**: Every action is recorded in `browser_actions`
+
+**Integration registry** enriches both:
+- 10 pre-built service profiles (Stripe, Vercel, SendGrid, etc.) with known endpoints
+- `GET /api/integrations/match?q=...` finds relevant services for any task
+- Helps AI generate more accurate execution plans
 
 ### Task Statuses
 
