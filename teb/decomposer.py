@@ -744,13 +744,15 @@ class _UserProfile:
 def _fuzzy_match(text: str, keywords: List[str], threshold: float = 0.7) -> bool:
     """Check if text contains a fuzzy match to any keyword using difflib."""
     import difflib
-    words = text.lower().split()
+    text_lower = text.lower()
+    words = text_lower.split()
     for kw in keywords:
+        kw_lower = kw.lower()
         # Direct substring match first (faster)
-        if kw in text:
+        if kw_lower in text_lower:
             return True
         # Fuzzy match each word against the keyword
-        matches = difflib.get_close_matches(kw, words, n=1, cutoff=threshold)
+        matches = difflib.get_close_matches(kw_lower, words, n=1, cutoff=threshold)
         if matches:
             return True
     return False
@@ -1037,7 +1039,9 @@ def _apply_success_path_insights(goal: Goal, tasks: List[Task]) -> List[Task]:
                     "Consider whether it applies to your situation.]"
                 )
 
-        # 2.3: Apply time scaling from past paths if significantly different
+        # 2.3: Apply time scaling from past paths if significantly different.
+        # Bounds [0.6, 1.5] ensure we don't over-compress or over-inflate estimates;
+        # deviations outside this range likely indicate template mismatch, not real scaling.
         if 0.6 <= avg_time_factor <= 1.5 and avg_time_factor != 1.0:
             for t in tasks:
                 t.estimated_minutes = max(5, round(t.estimated_minutes * avg_time_factor))

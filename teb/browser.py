@@ -313,8 +313,9 @@ def execute_browser_plan(plan: BrowserPlan, user_id: Optional[int] = None) -> Li
         # 6.1: Use per-user session storage for cookie persistence
         storage_state = None
         if user_id is not None:
-            state_dir = "/tmp/teb_browser_sessions"
-            os.makedirs(state_dir, exist_ok=True)
+            import tempfile
+            state_dir = os.path.join(tempfile.gettempdir(), "teb_browser_sessions")
+            os.makedirs(state_dir, mode=0o700, exist_ok=True)
             storage_state = os.path.join(state_dir, f"user_{user_id}.json")
         return _execute_with_playwright(plan, storage_state=storage_state)
     return _execute_manual_fallback(plan)

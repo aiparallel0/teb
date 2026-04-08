@@ -460,7 +460,6 @@ def _decrypt_value(value: str) -> str:
 # ─── Users ───────────────────────────────────────────────────────────────────
 
 def _row_to_user(row: sqlite3.Row) -> User:
-    locked_until_val = row["locked_until"] if "locked_until" in row.keys() else None
     return User(
         id=row["id"],
         email=row["email"],
@@ -468,7 +467,11 @@ def _row_to_user(row: sqlite3.Row) -> User:
         role=row["role"] if "role" in row.keys() else "user",
         email_verified=bool(row["email_verified"]) if "email_verified" in row.keys() else False,
         failed_login_attempts=row["failed_login_attempts"] if "failed_login_attempts" in row.keys() else 0,
-        locked_until=datetime.fromisoformat(locked_until_val) if locked_until_val else None,
+        locked_until=(
+            datetime.fromisoformat(row["locked_until"])
+            if "locked_until" in row.keys() and row["locked_until"]
+            else None
+        ),
         created_at=datetime.fromisoformat(row["created_at"]),
     )
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -18,6 +19,8 @@ from teb.models import (
     Goal, MessagingConfig, NudgeEvent, OutcomeMetric,
     SpendingBudget, SpendingRequest, Task,
 )
+
+logger = logging.getLogger(__name__)
 
 
 # ─── Startup / lifespan ───────────────────────────────────────────────────────
@@ -1633,8 +1636,7 @@ async def telegram_webhook(body: TelegramUpdate, request: Request):
             goal.status = "decomposed"
             storage.update_goal(goal)
         except Exception as exc:
-            import logging as _logging
-            _logging.getLogger(__name__).error("Telegram goal decomposition failed for goal %s: %s", goal.id, exc)
+            logger.error("Telegram goal decomposition failed for goal %s: %s", goal.id, exc)
             goal.status = "drafting"
             storage.update_goal(goal)
             _reply(f"⚠️ Goal created but auto-planning failed. Use /next to try again or answer questions to refine.")
