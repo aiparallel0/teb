@@ -527,7 +527,13 @@ class TestAgentAPI:
     def client(self):
         from fastapi.testclient import TestClient
         from teb.main import app
-        return TestClient(app)
+        c = TestClient(app)
+        # Register/login a test user and inject auth headers
+        r = c.post("/api/auth/register", json={"email": "agent_test@teb.test", "password": "testpass123"})
+        if r.status_code not in (200, 201):
+            r = c.post("/api/auth/login", json={"email": "agent_test@teb.test", "password": "testpass123"})
+        c.headers.update({"Authorization": f"Bearer {r.json()['token']}"})
+        return c
 
     def test_list_agents_endpoint(self, client):
         resp = client.get("/api/agents")

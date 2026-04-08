@@ -284,7 +284,99 @@ def init_db() -> None:
                 pending_question_key TEXT    DEFAULT NULL,
                 updated_at           TEXT    NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS agent_memory (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                agent_type  TEXT    NOT NULL,
+                goal_type   TEXT    NOT NULL DEFAULT '',
+                memory_key  TEXT    NOT NULL,
+                memory_value TEXT   NOT NULL,
+                confidence  REAL   NOT NULL DEFAULT 1.0,
+                times_used  INTEGER NOT NULL DEFAULT 0,
+                created_at  TEXT    NOT NULL,
+                updated_at  TEXT    NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_agent_memory_type ON agent_memory(agent_type, goal_type);
+
+            CREATE TABLE IF NOT EXISTS user_behavior (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id      INTEGER REFERENCES users(id) ON DELETE CASCADE,
+                behavior_type TEXT   NOT NULL,
+                pattern_key   TEXT   NOT NULL,
+                pattern_value TEXT   NOT NULL DEFAULT '',
+                occurrences   INTEGER NOT NULL DEFAULT 1,
+                created_at    TEXT   NOT NULL,
+                updated_at    TEXT   NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_user_behavior_user ON user_behavior(user_id, behavior_type);
+
+            CREATE TABLE IF NOT EXISTS payment_accounts (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                provider     TEXT    NOT NULL,
+                account_id   TEXT    NOT NULL DEFAULT '',
+                config_json  TEXT    NOT NULL DEFAULT '{}',
+                enabled      INTEGER NOT NULL DEFAULT 1,
+                created_at   TEXT    NOT NULL,
+                updated_at   TEXT    NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_payment_accounts_user ON payment_accounts(user_id);
+
+            CREATE TABLE IF NOT EXISTS payment_transactions (
+                id               INTEGER PRIMARY KEY AUTOINCREMENT,
+                account_id       INTEGER NOT NULL REFERENCES payment_accounts(id) ON DELETE CASCADE,
+                spending_request_id INTEGER REFERENCES spending_requests(id),
+                provider_tx_id   TEXT    NOT NULL DEFAULT '',
+                amount           REAL    NOT NULL DEFAULT 0,
+                currency         TEXT    NOT NULL DEFAULT 'USD',
+                status           TEXT    NOT NULL DEFAULT 'pending',
+                description      TEXT    NOT NULL DEFAULT '',
+                provider_response TEXT   NOT NULL DEFAULT '{}',
+                created_at       TEXT    NOT NULL,
+                updated_at       TEXT    NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_payment_tx_account ON payment_transactions(account_id);
+
+            CREATE TABLE IF NOT EXISTS discovered_services (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                service_name    TEXT    NOT NULL UNIQUE,
+                category        TEXT    NOT NULL DEFAULT '',
+                description     TEXT    NOT NULL DEFAULT '',
+                url             TEXT    NOT NULL DEFAULT '',
+                capabilities    TEXT    NOT NULL DEFAULT '[]',
+                discovered_by   TEXT    NOT NULL DEFAULT 'system',
+                relevance_score REAL   NOT NULL DEFAULT 0,
+                times_recommended INTEGER NOT NULL DEFAULT 0,
+                created_at      TEXT    NOT NULL,
+                updated_at      TEXT    NOT NULL
+            );
         """)
+
+        # ─── Lightweight schema migrations ────────────────────────────────
+        _run_migrations(con)
+
+
+def _run_migrations(con: sqlite3.Connection) -> None:
+    """Add columns that may be missing on databases created before multi-user auth or
+    messaging user scoping.  Uses PRAGMA table_info so it is safe to call repeatedly."""
+
+    def _has_column(table: str, column: str) -> bool:
+        cols = con.execute(f"PRAGMA table_info({table})").fetchall()
+        return any(c["name"] == column for c in cols)
+
+    # goals.user_id (added in PR#8)
+    if not _has_column("goals", "user_id"):
+        con.execute("ALTER TABLE goals ADD COLUMN user_id INTEGER REFERENCES users(id) ON DELETE CASCADE")
+        con.execute("CREATE INDEX IF NOT EXISTS idx_goals_user ON goals(user_id)")
+
+    # user_profiles.user_id
+    if not _has_column("user_profiles", "user_id"):
+        con.execute("ALTER TABLE user_profiles ADD COLUMN user_id INTEGER REFERENCES users(id) ON DELETE CASCADE")
+
+    # messaging_configs.user_id (scope configs to user)
+    if not _has_column("messaging_configs", "user_id"):
+        con.execute("ALTER TABLE messaging_configs ADD COLUMN user_id INTEGER REFERENCES users(id) ON DELETE CASCADE")
+        con.execute("CREATE INDEX IF NOT EXISTS idx_messaging_configs_user ON messaging_configs(user_id)")
 
 
 # ─── Credential Encryption ───────────────────────────────────────────────────
@@ -401,7 +493,9 @@ def list_goals(user_id: Optional[int] = None) -> List[Goal]:
             ).fetchall()
     else:
         with _conn() as con:
-            rows = con.execute("SELECT * FROM goals ORDER BY created_at DESC").fetchall()
+            rows = con.execute(
+                "SELECT * FROM goals WHERE user_id IS NULL ORDER BY created_at DESC"
+            ).fetchall()
     return [_row_to_goal(r) for r in rows]
 
 
@@ -1299,6 +1393,7 @@ def _row_to_messaging_config(row: sqlite3.Row) -> MessagingConfig:
         notify_tasks=bool(row["notify_tasks"]),
         notify_spending=bool(row["notify_spending"]),
         notify_checkins=bool(row["notify_checkins"]),
+        user_id=row["user_id"] if "user_id" in row.keys() else None,
         created_at=datetime.fromisoformat(row["created_at"]),
         updated_at=datetime.fromisoformat(row["updated_at"]),
     )
@@ -1310,11 +1405,12 @@ def create_messaging_config(cfg: MessagingConfig) -> MessagingConfig:
         cur = con.execute(
             """INSERT INTO messaging_configs
                (channel, config_json, enabled, notify_nudges, notify_tasks,
-                notify_spending, notify_checkins, created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                notify_spending, notify_checkins, user_id, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (cfg.channel, cfg.config_json, int(cfg.enabled),
              int(cfg.notify_nudges), int(cfg.notify_tasks),
-             int(cfg.notify_spending), int(cfg.notify_checkins), now, now),
+             int(cfg.notify_spending), int(cfg.notify_checkins),
+             cfg.user_id, now, now),
         )
         cfg.id = cur.lastrowid
         cfg.created_at = datetime.fromisoformat(now)
@@ -1330,11 +1426,17 @@ def get_messaging_config(config_id: int) -> Optional[MessagingConfig]:
     return _row_to_messaging_config(row) if row else None
 
 
-def list_messaging_configs(enabled_only: bool = False) -> List[MessagingConfig]:
+def list_messaging_configs(enabled_only: bool = False, user_id: Optional[int] = None) -> List[MessagingConfig]:
     query = "SELECT * FROM messaging_configs"
+    conditions: list[str] = []
     params: list = []
     if enabled_only:
-        query += " WHERE enabled = 1"
+        conditions.append("enabled = 1")
+    if user_id is not None:
+        conditions.append("user_id = ?")
+        params.append(user_id)
+    if conditions:
+        query += " WHERE " + " AND ".join(conditions)
     query += " ORDER BY created_at ASC"
     with _conn() as con:
         rows = con.execute(query, params).fetchall()
@@ -1416,4 +1518,243 @@ def reset_all_daily_spending() -> None:
                SET spent_today = 0, updated_at = ?
                WHERE spent_today > 0 AND date(updated_at) < date(?)""",
             (datetime.now(timezone.utc).isoformat(), today),
+        )
+
+
+# ─── Agent Memory ────────────────────────────────────────────────────────────
+
+def create_agent_memory(agent_type: str, goal_type: str, memory_key: str, memory_value: str, confidence: float = 1.0) -> dict:
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        cur = con.execute(
+            """INSERT INTO agent_memory (agent_type, goal_type, memory_key, memory_value, confidence, times_used, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, 0, ?, ?)""",
+            (agent_type, goal_type, memory_key, memory_value, confidence, now, now),
+        )
+        return {"id": cur.lastrowid, "agent_type": agent_type, "goal_type": goal_type,
+                "memory_key": memory_key, "memory_value": memory_value, "confidence": confidence}
+
+
+def list_agent_memories(agent_type: str, goal_type: str = "") -> list[dict]:
+    with _conn() as con:
+        if goal_type:
+            rows = con.execute(
+                "SELECT * FROM agent_memory WHERE agent_type = ? AND goal_type = ? ORDER BY confidence DESC, times_used DESC",
+                (agent_type, goal_type),
+            ).fetchall()
+        else:
+            rows = con.execute(
+                "SELECT * FROM agent_memory WHERE agent_type = ? ORDER BY confidence DESC, times_used DESC",
+                (agent_type,),
+            ).fetchall()
+    return [
+        {"id": r["id"], "agent_type": r["agent_type"], "goal_type": r["goal_type"],
+         "memory_key": r["memory_key"], "memory_value": r["memory_value"],
+         "confidence": r["confidence"], "times_used": r["times_used"]}
+        for r in rows
+    ]
+
+
+def increment_agent_memory_usage(memory_id: int) -> None:
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        con.execute(
+            "UPDATE agent_memory SET times_used = times_used + 1, updated_at = ? WHERE id = ?",
+            (now, memory_id),
+        )
+
+
+# ─── User Behavior ───────────────────────────────────────────────────────────
+
+def record_user_behavior(user_id: int, behavior_type: str, pattern_key: str, pattern_value: str = "") -> dict:
+    """Record a user behavior pattern (e.g., 'avoids': 'cli_tasks')."""
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        # Check for existing pattern
+        existing = con.execute(
+            "SELECT * FROM user_behavior WHERE user_id = ? AND behavior_type = ? AND pattern_key = ?",
+            (user_id, behavior_type, pattern_key),
+        ).fetchone()
+        if existing:
+            con.execute(
+                "UPDATE user_behavior SET occurrences = occurrences + 1, pattern_value = ?, updated_at = ? WHERE id = ?",
+                (pattern_value or existing["pattern_value"], now, existing["id"]),
+            )
+            return {"id": existing["id"], "behavior_type": behavior_type, "pattern_key": pattern_key,
+                    "occurrences": existing["occurrences"] + 1}
+        else:
+            cur = con.execute(
+                """INSERT INTO user_behavior (user_id, behavior_type, pattern_key, pattern_value, occurrences, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, 1, ?, ?)""",
+                (user_id, behavior_type, pattern_key, pattern_value, now, now),
+            )
+            return {"id": cur.lastrowid, "behavior_type": behavior_type, "pattern_key": pattern_key, "occurrences": 1}
+
+
+def list_user_behaviors(user_id: int, behavior_type: Optional[str] = None) -> list[dict]:
+    with _conn() as con:
+        if behavior_type:
+            rows = con.execute(
+                "SELECT * FROM user_behavior WHERE user_id = ? AND behavior_type = ? ORDER BY occurrences DESC",
+                (user_id, behavior_type),
+            ).fetchall()
+        else:
+            rows = con.execute(
+                "SELECT * FROM user_behavior WHERE user_id = ? ORDER BY occurrences DESC",
+                (user_id,),
+            ).fetchall()
+    return [
+        {"id": r["id"], "user_id": r["user_id"], "behavior_type": r["behavior_type"],
+         "pattern_key": r["pattern_key"], "pattern_value": r["pattern_value"],
+         "occurrences": r["occurrences"]}
+        for r in rows
+    ]
+
+
+# ─── Payment Accounts ────────────────────────────────────────────────────────
+
+def create_payment_account(user_id: int, provider: str, account_id: str, config_json: str = "{}") -> dict:
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        cur = con.execute(
+            """INSERT INTO payment_accounts (user_id, provider, account_id, config_json, enabled, created_at, updated_at)
+               VALUES (?, ?, ?, ?, 1, ?, ?)""",
+            (user_id, provider, account_id, config_json, now, now),
+        )
+        return {"id": cur.lastrowid, "user_id": user_id, "provider": provider,
+                "account_id": account_id, "enabled": True}
+
+
+def list_payment_accounts(user_id: int) -> list[dict]:
+    with _conn() as con:
+        rows = con.execute(
+            "SELECT * FROM payment_accounts WHERE user_id = ? ORDER BY created_at DESC",
+            (user_id,),
+        ).fetchall()
+    return [
+        {"id": r["id"], "user_id": r["user_id"], "provider": r["provider"],
+         "account_id": r["account_id"], "config_json": r["config_json"],
+         "enabled": bool(r["enabled"]), "created_at": r["created_at"]}
+        for r in rows
+    ]
+
+
+def get_payment_account(account_id: int) -> Optional[dict]:
+    with _conn() as con:
+        row = con.execute(
+            "SELECT * FROM payment_accounts WHERE id = ?", (account_id,),
+        ).fetchone()
+    if row:
+        return {"id": row["id"], "user_id": row["user_id"], "provider": row["provider"],
+                "account_id": row["account_id"], "config_json": row["config_json"],
+                "enabled": bool(row["enabled"])}
+    return None
+
+
+def create_payment_transaction(account_id: int, spending_request_id: Optional[int],
+                                amount: float, currency: str, description: str,
+                                provider_tx_id: str = "", status: str = "pending") -> dict:
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        cur = con.execute(
+            """INSERT INTO payment_transactions
+               (account_id, spending_request_id, provider_tx_id, amount, currency,
+                status, description, provider_response, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, '{}', ?, ?)""",
+            (account_id, spending_request_id, provider_tx_id, amount, currency,
+             status, description, now, now),
+        )
+        return {"id": cur.lastrowid, "account_id": account_id, "amount": amount,
+                "currency": currency, "status": status, "description": description}
+
+
+def update_payment_transaction(tx_id: int, status: str, provider_tx_id: str = "",
+                                provider_response: str = "{}") -> Optional[dict]:
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        con.execute(
+            """UPDATE payment_transactions
+               SET status = ?, provider_tx_id = ?, provider_response = ?, updated_at = ?
+               WHERE id = ?""",
+            (status, provider_tx_id, provider_response, now, tx_id),
+        )
+        row = con.execute("SELECT * FROM payment_transactions WHERE id = ?", (tx_id,)).fetchone()
+    if row:
+        return {"id": row["id"], "status": row["status"], "provider_tx_id": row["provider_tx_id"],
+                "amount": row["amount"], "currency": row["currency"]}
+    return None
+
+
+def list_payment_transactions(account_id: int, limit: int = 50) -> list[dict]:
+    with _conn() as con:
+        rows = con.execute(
+            "SELECT * FROM payment_transactions WHERE account_id = ? ORDER BY created_at DESC LIMIT ?",
+            (account_id, limit),
+        ).fetchall()
+    return [
+        {"id": r["id"], "account_id": r["account_id"], "provider_tx_id": r["provider_tx_id"],
+         "amount": r["amount"], "currency": r["currency"], "status": r["status"],
+         "description": r["description"], "created_at": r["created_at"]}
+        for r in rows
+    ]
+
+
+# ─── Discovered Services ─────────────────────────────────────────────────────
+
+def create_discovered_service(service_name: str, category: str, description: str,
+                               url: str, capabilities: str = "[]",
+                               discovered_by: str = "system", relevance_score: float = 0) -> dict:
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        # Upsert
+        existing = con.execute(
+            "SELECT id FROM discovered_services WHERE service_name = ?", (service_name,)
+        ).fetchone()
+        if existing:
+            con.execute(
+                """UPDATE discovered_services
+                   SET category = ?, description = ?, url = ?, capabilities = ?,
+                       relevance_score = ?, updated_at = ?
+                   WHERE id = ?""",
+                (category, description, url, capabilities, relevance_score, now, existing["id"]),
+            )
+            return {"id": existing["id"], "service_name": service_name, "updated": True}
+        cur = con.execute(
+            """INSERT INTO discovered_services
+               (service_name, category, description, url, capabilities,
+                discovered_by, relevance_score, times_recommended, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?)""",
+            (service_name, category, description, url, capabilities,
+             discovered_by, relevance_score, now, now),
+        )
+        return {"id": cur.lastrowid, "service_name": service_name, "updated": False}
+
+
+def list_discovered_services(category: Optional[str] = None, limit: int = 50) -> list[dict]:
+    with _conn() as con:
+        if category:
+            rows = con.execute(
+                "SELECT * FROM discovered_services WHERE category = ? ORDER BY relevance_score DESC LIMIT ?",
+                (category, limit),
+            ).fetchall()
+        else:
+            rows = con.execute(
+                "SELECT * FROM discovered_services ORDER BY relevance_score DESC LIMIT ?",
+                (limit,),
+            ).fetchall()
+    return [
+        {"id": r["id"], "service_name": r["service_name"], "category": r["category"],
+         "description": r["description"], "url": r["url"],
+         "capabilities": json.loads(r["capabilities"]) if r["capabilities"] else [],
+         "relevance_score": r["relevance_score"], "times_recommended": r["times_recommended"]}
+        for r in rows
+    ]
+
+
+def increment_service_recommendation(service_id: int) -> None:
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        con.execute(
+            "UPDATE discovered_services SET times_recommended = times_recommended + 1, updated_at = ? WHERE id = ?",
+            (now, service_id),
         )

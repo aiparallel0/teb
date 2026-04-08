@@ -52,7 +52,7 @@ def clean_tables():
         for table in [
             "spending_requests", "spending_budgets", "execution_logs",
             "tasks", "goals", "users", "user_profiles", "messaging_configs",
-            "api_credentials", "success_paths",
+            "api_credentials", "success_paths", "telegram_sessions",
         ]:
             try:
                 con.execute(f"DELETE FROM {table}")
@@ -180,7 +180,7 @@ class TestTelegramWebhook:
         req = storage.create_spending_request(req)
 
         r = client.post("/api/messaging/telegram/webhook", json={
-            "message": {"text": f"/approve {req.id}"}
+            "message": {"text": f"/approve {req.id}", "chat": {"id": 12345}}
         })
         assert r.status_code == 200
         assert r.json()["action"] == "approved"
@@ -197,37 +197,41 @@ class TestTelegramWebhook:
         req = storage.create_spending_request(req)
 
         r = client.post("/api/messaging/telegram/webhook", json={
-            "message": {"text": f"/deny {req.id} too expensive"}
+            "message": {"text": f"/deny {req.id} too expensive", "chat": {"id": 12345}}
         })
         assert r.status_code == 200
         assert r.json()["action"] == "denied"
 
     def test_goal_command(self):
         r = client.post("/api/messaging/telegram/webhook", json={
-            "message": {"text": "/goal Build a portfolio website"}
+            "message": {"text": "/goal Build a portfolio website", "chat": {"id": 12345}}
         })
         assert r.status_code == 200
         assert r.json()["action"] == "goal_created"
 
     def test_next_command_no_goals(self):
         r = client.post("/api/messaging/telegram/webhook", json={
-            "message": {"text": "/next"}
+            "message": {"text": "/next", "chat": {"id": 99999}}
         })
         assert r.status_code == 200
 
     def test_done_command(self):
         goal = _make_goal()
         _make_task(goal.id, status="in_progress")
+        # Create a session binding the chat to this goal
+        storage.upsert_telegram_session("54321", goal.id, "idle")
         r = client.post("/api/messaging/telegram/webhook", json={
-            "message": {"text": "/done"}
+            "message": {"text": "/done", "chat": {"id": 54321}}
         })
         assert r.status_code == 200
 
     def test_skip_command(self):
         goal = _make_goal()
         _make_task(goal.id, status="in_progress")
+        # Create a session binding the chat to this goal
+        storage.upsert_telegram_session("54322", goal.id, "idle")
         r = client.post("/api/messaging/telegram/webhook", json={
-            "message": {"text": "/skip"}
+            "message": {"text": "/skip", "chat": {"id": 54322}}
         })
         assert r.status_code == 200
         assert r.json()["action"] == "task_skipped"
@@ -239,7 +243,13 @@ class TestTelegramWebhook:
 
 class TestBudgetExecutorWiring:
     def test_execute_pauses_on_approval_required(self):
-        goal = _make_goal()
+        # Register a user and get auth headers
+        r = client.post("/api/auth/register", json={"email": "exec_test@teb.test", "password": "testpass123"})
+        if r.status_code not in (200, 201):
+            r = client.post("/api/auth/login", json={"email": "exec_test@teb.test", "password": "testpass123"})
+        headers = _auth_header(r.json()["token"])
+
+        goal = _make_goal(user_id=None)  # unscoped goal for simplicity
         task = _make_task(goal.id)
         budget = SpendingBudget(
             goal_id=goal.id, daily_limit=100, total_limit=1000,
@@ -252,7 +262,7 @@ class TestBudgetExecutorWiring:
         cred = ApiCredential(name="test", base_url="https://example.com", auth_header="X-Key", auth_value="key123", description="test api")
         storage.create_credential(cred)
 
-        r = client.post(f"/api/tasks/{task.id}/execute")
+        r = client.post(f"/api/tasks/{task.id}/execute", headers=headers)
         data = r.json()
         # It should either pause for approval or fail because no real API
         # The key is that it checks budgets
@@ -515,7 +525,8 @@ class TestUserStorage:
 
         assert len(storage.list_goals(user_id=u1.id)) == 1
         assert len(storage.list_goals(user_id=u2.id)) == 1
-        assert len(storage.list_goals()) == 2
+        # Unauthenticated list_goals() returns only unscoped goals (user_id IS NULL)
+        assert len(storage.list_goals()) == 0
 
     def test_user_profile_per_user(self):
         u1 = storage.create_user(User(email="p1@t.com", password_hash="h"))

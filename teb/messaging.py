@@ -154,6 +154,7 @@ def send_notification(
     event_type: str,
     data: Dict[str, Any],
     configs: Optional[List[MessagingConfig]] = None,
+    user_id: Optional[int] = None,
 ) -> Dict[str, Any]:
     """
     Send a notification to all enabled messaging channels.
@@ -164,12 +165,13 @@ def send_notification(
                     goal_complete, drip_task
         data: Event-specific data dict
         configs: Optional pre-loaded configs; if None, loads from DB
+        user_id: Optional user ID to scope notifications to that user's configs
 
     Returns:
         Dict with "sent" count and "failed" count
     """
     if configs is None:
-        configs = storage.list_messaging_configs(enabled_only=True)
+        configs = storage.list_messaging_configs(enabled_only=True, user_id=user_id)
 
     if not configs:
         return {"sent": 0, "failed": 0, "channels": []}
