@@ -3,11 +3,29 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 
+# ─── User / Auth ─────────────────────────────────────────────────────────────
+
+@dataclass
+class User:
+    email: str
+    password_hash: str = ""
+    id: Optional[int] = None
+    created_at: Optional[datetime] = None
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "email": self.email,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
 @dataclass
 class Goal:
     title: str
     description: str
     id: Optional[int] = None
+    user_id: Optional[int] = None     # FK to users; None for legacy/unscoped goals
     status: str = "drafting"          # drafting | clarifying | decomposed | in_progress | done
     answers: dict = field(default_factory=dict)
     created_at: Optional[datetime] = None
@@ -183,6 +201,7 @@ class NudgeEvent:
 class UserProfile:
     """Persistent user profile that accumulates across goals."""
     id: Optional[int] = None
+    user_id: Optional[int] = None     # FK to users; legacy profiles have None
     skills: str = ""                   # comma-separated list of skills
     available_hours_per_day: float = 1.0
     experience_level: str = "unknown"  # beginner | intermediate | advanced | unknown

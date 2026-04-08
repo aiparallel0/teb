@@ -5,12 +5,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from teb import agents, browser, decomposer, executor, integrations, messaging, storage
+from teb import agents, auth, browser, decomposer, executor, integrations, messaging, storage
 from teb.models import (
     ApiCredential, BrowserAction, CheckIn, ExecutionLog,
     Goal, MessagingConfig, NudgeEvent, OutcomeMetric,
@@ -143,6 +143,76 @@ class DripClarifyAnswer(BaseModel):
     answer: str
 
 
+class AuthRegister(BaseModel):
+    email: str
+    password: str
+
+
+class AuthLogin(BaseModel):
+    email: str
+    password: str
+
+
+class TelegramUpdate(BaseModel):
+    """Minimal Telegram webhook update structure."""
+    message: Optional[dict] = None
+
+
+# ─── Auth helper ──────────────────────────────────────────────────────────────
+
+def _get_user_id(request: Request) -> Optional[int]:
+    """Extract user_id from the request's Authorization header (Bearer token).
+
+    Returns None if no valid token is present (allows unauthenticated access
+    to legacy endpoints).
+    """
+    header = request.headers.get("authorization", "")
+    if header.startswith("Bearer "):
+        token = header[7:]
+        return auth.decode_token(token)
+    return None
+
+
+def _require_user(request: Request) -> int:
+    """Extract user_id or raise 401."""
+    uid = _get_user_id(request)
+    if uid is None:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    return uid
+
+
+# ─── Auth ─────────────────────────────────────────────────────────────────────
+
+@app.post("/api/auth/register", status_code=201)
+async def register(body: AuthRegister):
+    """Register a new user and return a JWT token."""
+    try:
+        result = auth.register_user(body.email, body.password)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    return result
+
+
+@app.post("/api/auth/login")
+async def login(body: AuthLogin):
+    """Log in and return a JWT token."""
+    try:
+        result = auth.login_user(body.email, body.password)
+    except ValueError as exc:
+        raise HTTPException(status_code=401, detail=str(exc))
+    return result
+
+
+@app.get("/api/auth/me")
+async def auth_me(request: Request):
+    """Get the current authenticated user."""
+    uid = _require_user(request)
+    user = storage.get_user(uid)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    return user.to_dict()
+
+
 # ─── Frontend ─────────────────────────────────────────────────────────────────
 
 @app.get("/", response_class=HTMLResponse)
@@ -154,17 +224,20 @@ async def serve_frontend():
 # ─── Goals ────────────────────────────────────────────────────────────────────
 
 @app.post("/api/goals", status_code=201)
-async def create_goal(body: GoalCreate):
+async def create_goal(body: GoalCreate, request: Request):
+    user_id = _get_user_id(request)
     goal = Goal(title=body.title.strip(), description=body.description.strip())
     if not goal.title:
         raise HTTPException(status_code=422, detail="title must not be empty")
+    goal.user_id = user_id
     goal = storage.create_goal(goal)
     return goal.to_dict()
 
 
 @app.get("/api/goals")
-async def list_goals():
-    return [g.to_dict() for g in storage.list_goals()]
+async def list_goals(request: Request):
+    user_id = _get_user_id(request)
+    return [g.to_dict() for g in storage.list_goals(user_id=user_id)]
 
 
 @app.get("/api/goals/{goal_id}")
@@ -496,6 +569,50 @@ async def execute_task(task_id: int):
             "plan": plan.to_dict(),
             "logs": [],
         }
+
+    # P2.1: Budget validation — check if the goal has a budget and if spending is required
+    budgets = storage.list_spending_budgets(task.goal_id)
+    if budgets:
+        # Check if any budget requires approval
+        for budget in budgets:
+            storage.maybe_reset_daily_spending(budget)
+            if budget.require_approval:
+                # Create a spending request and pause execution
+                from teb.models import SpendingRequest as SpReq
+                sr = SpReq(
+                    task_id=task_id,
+                    budget_id=budget.id,  # type: ignore[arg-type]
+                    amount=0,  # estimated; real amount unknown until execution
+                    description=f"Automated execution of: {task.title}",
+                    service="api_execution",
+                    status="pending",
+                )
+                sr = storage.create_spending_request(sr)
+                messaging.send_notification("spending_request", {
+                    "request_id": sr.id,
+                    "amount": 0,
+                    "description": sr.description,
+                    "service": sr.service,
+                    "task_title": task.title,
+                })
+                # Log pending approval
+                pending_log = ExecutionLog(
+                    task_id=task_id,
+                    credential_id=None,
+                    action="Execution paused — pending budget approval",
+                    request_summary=f"Budget {budget.category} requires approval",
+                    response_summary=f"Spending request #{sr.id} created",
+                    status="success",
+                )
+                storage.create_execution_log(pending_log)
+                return {
+                    "task_id": task_id,
+                    "executed": False,
+                    "reason": "Budget requires approval. A spending request has been created.",
+                    "plan": plan.to_dict(),
+                    "logs": [pending_log.to_dict()],
+                    "spending_request_id": sr.id,
+                }
 
     # Mark task as executing
     task.status = "executing"
@@ -1088,6 +1205,9 @@ async def create_spending_request(body: SpendingRequestCreate):
             detail=f"No budget found for goal {task.goal_id}. Create one first via POST /api/budgets",
         )
 
+    # Check-on-request daily reset
+    budget = storage.maybe_reset_daily_spending(budget)
+
     # Validate against limits
     validation = decomposer.validate_spending(
         body.amount, budget.daily_limit, budget.total_limit,
@@ -1290,3 +1410,65 @@ async def test_messaging(config_id: int):
     if not result.get("success"):
         raise HTTPException(status_code=400, detail=result.get("error", "Test message failed"))
     return result
+
+
+@app.post("/api/messaging/telegram/webhook")
+async def telegram_webhook(body: TelegramUpdate):
+    """
+    Inbound Telegram webhook endpoint.
+
+    Parses /approve {id} and /deny {id} commands from Telegram messages
+    and routes them to the spending action endpoint.
+    """
+    import re as _re
+
+    if not body.message:
+        return {"ok": True}
+
+    text = body.message.get("text", "").strip()
+    if not text:
+        return {"ok": True}
+
+    # Parse /approve {id} or /deny {id}
+    approve_match = _re.match(r"^/approve\s+(\d+)$", text)
+    deny_match = _re.match(r"^/deny\s+(\d+)(?:\s+(.+))?$", text)
+
+    if approve_match:
+        request_id = int(approve_match.group(1))
+        req = storage.get_spending_request(request_id)
+        if not req:
+            return {"ok": True, "error": "Request not found"}
+        if req.status != "pending":
+            return {"ok": True, "error": f"Request already {req.status}"}
+        req.status = "approved"
+        budget = storage.get_spending_budget(req.budget_id)
+        if budget:
+            budget.spent_today += req.amount
+            budget.spent_total += req.amount
+            storage.update_spending_budget(budget)
+        storage.update_spending_request(req)
+        messaging.send_notification("spending_approved", {
+            "amount": req.amount,
+            "description": req.description,
+        })
+        return {"ok": True, "action": "approved", "request_id": request_id}
+
+    if deny_match:
+        request_id = int(deny_match.group(1))
+        reason = deny_match.group(2) or ""
+        req = storage.get_spending_request(request_id)
+        if not req:
+            return {"ok": True, "error": "Request not found"}
+        if req.status != "pending":
+            return {"ok": True, "error": f"Request already {req.status}"}
+        req.status = "denied"
+        req.denial_reason = reason
+        storage.update_spending_request(req)
+        messaging.send_notification("spending_denied", {
+            "amount": req.amount,
+            "description": req.description,
+            "reason": reason,
+        })
+        return {"ok": True, "action": "denied", "request_id": request_id}
+
+    return {"ok": True}

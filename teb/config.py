@@ -18,6 +18,14 @@ AI_PROVIDER: str = os.getenv("TEB_AI_PROVIDER", "auto")
 EXECUTOR_TIMEOUT: int = int(os.getenv("TEB_EXECUTOR_TIMEOUT", "30"))  # HTTP timeout in seconds
 EXECUTOR_MAX_RETRIES: int = int(os.getenv("TEB_EXECUTOR_MAX_RETRIES", "2"))
 
+# JWT / auth settings
+JWT_SECRET: str = os.getenv("TEB_JWT_SECRET", "change-me-in-production-not-safe")
+JWT_ALGORITHM: str = "HS256"
+JWT_EXPIRE_HOURS: int = int(os.getenv("TEB_JWT_EXPIRE_HOURS", "168"))  # 7 days
+
+# Credential encryption key (Fernet, base64-encoded 32 bytes)
+SECRET_KEY: Optional[str] = os.getenv("TEB_SECRET_KEY")
+
 
 def get_ai_provider() -> Optional[str]:
     """Resolve which AI provider to use. Returns 'anthropic', 'openai', or None."""

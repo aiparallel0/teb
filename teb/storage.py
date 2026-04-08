@@ -22,6 +22,7 @@ from teb.models import (
     SpendingRequest,
     SuccessPath,
     Task,
+    User,
     UserProfile,
 )
 
@@ -57,8 +58,16 @@ def _conn() -> Generator[sqlite3.Connection, None, None]:
 def init_db() -> None:
     with _conn() as con:
         con.executescript("""
+            CREATE TABLE IF NOT EXISTS users (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                email         TEXT    NOT NULL UNIQUE,
+                password_hash TEXT    NOT NULL,
+                created_at    TEXT    NOT NULL
+            );
+
             CREATE TABLE IF NOT EXISTS goals (
                 id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id     INTEGER REFERENCES users(id) ON DELETE CASCADE,
                 title       TEXT    NOT NULL,
                 description TEXT    NOT NULL DEFAULT '',
                 status      TEXT    NOT NULL DEFAULT 'drafting',
@@ -66,6 +75,8 @@ def init_db() -> None:
                 created_at  TEXT    NOT NULL,
                 updated_at  TEXT    NOT NULL
             );
+
+            CREATE INDEX IF NOT EXISTS idx_goals_user ON goals(user_id);
 
             CREATE TABLE IF NOT EXISTS tasks (
                 id                 INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -133,6 +144,7 @@ def init_db() -> None:
 
             CREATE TABLE IF NOT EXISTS user_profiles (
                 id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id                 INTEGER REFERENCES users(id) ON DELETE CASCADE,
                 skills                  TEXT    NOT NULL DEFAULT '',
                 available_hours_per_day REAL    NOT NULL DEFAULT 1.0,
                 experience_level        TEXT    NOT NULL DEFAULT 'unknown',
@@ -268,6 +280,76 @@ def init_db() -> None:
         """)
 
 
+# ─── Credential Encryption ───────────────────────────────────────────────────
+
+def _get_fernet():
+    """Get Fernet encryptor if TEB_SECRET_KEY is set, else None."""
+    from teb import config as _cfg
+    key = _cfg.SECRET_KEY
+    if not key:
+        return None
+    try:
+        from cryptography.fernet import Fernet
+        return Fernet(key.encode() if isinstance(key, str) else key)
+    except Exception:
+        return None
+
+
+def _encrypt_value(value: str) -> str:
+    """Encrypt a value if encryption is configured, else return as-is."""
+    f = _get_fernet()
+    if f and value:
+        return f.encrypt(value.encode()).decode()
+    return value
+
+
+def _decrypt_value(value: str) -> str:
+    """Decrypt a value if encryption is configured, else return as-is."""
+    f = _get_fernet()
+    if f and value:
+        try:
+            return f.decrypt(value.encode()).decode()
+        except Exception:
+            # Not encrypted or wrong key — return as-is
+            return value
+    return value
+
+
+# ─── Users ───────────────────────────────────────────────────────────────────
+
+def _row_to_user(row: sqlite3.Row) -> User:
+    return User(
+        id=row["id"],
+        email=row["email"],
+        password_hash=row["password_hash"],
+        created_at=datetime.fromisoformat(row["created_at"]),
+    )
+
+
+def create_user(user: User) -> User:
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        cur = con.execute(
+            "INSERT INTO users (email, password_hash, created_at) VALUES (?, ?, ?)",
+            (user.email, user.password_hash, now),
+        )
+        user.id = cur.lastrowid
+        user.created_at = datetime.fromisoformat(now)
+    return user
+
+
+def get_user_by_email(email: str) -> Optional[User]:
+    with _conn() as con:
+        row = con.execute("SELECT * FROM users WHERE email = ?", (email,)).fetchone()
+    return _row_to_user(row) if row else None
+
+
+def get_user(user_id: int) -> Optional[User]:
+    with _conn() as con:
+        row = con.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+    return _row_to_user(row) if row else None
+
+
 # ─── Goals ────────────────────────────────────────────────────────────────────
 
 def _row_to_goal(row: sqlite3.Row) -> Goal:
@@ -278,6 +360,7 @@ def _row_to_goal(row: sqlite3.Row) -> Goal:
         status=row["status"],
         answers=json.loads(row["answers"]),
     )
+    g.user_id = row["user_id"] if "user_id" in row.keys() else None
     g.created_at = datetime.fromisoformat(row["created_at"])
     g.updated_at = datetime.fromisoformat(row["updated_at"])
     return g
@@ -287,9 +370,9 @@ def create_goal(goal: Goal) -> Goal:
     now = datetime.now(timezone.utc).isoformat()
     with _conn() as con:
         cur = con.execute(
-            "INSERT INTO goals (title, description, status, answers, created_at, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            (goal.title, goal.description, goal.status, json.dumps(goal.answers), now, now),
+            "INSERT INTO goals (user_id, title, description, status, answers, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (goal.user_id, goal.title, goal.description, goal.status, json.dumps(goal.answers), now, now),
         )
         goal.id = cur.lastrowid
         goal.created_at = datetime.fromisoformat(now)
@@ -303,9 +386,15 @@ def get_goal(goal_id: int) -> Optional[Goal]:
     return _row_to_goal(row) if row else None
 
 
-def list_goals() -> List[Goal]:
-    with _conn() as con:
-        rows = con.execute("SELECT * FROM goals ORDER BY created_at DESC").fetchall()
+def list_goals(user_id: Optional[int] = None) -> List[Goal]:
+    if user_id is not None:
+        with _conn() as con:
+            rows = con.execute(
+                "SELECT * FROM goals WHERE user_id = ? ORDER BY created_at DESC", (user_id,)
+            ).fetchall()
+    else:
+        with _conn() as con:
+            rows = con.execute("SELECT * FROM goals ORDER BY created_at DESC").fetchall()
     return [_row_to_goal(r) for r in rows]
 
 
@@ -410,7 +499,7 @@ def _row_to_credential(row: sqlite3.Row) -> ApiCredential:
         name=row["name"],
         base_url=row["base_url"],
         auth_header=row["auth_header"],
-        auth_value=row["auth_value"],
+        auth_value=_decrypt_value(row["auth_value"]),
         description=row["description"],
         created_at=datetime.fromisoformat(row["created_at"]),
     )
@@ -418,11 +507,12 @@ def _row_to_credential(row: sqlite3.Row) -> ApiCredential:
 
 def create_credential(cred: ApiCredential) -> ApiCredential:
     now = datetime.now(timezone.utc).isoformat()
+    encrypted_value = _encrypt_value(cred.auth_value)
     with _conn() as con:
         cur = con.execute(
             "INSERT INTO api_credentials (name, base_url, auth_header, auth_value, description, created_at) "
             "VALUES (?, ?, ?, ?, ?, ?)",
-            (cred.name, cred.base_url, cred.auth_header, cred.auth_value, cred.description, now),
+            (cred.name, cred.base_url, cred.auth_header, encrypted_value, cred.description, now),
         )
         cred.id = cur.lastrowid
         cred.created_at = datetime.fromisoformat(now)
@@ -639,6 +729,7 @@ def acknowledge_nudge(nudge_id: int) -> Optional[NudgeEvent]:
 def _row_to_user_profile(row: sqlite3.Row) -> UserProfile:
     return UserProfile(
         id=row["id"],
+        user_id=row["user_id"] if "user_id" in row.keys() else None,
         skills=row["skills"],
         available_hours_per_day=row["available_hours_per_day"],
         experience_level=row["experience_level"],
@@ -651,18 +742,27 @@ def _row_to_user_profile(row: sqlite3.Row) -> UserProfile:
     )
 
 
-def get_or_create_profile() -> UserProfile:
-    """Get the singleton user profile, creating it if it doesn't exist."""
+def get_or_create_profile(user_id: Optional[int] = None) -> UserProfile:
+    """Get the user profile, creating it if it doesn't exist.
+
+    If user_id is provided, returns the profile for that user.
+    Otherwise, returns the singleton profile (legacy behavior).
+    """
     with _conn() as con:
-        row = con.execute("SELECT * FROM user_profiles ORDER BY id LIMIT 1").fetchone()
+        if user_id is not None:
+            row = con.execute(
+                "SELECT * FROM user_profiles WHERE user_id = ? LIMIT 1", (user_id,)
+            ).fetchone()
+        else:
+            row = con.execute("SELECT * FROM user_profiles ORDER BY id LIMIT 1").fetchone()
         if row:
             return _row_to_user_profile(row)
         now = datetime.now(timezone.utc).isoformat()
         cur = con.execute(
-            "INSERT INTO user_profiles (created_at, updated_at) VALUES (?, ?)",
-            (now, now),
+            "INSERT INTO user_profiles (user_id, created_at, updated_at) VALUES (?, ?, ?)",
+            (user_id, now, now),
         )
-        profile = UserProfile(id=cur.lastrowid)
+        profile = UserProfile(id=cur.lastrowid, user_id=user_id)
         profile.created_at = datetime.fromisoformat(now)
         profile.updated_at = datetime.fromisoformat(now)
     return profile
@@ -1085,6 +1185,17 @@ def reset_daily_spending(goal_id: int) -> None:
             "UPDATE spending_budgets SET spent_today = 0, updated_at = ? WHERE goal_id = ?",
             (now, goal_id),
         )
+
+
+def maybe_reset_daily_spending(budget: SpendingBudget) -> SpendingBudget:
+    """Check-on-request: reset spent_today if the last update was on a previous day."""
+    if budget.updated_at:
+        last_date = budget.updated_at.date() if isinstance(budget.updated_at, datetime) else None
+        today = datetime.now(timezone.utc).date()
+        if last_date and last_date < today and budget.spent_today > 0:
+            budget.spent_today = 0.0
+            update_spending_budget(budget)
+    return budget
 
 
 # ─── Spending Requests ───────────────────────────────────────────────────────
