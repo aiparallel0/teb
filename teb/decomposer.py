@@ -567,7 +567,7 @@ def _detect_template(goal: Goal) -> str:
     text = f"{goal.title} {goal.description}"
     if _MONEY_KEYWORDS.search(text) and _MONEY_ONLINE_QUALIFIERS.search(text):
         return "make_money_online"
-    if _BOOK_KEYWORDS.search(text) and re.search(r"\b(write|book|novel|manuscript|author|publish|memoir|ebook)\b", text, re.I):
+    if _BOOK_KEYWORDS.search(text):
         return "write_book"
     if _STARTUP_KEYWORDS.search(text):
         return "launch_startup"
@@ -581,8 +581,6 @@ def _detect_template(goal: Goal) -> str:
         return "build_project"
     if _LEARN_KEYWORDS.search(text):
         return "learn_skill"
-    if _HEALTH_KEYWORDS.search(text):
-        return "improve_health"
     if _SIDE_PROJECT_KEYWORDS.search(text):
         return "side_project"
     return "generic"

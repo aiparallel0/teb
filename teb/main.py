@@ -1439,8 +1439,8 @@ async def telegram_webhook(body: TelegramUpdate):
         return {"ok": True}
 
     # Parse /approve {id} or /deny {id}
-    approve_match = _re.match(r"^/approve\s+(\d+)$", text)
-    deny_match = _re.match(r"^/deny\s+(\d+)(?:\s+(.+))?$", text)
+    approve_match = _re.match(r"^/approve +(\d+)$", text)
+    deny_match = _re.match(r"^/deny +(\d+)(?: +(.+))?$", text)
 
     if approve_match:
         request_id = int(approve_match.group(1))
@@ -1482,7 +1482,7 @@ async def telegram_webhook(body: TelegramUpdate):
 
     # P3.4: Telegram bot drip flow commands
     # /goal <text> — create a new goal
-    goal_match = _re.match(r"^/goal\s+(.+)$", text, _re.S)
+    goal_match = _re.match(r"^/goal +(.+)$", text, _re.S)
     if goal_match:
         goal_text = goal_match.group(1).strip()
         goal = Goal(title=goal_text, description="Created via Telegram")
