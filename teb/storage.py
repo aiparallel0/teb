@@ -7,10 +7,13 @@ from typing import Generator, List, Optional
 from teb.config import get_db_path
 from teb.models import (
     AgentHandoff,
+    AgentMessage,
     ApiCredential,
+    BrowserAction,
     CheckIn,
     ExecutionLog,
     Goal,
+    Integration,
     NudgeEvent,
     OutcomeMetric,
     ProactiveSuggestion,
@@ -175,6 +178,48 @@ def init_db() -> None:
 
             CREATE INDEX IF NOT EXISTS idx_agent_handoffs_goal
                 ON agent_handoffs(goal_id, created_at DESC);
+
+            CREATE TABLE IF NOT EXISTS agent_messages (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                goal_id         INTEGER NOT NULL REFERENCES goals(id) ON DELETE CASCADE,
+                from_agent      TEXT    NOT NULL,
+                to_agent        TEXT    NOT NULL,
+                message_type    TEXT    NOT NULL DEFAULT 'info',
+                content         TEXT    NOT NULL DEFAULT '',
+                in_reply_to     INTEGER REFERENCES agent_messages(id) ON DELETE SET NULL,
+                created_at      TEXT    NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_agent_messages_goal
+                ON agent_messages(goal_id, created_at ASC);
+
+            CREATE TABLE IF NOT EXISTS browser_actions (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                task_id         INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+                action_type     TEXT    NOT NULL,
+                target          TEXT    NOT NULL DEFAULT '',
+                value           TEXT    NOT NULL DEFAULT '',
+                status          TEXT    NOT NULL DEFAULT 'pending',
+                error           TEXT    NOT NULL DEFAULT '',
+                screenshot_path TEXT    NOT NULL DEFAULT '',
+                created_at      TEXT    NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_browser_actions_task
+                ON browser_actions(task_id, created_at ASC);
+
+            CREATE TABLE IF NOT EXISTS integrations (
+                id               INTEGER PRIMARY KEY AUTOINCREMENT,
+                service_name     TEXT    NOT NULL UNIQUE,
+                category         TEXT    NOT NULL DEFAULT 'general',
+                base_url         TEXT    NOT NULL DEFAULT '',
+                auth_type        TEXT    NOT NULL DEFAULT 'api_key',
+                auth_header      TEXT    NOT NULL DEFAULT 'Authorization',
+                docs_url         TEXT    NOT NULL DEFAULT '',
+                capabilities     TEXT    NOT NULL DEFAULT '[]',
+                common_endpoints TEXT    NOT NULL DEFAULT '[]',
+                created_at       TEXT    NOT NULL
+            );
         """)
 
 
@@ -745,3 +790,158 @@ def list_handoffs(goal_id: int) -> List[AgentHandoff]:
             (goal_id,),
         ).fetchall()
     return [_row_to_handoff(r) for r in rows]
+
+
+# ─── Agent Messages ──────────────────────────────────────────────────────────
+
+def _row_to_agent_message(row: sqlite3.Row) -> AgentMessage:
+    return AgentMessage(
+        id=row["id"],
+        goal_id=row["goal_id"],
+        from_agent=row["from_agent"],
+        to_agent=row["to_agent"],
+        message_type=row["message_type"],
+        content=row["content"],
+        in_reply_to=row["in_reply_to"],
+        created_at=datetime.fromisoformat(row["created_at"]) if row["created_at"] else None,
+    )
+
+
+def create_agent_message(msg: AgentMessage) -> AgentMessage:
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        cur = con.execute(
+            """INSERT INTO agent_messages
+               (goal_id, from_agent, to_agent, message_type, content, in_reply_to, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (msg.goal_id, msg.from_agent, msg.to_agent,
+             msg.message_type, msg.content, msg.in_reply_to, now),
+        )
+        msg.id = cur.lastrowid
+        msg.created_at = datetime.fromisoformat(now)
+    return msg
+
+
+def list_agent_messages(goal_id: int, agent_type: Optional[str] = None) -> List[AgentMessage]:
+    """List agent messages for a goal, optionally filtered to messages involving a specific agent."""
+    if agent_type:
+        query = ("SELECT * FROM agent_messages WHERE goal_id = ? "
+                 "AND (from_agent = ? OR to_agent = ?) ORDER BY created_at ASC")
+        params: list = [goal_id, agent_type, agent_type]
+    else:
+        query = "SELECT * FROM agent_messages WHERE goal_id = ? ORDER BY created_at ASC"
+        params = [goal_id]
+    with _conn() as con:
+        rows = con.execute(query, params).fetchall()
+    return [_row_to_agent_message(r) for r in rows]
+
+
+# ─── Browser Actions ────────────────────────────────────────────────────────
+
+def _row_to_browser_action(row: sqlite3.Row) -> BrowserAction:
+    return BrowserAction(
+        id=row["id"],
+        task_id=row["task_id"],
+        action_type=row["action_type"],
+        target=row["target"],
+        value=row["value"],
+        status=row["status"],
+        error=row["error"],
+        screenshot_path=row["screenshot_path"],
+        created_at=datetime.fromisoformat(row["created_at"]) if row["created_at"] else None,
+    )
+
+
+def create_browser_action(action: BrowserAction) -> BrowserAction:
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        cur = con.execute(
+            """INSERT INTO browser_actions
+               (task_id, action_type, target, value, status, error, screenshot_path, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (action.task_id, action.action_type, action.target,
+             action.value, action.status, action.error,
+             action.screenshot_path, now),
+        )
+        action.id = cur.lastrowid
+        action.created_at = datetime.fromisoformat(now)
+    return action
+
+
+def update_browser_action(action: BrowserAction) -> BrowserAction:
+    with _conn() as con:
+        con.execute(
+            """UPDATE browser_actions
+               SET status = ?, value = ?, error = ?, screenshot_path = ?
+               WHERE id = ?""",
+            (action.status, action.value, action.error, action.screenshot_path, action.id),
+        )
+    return action
+
+
+def list_browser_actions(task_id: int) -> List[BrowserAction]:
+    with _conn() as con:
+        rows = con.execute(
+            "SELECT * FROM browser_actions WHERE task_id = ? ORDER BY created_at ASC",
+            (task_id,),
+        ).fetchall()
+    return [_row_to_browser_action(r) for r in rows]
+
+
+# ─── Integrations ────────────────────────────────────────────────────────────
+
+def _row_to_integration(row: sqlite3.Row) -> Integration:
+    return Integration(
+        id=row["id"],
+        service_name=row["service_name"],
+        category=row["category"],
+        base_url=row["base_url"],
+        auth_type=row["auth_type"],
+        auth_header=row["auth_header"],
+        docs_url=row["docs_url"],
+        capabilities=row["capabilities"],
+        common_endpoints=row["common_endpoints"],
+        created_at=datetime.fromisoformat(row["created_at"]) if row["created_at"] else None,
+    )
+
+
+def create_integration(integration: Integration) -> Integration:
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        cur = con.execute(
+            """INSERT INTO integrations
+               (service_name, category, base_url, auth_type, auth_header,
+                docs_url, capabilities, common_endpoints, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (integration.service_name, integration.category, integration.base_url,
+             integration.auth_type, integration.auth_header, integration.docs_url,
+             integration.capabilities, integration.common_endpoints, now),
+        )
+        integration.id = cur.lastrowid
+        integration.created_at = datetime.fromisoformat(now)
+    return integration
+
+
+def get_integration(service_name: str) -> Optional[Integration]:
+    with _conn() as con:
+        row = con.execute(
+            "SELECT * FROM integrations WHERE service_name = ?", (service_name,),
+        ).fetchone()
+    return _row_to_integration(row) if row else None
+
+
+def list_integrations(category: Optional[str] = None) -> List[Integration]:
+    if category:
+        query = "SELECT * FROM integrations WHERE category = ? ORDER BY service_name"
+        params: list = [category]
+    else:
+        query = "SELECT * FROM integrations ORDER BY service_name"
+        params = []
+    with _conn() as con:
+        rows = con.execute(query, params).fetchall()
+    return [_row_to_integration(r) for r in rows]
+
+
+def delete_integration(integration_id: int) -> None:
+    with _conn() as con:
+        con.execute("DELETE FROM integrations WHERE id = ?", (integration_id,))

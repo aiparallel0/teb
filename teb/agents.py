@@ -27,7 +27,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 from teb import config, storage
-from teb.models import AgentHandoff, Goal, Task
+from teb.models import AgentHandoff, AgentMessage, Goal, Task
 
 
 # ─── Agent definitions ───────────────────────────────────────────────────────
@@ -58,6 +58,7 @@ class AgentOutput:
     tasks: List[Dict[str, Any]]       # tasks to create
     delegations: List[Dict[str, Any]]  # requests to delegate to other agents
     summary: str                       # what this agent decided/did
+    messages: List[Dict[str, Any]] = field(default_factory=list)  # messages to other agents
 
 
 # ─── Agent registry ──────────────────────────────────────────────────────────
@@ -107,11 +108,17 @@ _register(AgentSpec(
         "  ],\n"
         '  "delegations": [\n'
         '    {"to_agent": "marketing", "instruction": "what to do"}\n'
+        "  ],\n"
+        '  "messages": [\n'
+        '    {"to_agent": "web_dev", "content": "Marketing will need a landing page, '
+        'coordinate with them on design", "message_type": "context"}\n'
         "  ]\n"
         "}\n\n"
         "Rules:\n"
         "- Create 1-3 immediate tasks the user should do themselves\n"
         "- Delegate specialized work to 2-4 specialist agents\n"
+        "- Send messages to agents that need to coordinate with each other\n"
+        "- Messages share context between agents so they produce coherent, non-overlapping work\n"
         "- Be specific and actionable, not generic\n"
         "- Each delegation instruction should be detailed enough for the specialist\n"
         "- Focus on the fastest path to a concrete result"
@@ -294,6 +301,16 @@ def _run_agent_ai(
         if context:
             user_prompt += f"\nContext from other agents: {context}\n"
 
+        # Include messages from other agents for richer collaboration
+        if goal.id is not None:
+            messages = storage.list_agent_messages(goal.id, agent_type=spec.agent_type)
+            if messages:
+                msg_text = "\n".join(
+                    f"[{m.from_agent} → {m.to_agent}] ({m.message_type}): {m.content}"
+                    for m in messages
+                )
+                user_prompt += f"\nMessages from other agents:\n{msg_text}\n"
+
         data = ai_chat_json(spec.system_prompt, user_prompt, temperature=0.2)
 
         tasks = data.get("tasks", [])
@@ -321,9 +338,27 @@ def _run_agent_ai(
                     "instruction": str(d.get("instruction", "")),
                 })
 
+        # Parse inter-agent messages
+        raw_messages = data.get("messages", [])
+        if not isinstance(raw_messages, list):
+            raw_messages = []
+        valid_messages = []
+        for m in raw_messages:
+            if isinstance(m, dict) and m.get("to_agent") and m.get("content"):
+                valid_messages.append({
+                    "to_agent": str(m["to_agent"]),
+                    "content": str(m["content"]),
+                    "message_type": str(m.get("message_type", "info")),
+                })
+
         summary = str(data.get("summary", data.get("strategy_summary", "")))
 
-        return AgentOutput(tasks=valid_tasks, delegations=valid_delegations, summary=summary)
+        return AgentOutput(
+            tasks=valid_tasks,
+            delegations=valid_delegations,
+            summary=summary,
+            messages=valid_messages,
+        )
     except Exception as exc:
         return AgentOutput(tasks=[], delegations=[], summary=f"Agent error: {exc}")
 
@@ -558,15 +593,44 @@ def orchestrate_goal(goal: Goal) -> Dict[str, Any]:
     Full multi-agent orchestration for a goal.
 
     1. Coordinator analyzes the goal
-    2. Coordinator delegates to specialists
-    3. Specialists produce tasks and may sub-delegate
-    4. All handoffs are logged
-    5. All tasks are created in the database
+    2. Coordinator sends messages to specialists for coordination
+    3. Coordinator delegates to specialists
+    4. Specialists produce tasks, may send messages, and may sub-delegate
+    5. All handoffs and messages are logged
+    6. All tasks are created in the database
 
     Returns a summary of the orchestration.
     """
     all_tasks: List[Task] = []
     all_handoffs: List[Dict] = []
+    all_messages: List[Dict] = []
+
+    def _persist_messages(
+        from_agent_type: str,
+        output: AgentOutput,
+    ) -> None:
+        """Save inter-agent messages produced by an agent."""
+        for msg_data in output.messages:
+            msg = AgentMessage(
+                goal_id=goal.id,
+                from_agent=from_agent_type,
+                to_agent=msg_data["to_agent"],
+                message_type=msg_data.get("message_type", "info"),
+                content=msg_data["content"][:1000],
+            )
+            saved = storage.create_agent_message(msg)
+            all_messages.append(saved.to_dict())
+
+    def _build_context(from_agent_type: str, base_context: str) -> str:
+        """Build enriched context including messages from other agents."""
+        parts = []
+        if base_context:
+            parts.append(base_context)
+        # Include summaries from completed handoffs
+        for h in all_handoffs:
+            if h.get("output_summary"):
+                parts.append(f"[{h['to_agent']}]: {h['output_summary']}")
+        return "\n".join(parts) if parts else ""
 
     def _run_delegation_chain(
         from_agent_type: str,
@@ -588,8 +652,14 @@ def orchestrate_goal(goal: Goal) -> Dict[str, Any]:
         )
         handoff = storage.create_handoff(handoff)
 
+        # Build enriched context from all previous agent work
+        enriched_context = _build_context(to_agent_type, context)
+
         # Run the specialist
-        output = run_agent(to_agent_type, goal, instruction=instruction, context=context)
+        output = run_agent(to_agent_type, goal, instruction=instruction, context=enriched_context)
+
+        # Persist any messages this agent wants to send
+        _persist_messages(to_agent_type, output)
 
         # Create tasks from agent output
         for idx, task_data in enumerate(output.tasks):
@@ -626,6 +696,9 @@ def orchestrate_goal(goal: Goal) -> Dict[str, Any]:
     # Step 1: Run coordinator
     coordinator_output = run_agent("coordinator", goal)
 
+    # Persist coordinator's messages
+    _persist_messages("coordinator", coordinator_output)
+
     # Create coordinator's own tasks
     for idx, task_data in enumerate(coordinator_output.tasks):
         task = Task(
@@ -658,5 +731,6 @@ def orchestrate_goal(goal: Goal) -> Dict[str, Any]:
         "total_tasks": len(all_tasks),
         "tasks": [t.to_dict() for t in all_tasks],
         "handoffs": all_handoffs,
+        "messages": all_messages,
         "agents_involved": list({h["to_agent"] for h in all_handoffs} | {"coordinator"}),
     }

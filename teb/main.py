@@ -10,8 +10,11 @@ from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from teb import agents, decomposer, executor, storage
-from teb.models import ApiCredential, CheckIn, ExecutionLog, Goal, NudgeEvent, OutcomeMetric, Task
+from teb import agents, browser, decomposer, executor, integrations, storage
+from teb.models import (
+    ApiCredential, BrowserAction, CheckIn, ExecutionLog,
+    Goal, NudgeEvent, OutcomeMetric, Task,
+)
 
 
 # ─── Startup / lifespan ───────────────────────────────────────────────────────
@@ -19,6 +22,7 @@ from teb.models import ApiCredential, CheckIn, ExecutionLog, Goal, NudgeEvent, O
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     storage.init_db()
+    integrations.seed_integrations()
     yield
 
 
@@ -701,3 +705,131 @@ async def list_handoffs(goal_id: int):
         raise HTTPException(status_code=404, detail="Goal not found")
     handoffs = storage.list_handoffs(goal_id)
     return [h.to_dict() for h in handoffs]
+
+
+@app.get("/api/goals/{goal_id}/messages")
+async def list_goal_messages(goal_id: int, agent: Optional[str] = Query(default=None)):
+    """View inter-agent messages for a goal, optionally filtered by agent."""
+    goal = storage.get_goal(goal_id)
+    if not goal:
+        raise HTTPException(status_code=404, detail="Goal not found")
+    messages = storage.list_agent_messages(goal_id, agent_type=agent)
+    return [m.to_dict() for m in messages]
+
+
+# ─── Browser Automation ─────────────────────────────────────────────────────
+
+@app.post("/api/tasks/{task_id}/browser")
+async def browser_execute_task(task_id: int):
+    """
+    Generate and execute a browser automation plan for a task.
+
+    Uses AI to create a step-by-step browser plan, then executes via
+    Playwright (if available) or returns the plan as a guided walkthrough.
+    """
+    task = storage.get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    if task.status in ("done", "skipped"):
+        raise HTTPException(status_code=409, detail="Task is already completed")
+
+    # Get relevant integrations for plan generation
+    task_text = f"{task.title} {task.description}"
+    matching = integrations.find_matching_integrations(task_text)
+    from teb.models import Integration as IntModel
+    integration_objs = [
+        IntModel(service_name=m["service_name"], category=m["category"],
+                 base_url=m["base_url"])
+        for m in matching
+    ]
+
+    plan = browser.generate_browser_plan(task, integration_objs)
+
+    if not plan.can_automate:
+        return {
+            "task_id": task_id,
+            "executed": False,
+            "reason": plan.reason,
+            "plan": plan.to_dict(),
+            "actions": [],
+            "playwright_available": browser.is_playwright_available(),
+        }
+
+    # Mark task as executing
+    task.status = "executing"
+    storage.update_task(task)
+
+    # Execute the browser plan
+    results = browser.execute_browser_plan(plan)
+
+    # Log each step as a browser action
+    actions: list[dict] = []
+    all_success = True
+    for result in results:
+        action = BrowserAction(
+            task_id=task_id,
+            action_type=result.step.action_type,
+            target=result.step.target,
+            value=result.extracted_text or result.step.value,
+            status="success" if result.success else "error",
+            error=result.error,
+            screenshot_path=result.screenshot_path,
+        )
+        saved = storage.create_browser_action(action)
+        actions.append(saved.to_dict())
+        if not result.success:
+            all_success = False
+
+    # Update task status
+    task.status = "done" if all_success else "failed"
+    storage.update_task(task)
+
+    return {
+        "task_id": task_id,
+        "executed": True,
+        "success": all_success,
+        "plan": plan.to_dict(),
+        "actions": actions,
+        "playwright_available": browser.is_playwright_available(),
+    }
+
+
+@app.get("/api/tasks/{task_id}/browser_actions")
+async def get_browser_actions(task_id: int):
+    """View browser automation actions for a task."""
+    task = storage.get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    actions = storage.list_browser_actions(task_id)
+    return {"task_id": task_id, "actions": [a.to_dict() for a in actions]}
+
+
+# ─── Integration Registry ───────────────────────────────────────────────────
+
+@app.get("/api/integrations")
+async def list_available_integrations(category: Optional[str] = Query(default=None)):
+    """List all known service integrations, optionally filtered by category."""
+    db_integrations = storage.list_integrations(category=category)
+    return [i.to_dict() for i in db_integrations]
+
+
+@app.get("/api/integrations/catalog")
+async def get_integration_catalog():
+    """Get the built-in integration catalog (no DB required)."""
+    return integrations.get_catalog()
+
+
+@app.get("/api/integrations/match")
+async def match_integrations(q: str = Query(description="Task description to match against")):
+    """Find integrations relevant to a task description."""
+    return integrations.find_matching_integrations(q)
+
+
+@app.get("/api/integrations/{service_name}/endpoints")
+async def get_service_endpoints(service_name: str):
+    """Get common API endpoints for a known service."""
+    endpoints = integrations.get_endpoints_for_service(service_name)
+    if not endpoints:
+        raise HTTPException(status_code=404, detail=f"No endpoints known for '{service_name}'")
+    return {"service_name": service_name, "endpoints": endpoints}
