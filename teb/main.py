@@ -867,12 +867,7 @@ async def act_on_suggestion(suggestion_id: int, body: SuggestionAction, request:
     return ps.to_dict()
 
 
-# ─── Success Paths (Knowledge Base) ─────────────────────────────────────────
-
-@app.get("/api/knowledge/paths")
-async def list_success_paths(goal_type: Optional[str] = Query(default=None)):
-    paths = storage.list_success_paths(goal_type=goal_type)
-    return [p.to_dict() for p in paths]
+# ─── Success Paths (Knowledge Base) — see /api/knowledge/* endpoints below ──
 
 
 # ─── Multi-Agent Delegation ─────────────────────────────────────────────────

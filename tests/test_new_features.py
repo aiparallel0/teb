@@ -224,7 +224,8 @@ async def test_capture_success_path_on_goal_done(client):
     assert goal.json()["status"] == "done"
     # A success path should be captured
     paths_r = await client.get("/api/knowledge/paths")
-    paths = paths_r.json()
+    data = paths_r.json()
+    paths = data["paths"]
     assert len(paths) >= 1
     assert paths[0]["source_goal_id"] == gid
     assert paths[0]["goal_type"] == "learn_skill"
@@ -243,7 +244,7 @@ async def test_capture_success_path_not_captured_incomplete(client):
     assert goal.json()["status"] != "done"
     # No success path should be captured
     paths_r = await client.get("/api/knowledge/paths")
-    assert len(paths_r.json()) == 0
+    assert len(paths_r.json()["paths"]) == 0
 
 
 @pytest.mark.anyio
