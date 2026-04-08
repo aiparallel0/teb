@@ -886,10 +886,104 @@ def _parse_ai_tasks(
 
 
 def decompose(goal: Goal) -> List[Task]:
-    """Entry point: choose AI or template mode based on config."""
+    """Entry point: choose AI or template mode based on config.
+
+    Before generating tasks, consults:
+    - Success paths from similar goals (1.3) to reorder/modify tasks
+    - User behavior patterns (1.2) to skip tasks the user avoids
+    """
     if config.OPENAI_API_KEY:
-        return decompose_ai(goal)
-    return decompose_template(goal)
+        tasks = decompose_ai(goal)
+    else:
+        tasks = decompose_template(goal)
+
+    # 1.3: Apply success path insights to reorder/modify tasks
+    tasks = _apply_success_path_insights(goal, tasks)
+
+    # 1.2: Apply user behavior patterns to filter/adapt tasks
+    tasks = _apply_user_behavior(goal, tasks)
+
+    return tasks
+
+
+def _apply_success_path_insights(goal: Goal, tasks: List[Task]) -> List[Task]:
+    """Apply insights from success paths of similar completed goals."""
+    try:
+        from teb import storage as _storage  # noqa: PLC0415
+        template_name = _detect_template(goal)
+        paths = _storage.list_success_paths(goal_type=template_name)
+        if not paths or len(paths) < 2:
+            return tasks
+
+        insights = apply_success_paths(goal, paths)
+        if not insights:
+            return tasks
+
+        # Collect commonly-skipped task titles from insights
+        commonly_skipped: Set[str] = set()
+        for insight in insights:
+            if insight.get("type") == "commonly_skipped":
+                for item in insight.get("items", []):
+                    if isinstance(item, str):
+                        commonly_skipped.add(item.lower())
+
+        if not commonly_skipped:
+            return tasks
+
+        # Mark commonly-skipped tasks with a note rather than removing them
+        for t in tasks:
+            if t.title.lower() in commonly_skipped:
+                t.description = (
+                    t.description + " [Note: Many users skip this step. "
+                    "Consider whether it applies to your situation.]"
+                )
+
+        return tasks
+    except Exception:
+        return tasks
+
+
+def _apply_user_behavior(goal: Goal, tasks: List[Task]) -> List[Task]:
+    """Apply user behavior patterns to adapt tasks for the user."""
+    if not goal.user_id:
+        return tasks
+    try:
+        from teb import storage as _storage  # noqa: PLC0415
+        behaviors = _storage.list_user_behaviors(goal.user_id)
+        if not behaviors:
+            return tasks
+
+        avoids: Set[str] = set()
+        is_chronic_staller = False
+        for b in behaviors:
+            if b["behavior_type"] == "avoids":
+                avoids.add(b["pattern_key"].lower())
+            if b["behavior_type"] == "stalled" and b.get("occurrences", 0) >= 3:
+                is_chronic_staller = True
+
+        # For users who avoid certain task types, add alternative guidance
+        for t in tasks:
+            title_lower = t.title.lower()
+            for avoid_word in avoids:
+                if avoid_word in title_lower:
+                    t.description = (
+                        t.description + f" [Tip: You've struggled with similar tasks before. "
+                        f"Consider using a no-code alternative or asking for help.]"
+                    )
+                    break
+
+        # For chronic stallers, reduce task scope
+        if is_chronic_staller:
+            for t in tasks:
+                t.estimated_minutes = max(5, int(t.estimated_minutes * 0.7))
+                if not t.description.endswith("]"):
+                    t.description = (
+                        t.description + " [Simplified: Focus on the minimum viable version.]"
+                    )
+
+        return tasks
+    except Exception:
+        return tasks
 
 
 # ─── Task-level decomposition ─────────────────────────────────────────────────

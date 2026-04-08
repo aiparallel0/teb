@@ -88,8 +88,14 @@ def _format_message(event_type: str, data: Dict[str, Any]) -> str:
 
 # ─── Channel senders ─────────────────────────────────────────────────────────
 
+_MAX_MESSAGING_RETRIES = 3
+_MESSAGING_RETRY_BASE_DELAY = 1.0  # seconds
+
+
 def _send_telegram(config: Dict[str, Any], message: str) -> bool:
-    """Send a message via Telegram Bot API."""
+    """Send a message via Telegram Bot API with retry on transient failures."""
+    import time as _time
+
     bot_token = config.get("bot_token", "")
     chat_id = config.get("chat_id", "")
 
@@ -104,20 +110,33 @@ def _send_telegram(config: Dict[str, Any], message: str) -> bool:
         "parse_mode": "Markdown",
     }
 
-    try:
-        with httpx.Client(timeout=10) as client:
-            resp = client.post(url, json=payload)
-            if resp.status_code == 200:
-                return True
-            logger.warning("Telegram API returned %d: %s", resp.status_code, resp.text[:200])
+    for attempt in range(_MAX_MESSAGING_RETRIES):
+        try:
+            with httpx.Client(timeout=10) as client:
+                resp = client.post(url, json=payload)
+                if resp.status_code == 200:
+                    return True
+                # Retry on 429 (rate limit) or 5xx (server error)
+                if resp.status_code == 429 or resp.status_code >= 500:
+                    logger.warning("Telegram API returned %d (attempt %d/%d)", resp.status_code, attempt + 1, _MAX_MESSAGING_RETRIES)
+                    if attempt < _MAX_MESSAGING_RETRIES - 1:
+                        _time.sleep(_MESSAGING_RETRY_BASE_DELAY * (2 ** attempt))
+                        continue
+                logger.warning("Telegram API returned %d: %s", resp.status_code, resp.text[:200])
+                return False
+        except Exception as exc:
+            logger.warning("Telegram send failed (attempt %d/%d): %s", attempt + 1, _MAX_MESSAGING_RETRIES, exc)
+            if attempt < _MAX_MESSAGING_RETRIES - 1:
+                _time.sleep(_MESSAGING_RETRY_BASE_DELAY * (2 ** attempt))
+                continue
             return False
-    except Exception as exc:
-        logger.warning("Telegram send failed: %s", exc)
-        return False
+    return False
 
 
 def _send_webhook(config: Dict[str, Any], event_type: str, message: str, data: Dict[str, Any]) -> bool:
-    """Send a notification via generic webhook (JSON POST)."""
+    """Send a notification via generic webhook (JSON POST) with retry on transient failures."""
+    import time as _time
+
     webhook_url = config.get("url", "")
 
     if not webhook_url:
@@ -136,16 +155,27 @@ def _send_webhook(config: Dict[str, Any], event_type: str, message: str, data: D
     if isinstance(extra_headers, dict):
         headers.update(extra_headers)
 
-    try:
-        with httpx.Client(timeout=10) as client:
-            resp = client.post(webhook_url, json=payload, headers=headers)
-            if 200 <= resp.status_code < 300:
-                return True
-            logger.warning("Webhook returned %d: %s", resp.status_code, resp.text[:200])
+    for attempt in range(_MAX_MESSAGING_RETRIES):
+        try:
+            with httpx.Client(timeout=10) as client:
+                resp = client.post(webhook_url, json=payload, headers=headers)
+                if 200 <= resp.status_code < 300:
+                    return True
+                # Retry on 429 or 5xx
+                if resp.status_code == 429 or resp.status_code >= 500:
+                    logger.warning("Webhook returned %d (attempt %d/%d)", resp.status_code, attempt + 1, _MAX_MESSAGING_RETRIES)
+                    if attempt < _MAX_MESSAGING_RETRIES - 1:
+                        _time.sleep(_MESSAGING_RETRY_BASE_DELAY * (2 ** attempt))
+                        continue
+                logger.warning("Webhook returned %d: %s", resp.status_code, resp.text[:200])
+                return False
+        except Exception as exc:
+            logger.warning("Webhook send failed (attempt %d/%d): %s", attempt + 1, _MAX_MESSAGING_RETRIES, exc)
+            if attempt < _MAX_MESSAGING_RETRIES - 1:
+                _time.sleep(_MESSAGING_RETRY_BASE_DELAY * (2 ** attempt))
+                continue
             return False
-    except Exception as exc:
-        logger.warning("Webhook send failed: %s", exc)
-        return False
+    return False
 
 
 # ─── Public API ──────────────────────────────────────────────────────────────

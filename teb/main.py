@@ -1557,8 +1557,12 @@ async def telegram_webhook(body: TelegramUpdate, request: Request):
             decomposer.decompose(goal)
             goal.status = "decomposed"
             storage.update_goal(goal)
-        except Exception:
-            pass
+        except Exception as exc:
+            import logging as _logging
+            _logging.getLogger(__name__).error("Telegram goal decomposition failed for goal %s: %s", goal.id, exc)
+            goal.status = "drafting"
+            storage.update_goal(goal)
+            _reply(f"⚠️ Goal created but auto-planning failed. Use /next to try again or answer questions to refine.")
         # Start question flow: get first drip question
         q = decomposer.get_next_drip_question(goal)
         if q:
