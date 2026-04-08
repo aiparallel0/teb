@@ -18,11 +18,15 @@ Then tracks whether you actually earned any money.
 **What makes teb different:**
 
 - **Not just planning but executing** — via API orchestration and browser automation, teb doesn't just tell you what to do, it does it for you
+- **Adaptive micro-tasking** — drip-feed mode gives one task at a time and adapts based on completions, with follow-up questions at milestones instead of interrogating users upfront
 - **Browser automation** — when APIs aren't available, teb generates and executes browser-based plans (navigate, click, type, extract) via Playwright
 - **Not generic but experience-aware** — persistent user profiles learn your skills, pace, and style across goals; a knowledge base of successful paths means each new user benefits from what worked before
+- **Success path learning** — auto-captures what works when goals are completed and feeds those patterns to new users via insights
 - **Not advisory but accountable** — outcome metrics track real results (revenue earned, clients acquired), not just tasks checked off
+- **Financial execution pipeline** — budget-aware task execution with per-transaction approval, daily limits, and category limits so AI can spend money on your behalf safely
 - **Proactively discovers actions you didn't think of** — rule-based and AI-powered suggestion engine surfaces opportunities, optimizations, and risks
 - **Multi-agent delegation with deep collaboration** — specialized AI agents (marketing, web dev, outreach, research, finance) collaborate via message passing, share context, and delegate to each other
+- **External messaging** — Telegram bot and webhook integration for real-time notifications on nudges, task completions, and spending approvals
 - **Pre-built integration catalog** — ships with knowledge of 10 popular services (Stripe, Namecheap, Vercel, SendGrid, GitHub, Cloudflare, Twitter, LinkedIn, Plausible, OpenAI) for smarter execution plans
 
 ---
@@ -108,6 +112,21 @@ GET    /api/integrations              List known service integrations (filterabl
 GET    /api/integrations/catalog      Get the built-in integration catalog
 GET    /api/integrations/match?q=     Find integrations matching a task description
 GET    /api/integrations/{name}/endpoints  Get common API endpoints for a service
+GET    /api/goals/{id}/drip           Get next adaptive drip task (one at a time)
+GET    /api/goals/{id}/drip/question  Get next drip-mode clarifying question
+POST   /api/goals/{id}/drip/clarify   Submit answer to drip-mode question
+GET    /api/goals/{id}/insights       Get success path insights for similar goals
+POST   /api/budgets                   Create a spending budget for a goal
+GET    /api/goals/{id}/budgets        List spending budgets for a goal
+PATCH  /api/budgets/{id}              Update budget limits
+POST   /api/spending/request          Request to spend money on a task
+POST   /api/spending/{id}/action      Approve or deny a spending request
+GET    /api/goals/{id}/spending       List spending requests for a goal
+POST   /api/messaging/config          Configure a messaging channel (Telegram/webhook)
+GET    /api/messaging/configs         List messaging configurations
+PATCH  /api/messaging/config/{id}     Update messaging configuration
+DELETE /api/messaging/config/{id}     Delete messaging configuration
+POST   /api/messaging/test/{id}       Send a test message to a channel
 ```
 
 ### Task Execution Example
@@ -236,6 +255,94 @@ curl "http://localhost:8000/api/integrations?category=payment"
 
 **Built-in integrations:** Stripe (payment), Namecheap (domain), Vercel (hosting), SendGrid (email), GitHub (development), Cloudflare (hosting), Twitter (social), LinkedIn (social), Plausible (analytics), OpenAI (AI).
 
+### Adaptive Micro-Tasking (Drip Mode)
+
+Instead of dumping all tasks at once, drip mode gives one task at a time:
+
+```bash
+# 1. Create a goal
+curl -X POST http://localhost:8000/api/goals \
+  -H 'Content-Type: application/json' \
+  -d '{"title": "earn money online freelancing"}'
+
+# 2. Answer up to 5 questions upfront (drip mode limits upfront questions)
+curl http://localhost:8000/api/goals/1/drip/question
+# Returns: {"done": false, "question": {"key": "technical_skills", "text": "...", "hint": "..."}}
+
+curl -X POST http://localhost:8000/api/goals/1/drip/clarify \
+  -H 'Content-Type: application/json' \
+  -d '{"key": "technical_skills", "answer": "Python and web development"}'
+
+# 3. Get your first task (created on demand)
+curl http://localhost:8000/api/goals/1/drip
+# Returns: {"task": {...}, "is_new": true, "adaptive_question": null, "message": "Task 1 of 6."}
+
+# 4. Complete it, then get the next one (adapts based on your progress)
+curl -X PATCH http://localhost:8000/api/tasks/1 \
+  -H 'Content-Type: application/json' -d '{"status": "done"}'
+
+curl http://localhost:8000/api/goals/1/drip
+# Returns next task + possibly an adaptive follow-up question
+```
+
+After completing 2 tasks, drip mode asks "How are the tasks feeling — too easy, about right, or too challenging?" to adapt difficulty.
+
+### Financial Execution Pipeline
+
+Set spending budgets with daily/total limits and per-transaction approval:
+
+```bash
+# 1. Create a budget for your goal
+curl -X POST http://localhost:8000/api/budgets \
+  -H 'Content-Type: application/json' \
+  -d '{"goal_id": 1, "daily_limit": 50, "total_limit": 500, "category": "general", "require_approval": true}'
+
+# 2. Request to spend money on a task
+curl -X POST http://localhost:8000/api/spending/request \
+  -H 'Content-Type: application/json' \
+  -d '{"task_id": 1, "amount": 12.99, "description": "Register domain", "service": "namecheap"}'
+# Returns: {"request": {..., "status": "pending"}, "auto_approved": false}
+
+# 3. Approve or deny the request
+curl -X POST http://localhost:8000/api/spending/1/action \
+  -H 'Content-Type: application/json' \
+  -d '{"action": "approve"}'
+
+# Or deny with reason:
+curl -X POST http://localhost:8000/api/spending/1/action \
+  -H 'Content-Type: application/json' \
+  -d '{"action": "deny", "reason": "too expensive"}'
+```
+
+Budget categories: `general`, `hosting`, `domain`, `marketing`, `tools`, `services`. When `require_approval` is `false`, spending within limits is auto-approved.
+
+### External Messaging (Telegram / Webhooks)
+
+Get notifications via Telegram or webhooks when events happen:
+
+```bash
+# Configure Telegram notifications
+curl -X POST http://localhost:8000/api/messaging/config \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "channel": "telegram",
+    "config": {"bot_token": "123456:ABC-DEF", "chat_id": "987654321"},
+    "notify_nudges": true,
+    "notify_tasks": true,
+    "notify_spending": true
+  }'
+
+# Or configure a webhook
+curl -X POST http://localhost:8000/api/messaging/config \
+  -H 'Content-Type: application/json' \
+  -d '{"channel": "webhook", "config": {"url": "https://example.com/hooks/teb"}}'
+
+# Test it
+curl -X POST http://localhost:8000/api/messaging/test/1
+```
+
+Notifications are automatically sent for: nudges, task completions, spending approval requests, and goal completions.
+
 ---
 
 ## Configuration
@@ -264,13 +371,15 @@ teb/
 ├── main.py          FastAPI app + REST endpoints (goals, tasks, coaching, execution, browser, agents)
 ├── models.py        Goal, Task, CheckIn, OutcomeMetric, NudgeEvent, UserProfile,
 │                    SuccessPath, ProactiveSuggestion, ApiCredential, ExecutionLog,
-│                    AgentHandoff, AgentMessage, BrowserAction, Integration
-├── storage.py       SQLite data access layer (raw sqlite3, 14 tables)
-├── decomposer.py    Template-based + AI decomposition engine + coaching + proactive suggestions
+│                    AgentHandoff, AgentMessage, BrowserAction, Integration,
+│                    SpendingBudget, SpendingRequest, MessagingConfig
+├── storage.py       SQLite data access layer (raw sqlite3, 17 tables)
+├── decomposer.py    Template-based + AI decomposition + coaching + drip mode + success paths
 ├── executor.py      AI-powered task execution engine (API calls via httpx)
 ├── browser.py       Browser automation engine (AI plan generation + Playwright execution)
 ├── agents.py        Multi-agent delegation system with inter-agent messaging
 ├── integrations.py  Pre-built integration catalog (10 services) + matching engine
+├── messaging.py     External messaging (Telegram bots + webhooks) for notifications
 ├── ai_client.py     Unified AI client (Anthropic Claude + OpenAI)
 ├── config.py        Environment variable configuration
 ├── templates/
@@ -284,6 +393,7 @@ tests/
 ├── test_checkin.py              Tests for coaching, nudges, outcomes, suggestions
 ├── test_agents.py               Tests for multi-agent delegation system
 ├── test_browser_integrations.py Tests for browser automation, integrations, agent messaging
+├── test_new_features.py         Tests for drip mode, success paths, financial pipeline, messaging
 └── test_api.py                  Integration tests for API endpoints
 ```
 

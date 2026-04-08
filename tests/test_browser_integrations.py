@@ -22,6 +22,15 @@ from teb.browser import (
 
 # ─── Fixtures ────────────────────────────────────────────────────────────────
 
+def _add_auth_headers(c) -> None:
+    """Register (or login) a test user and set auth headers on a TestClient."""
+    r = c.post("/api/auth/register", json={"email": "brtest@teb.test", "password": "testpass123"})
+    if r.status_code not in (200, 201):
+        r = c.post("/api/auth/login", json={"email": "brtest@teb.test", "password": "testpass123"})
+    token = r.json()["token"]
+    c.headers.update({"Authorization": f"Bearer {token}"})
+
+
 @pytest.fixture(autouse=True)
 def _temp_db(tmp_path):
     """Create a fresh database for each test."""
@@ -539,14 +548,12 @@ class TestOrchestrateWithMessages:
 # API ENDPOINT TESTS
 # ══════════════════════════════════════════════════════════════════════════════
 
-class TestBrowserAPI:
-    """Test browser automation API endpoints."""
-
     @pytest.fixture
     def client(self):
         from starlette.testclient import TestClient
         from teb.main import app
         with TestClient(app) as c:
+            _add_auth_headers(c)
             yield c
 
     def test_browser_execute_task(self, client):
@@ -602,6 +609,7 @@ class TestIntegrationsAPI:
         from starlette.testclient import TestClient
         from teb.main import app
         with TestClient(app) as c:
+            _add_auth_headers(c)
             yield c
 
     def test_list_integrations(self, client):
@@ -650,6 +658,7 @@ class TestMessagesAPI:
         from starlette.testclient import TestClient
         from teb.main import app
         with TestClient(app) as c:
+            _add_auth_headers(c)
             yield c
 
     def test_list_messages_empty(self, client):

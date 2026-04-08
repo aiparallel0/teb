@@ -1,10 +1,19 @@
 /* app.js — teb frontend */
 
+// ─── Auth-aware API wrapper ──────────────────────────────────────────────────
+
+function authHeaders() {
+  const token = localStorage.getItem('teb_token');
+  const h = { 'Content-Type': 'application/json' };
+  if (token) h['Authorization'] = 'Bearer ' + token;
+  return h;
+}
+
 const api = {
   async post(url, body) {
     const r = await fetch(url, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders(),
       body: JSON.stringify(body),
     });
     if (!r.ok) {
@@ -14,7 +23,7 @@ const api = {
     return r.json();
   },
   async get(url) {
-    const r = await fetch(url);
+    const r = await fetch(url, { headers: authHeaders() });
     if (!r.ok) {
       const err = await r.json().catch(() => ({ detail: r.statusText }));
       throw new Error(err.detail || r.statusText);
@@ -24,7 +33,7 @@ const api = {
   async patch(url, body) {
     const r = await fetch(url, {
       method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders(),
       body: JSON.stringify(body),
     });
     if (!r.ok) {
@@ -34,7 +43,7 @@ const api = {
     return r.json();
   },
   async del(url) {
-    const r = await fetch(url, { method: 'DELETE' });
+    const r = await fetch(url, { method: 'DELETE', headers: authHeaders() });
     if (!r.ok) {
       const err = await r.json().catch(() => ({ detail: r.statusText }));
       throw new Error(err.detail || r.statusText);
@@ -47,6 +56,8 @@ const api = {
 
 let currentGoalId = null;
 let currentTasks = [];
+let dripMode = true; // default to drip mode
+let authMode = 'login'; // 'login' or 'register'
 
 // ─── Screen management ────────────────────────────────────────────────────────
 
@@ -59,6 +70,75 @@ function showError(elId, msg) {
   const el = document.getElementById(elId);
   if (el) el.textContent = msg || '';
 }
+
+// ─── Auth ─────────────────────────────────────────────────────────────────────
+
+function updateUserBar() {
+  const token = localStorage.getItem('teb_token');
+  const email = localStorage.getItem('teb_email');
+  const bar = document.getElementById('user-bar');
+  if (token && email) {
+    document.getElementById('user-email').textContent = email;
+    bar.style.display = 'flex';
+  } else {
+    bar.style.display = 'none';
+  }
+}
+
+document.getElementById('btn-auth-submit').addEventListener('click', async () => {
+  const email = document.getElementById('auth-email').value.trim();
+  const password = document.getElementById('auth-password').value;
+  showError('error-auth', '');
+  if (!email || !password) { showError('error-auth', 'Please enter email and password.'); return; }
+
+  const btn = document.getElementById('btn-auth-submit');
+  btn.disabled = true;
+  try {
+    const endpoint = authMode === 'register' ? '/api/auth/register' : '/api/auth/login';
+    const res = await api.post(endpoint, { email, password });
+    localStorage.setItem('teb_token', res.token);
+    localStorage.setItem('teb_email', res.user.email);
+    updateUserBar();
+    showScreen('screen-landing');
+    loadGoalList();
+  } catch (e) {
+    showError('error-auth', e.message);
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+document.getElementById('auth-toggle-link').addEventListener('click', (e) => {
+  e.preventDefault();
+  authMode = authMode === 'login' ? 'register' : 'login';
+  document.getElementById('auth-title').textContent = authMode === 'register' ? 'Create account' : 'Sign in';
+  document.getElementById('btn-auth-submit').textContent = authMode === 'register' ? 'Register' : 'Sign in';
+  document.getElementById('auth-toggle-text').textContent =
+    authMode === 'register' ? 'Already have an account?' : "Don't have an account?";
+  document.getElementById('auth-toggle-link').textContent =
+    authMode === 'register' ? 'Sign in' : 'Register';
+  showError('error-auth', '');
+});
+
+document.getElementById('auth-skip-link').addEventListener('click', (e) => {
+  e.preventDefault();
+  localStorage.removeItem('teb_token');
+  localStorage.removeItem('teb_email');
+  updateUserBar();
+  showScreen('screen-landing');
+  loadGoalList();
+});
+
+document.getElementById('btn-logout').addEventListener('click', () => {
+  localStorage.removeItem('teb_token');
+  localStorage.removeItem('teb_email');
+  updateUserBar();
+  showScreen('screen-auth');
+});
+
+document.getElementById('auth-password').addEventListener('keydown', e => {
+  if (e.key === 'Enter') document.getElementById('btn-auth-submit').click();
+});
 
 // ─── Landing screen ───────────────────────────────────────────────────────────
 
@@ -93,7 +173,6 @@ async function openGoal(goalId) {
     if (goal.status === 'decomposed' || goal.status === 'in_progress' || goal.status === 'done') {
       showTasksScreen(goal);
     } else {
-      // Resume clarifying or start fresh
       await startClarifyFlow(goal);
     }
   } catch (e) {
@@ -204,13 +283,131 @@ function showTasksScreen(goal) {
   currentTasks = goal.tasks || [];
   renderTasks(currentTasks);
   updateProgress(currentTasks);
+  loadDrip();
   loadFocusTask();
   loadProgressDetail();
   loadCheckinHistory();
   loadOutcomeMetrics();
   loadNudge();
   showScreen('screen-tasks');
+  // Default to drip mode
+  setDripMode(true);
 }
+
+// ─── Drip Mode ────────────────────────────────────────────────────────────────
+
+function setDripMode(on) {
+  dripMode = on;
+  document.getElementById('drip-section').style.display = on ? 'block' : 'none';
+  document.getElementById('all-tasks-section').style.display = on ? 'none' : 'block';
+  document.getElementById('btn-toggle-view').textContent = on ? 'Show all tasks' : 'Switch to drip mode';
+  if (on) loadDrip();
+}
+
+document.getElementById('btn-toggle-view').addEventListener('click', () => {
+  setDripMode(!dripMode);
+});
+
+async function loadDrip() {
+  if (!currentGoalId) return;
+  try {
+    const res = await api.get(`/api/goals/${currentGoalId}/drip`);
+    const card = document.getElementById('drip-card');
+    const doneMsg = document.getElementById('drip-done-msg');
+    const msg = document.getElementById('drip-message');
+
+    if (!res.task) {
+      card.style.display = 'none';
+      doneMsg.style.display = 'block';
+      msg.textContent = res.message || '';
+      return;
+    }
+
+    doneMsg.style.display = 'none';
+    card.style.display = 'block';
+    card.dataset.taskId = res.task.id;
+    document.getElementById('drip-title').textContent = res.task.title;
+    document.getElementById('drip-desc').textContent = res.task.description;
+    document.getElementById('drip-meta').textContent = `~${res.task.estimated_minutes} min`;
+    msg.textContent = res.message || '';
+
+    // Skip suggestion (P2.2)
+    const skipSug = document.getElementById('drip-skip-suggestion');
+    if (res.skip_suggestion) {
+      skipSug.textContent = res.skip_suggestion;
+      skipSug.style.display = 'block';
+    } else {
+      skipSug.style.display = 'none';
+    }
+
+    // Stall detection (P2.3)
+    const stallMsg = document.getElementById('drip-stall-msg');
+    if (res.stall_detected) {
+      stallMsg.textContent = res.message;
+      if (res.sub_task_suggestion) {
+        stallMsg.textContent += ` Suggested mini-task: "${res.sub_task_suggestion.title}"`;
+      }
+      stallMsg.style.display = 'block';
+    } else {
+      stallMsg.style.display = 'none';
+    }
+
+    // Adaptive question
+    const aqSection = document.getElementById('drip-adaptive-question');
+    if (res.adaptive_question) {
+      document.getElementById('drip-q-text').textContent = res.adaptive_question.text;
+      document.getElementById('drip-q-answer').placeholder = res.adaptive_question.hint || '';
+      document.getElementById('drip-q-answer').value = '';
+      document.getElementById('drip-q-answer').dataset.key = res.adaptive_question.key;
+      aqSection.style.display = 'block';
+    } else {
+      aqSection.style.display = 'none';
+    }
+  } catch (e) {
+    document.getElementById('drip-message').textContent = 'Could not load next task.';
+  }
+}
+
+document.getElementById('btn-drip-done').addEventListener('click', async () => {
+  const card = document.getElementById('drip-card');
+  const tid = parseInt(card.dataset.taskId, 10);
+  if (!tid) return;
+  try {
+    await api.patch(`/api/tasks/${tid}`, { status: 'done' });
+    await refreshGoalView();
+    loadDrip();
+  } catch (e) {
+    showError('error-tasks', e.message);
+  }
+});
+
+document.getElementById('btn-drip-skip').addEventListener('click', async () => {
+  const card = document.getElementById('drip-card');
+  const tid = parseInt(card.dataset.taskId, 10);
+  if (!tid) return;
+  try {
+    await api.patch(`/api/tasks/${tid}`, { status: 'skipped' });
+    await refreshGoalView();
+    loadDrip();
+  } catch (e) {
+    showError('error-tasks', e.message);
+  }
+});
+
+document.getElementById('btn-drip-q-submit').addEventListener('click', async () => {
+  const input = document.getElementById('drip-q-answer');
+  const answer = input.value.trim();
+  const key = input.dataset.key;
+  if (!answer || !key) return;
+  try {
+    await api.post(`/api/goals/${currentGoalId}/drip/clarify`, { key, answer });
+    document.getElementById('drip-adaptive-question').style.display = 'none';
+  } catch (e) {
+    showError('error-tasks', e.message);
+  }
+});
+
+// ─── Full task list view ──────────────────────────────────────────────────────
 
 const MAX_DECOMPOSE_DEPTH = 3;
 
@@ -484,6 +681,120 @@ document.getElementById('btn-add-task').addEventListener('click', async () => {
   }
 });
 
+// ─── Settings Modal ───────────────────────────────────────────────────────────
+
+document.getElementById('btn-settings').addEventListener('click', () => {
+  document.getElementById('settings-modal').style.display = 'flex';
+  loadExistingConfigs();
+});
+
+document.getElementById('btn-close-settings').addEventListener('click', () => {
+  document.getElementById('settings-modal').style.display = 'none';
+});
+
+document.getElementById('btn-tg-save').addEventListener('click', async () => {
+  const token = document.getElementById('tg-bot-token').value.trim();
+  const chatId = document.getElementById('tg-chat-id').value.trim();
+  showError('error-tg', '');
+  if (!token || !chatId) { showError('error-tg', 'Both bot token and chat ID are required.'); return; }
+  try {
+    await api.post('/api/messaging/config', {
+      channel: 'telegram',
+      config: { bot_token: token, chat_id: chatId },
+      notify_nudges: document.getElementById('notif-nudges').checked,
+      notify_tasks: document.getElementById('notif-tasks').checked,
+      notify_spending: document.getElementById('notif-spending').checked,
+      notify_checkins: document.getElementById('notif-checkins').checked,
+    });
+    showError('error-tg', '');
+    loadExistingConfigs();
+  } catch (e) {
+    showError('error-tg', e.message);
+  }
+});
+
+document.getElementById('btn-tg-test').addEventListener('click', async () => {
+  showError('error-tg', '');
+  // Save first, then test
+  const token = document.getElementById('tg-bot-token').value.trim();
+  const chatId = document.getElementById('tg-chat-id').value.trim();
+  if (!token || !chatId) { showError('error-tg', 'Save a config first.'); return; }
+  try {
+    const cfg = await api.post('/api/messaging/config', {
+      channel: 'telegram',
+      config: { bot_token: token, chat_id: chatId },
+      notify_nudges: true, notify_tasks: true, notify_spending: true, notify_checkins: false,
+    });
+    await api.post(`/api/messaging/test/${cfg.id}`);
+    showError('error-tg', '✅ Test message sent!');
+  } catch (e) {
+    showError('error-tg', e.message);
+  }
+});
+
+document.getElementById('btn-wh-save').addEventListener('click', async () => {
+  const url = document.getElementById('wh-url').value.trim();
+  showError('error-wh', '');
+  if (!url) { showError('error-wh', 'URL is required.'); return; }
+  try {
+    await api.post('/api/messaging/config', {
+      channel: 'webhook',
+      config: { url },
+      notify_nudges: document.getElementById('notif-nudges').checked,
+      notify_tasks: document.getElementById('notif-tasks').checked,
+      notify_spending: document.getElementById('notif-spending').checked,
+      notify_checkins: document.getElementById('notif-checkins').checked,
+    });
+    showError('error-wh', '');
+    loadExistingConfigs();
+  } catch (e) {
+    showError('error-wh', e.message);
+  }
+});
+
+document.getElementById('btn-wh-test').addEventListener('click', async () => {
+  showError('error-wh', '');
+  const url = document.getElementById('wh-url').value.trim();
+  if (!url) { showError('error-wh', 'Save a config first.'); return; }
+  try {
+    const cfg = await api.post('/api/messaging/config', {
+      channel: 'webhook',
+      config: { url },
+      notify_nudges: true, notify_tasks: true, notify_spending: true, notify_checkins: false,
+    });
+    await api.post(`/api/messaging/test/${cfg.id}`);
+    showError('error-wh', '✅ Test message sent!');
+  } catch (e) {
+    showError('error-wh', e.message);
+  }
+});
+
+async function loadExistingConfigs() {
+  try {
+    const configs = await api.get('/api/messaging/configs');
+    const container = document.getElementById('existing-configs');
+    if (!configs.length) {
+      container.innerHTML = '<p style="color:var(--muted);font-size:.8rem">No messaging configs yet.</p>';
+      return;
+    }
+    container.innerHTML = '<h3 class="mt">Active Configs</h3>' + configs.map(c => `
+      <div class="config-item">
+        <span class="config-channel">${escHtml(c.channel)}</span>
+        <span class="config-status">${c.enabled ? '✅' : '❌'}</span>
+        <button class="btn-delete-config btn-secondary btn-sm" data-id="${c.id}">Delete</button>
+      </div>
+    `).join('');
+    container.querySelectorAll('.btn-delete-config').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        await api.del(`/api/messaging/config/${btn.dataset.id}`);
+        loadExistingConfigs();
+      });
+    });
+  } catch (e) {
+    // Silent fail
+  }
+}
+
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function escHtml(str) {
@@ -496,8 +807,18 @@ function escHtml(str) {
 
 // ─── Init ─────────────────────────────────────────────────────────────────────
 
-showScreen('screen-landing');
-loadGoalList();
+function init() {
+  const token = localStorage.getItem('teb_token');
+  updateUserBar();
+  if (token) {
+    showScreen('screen-landing');
+    loadGoalList();
+  } else {
+    showScreen('screen-auth');
+  }
+}
+
+init();
 
 // ─── Daily Check-in ───────────────────────────────────────────────────────────
 
