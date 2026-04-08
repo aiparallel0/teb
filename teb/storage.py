@@ -6,6 +6,7 @@ from typing import Generator, List, Optional
 
 from teb.config import get_db_path
 from teb.models import (
+    AgentHandoff,
     ApiCredential,
     CheckIn,
     ExecutionLog,
@@ -157,8 +158,23 @@ def init_db() -> None:
                 created_at     TEXT    NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS agent_handoffs (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                goal_id         INTEGER NOT NULL REFERENCES goals(id) ON DELETE CASCADE,
+                from_agent      TEXT    NOT NULL,
+                to_agent        TEXT    NOT NULL,
+                task_id         INTEGER REFERENCES tasks(id) ON DELETE SET NULL,
+                input_summary   TEXT    NOT NULL DEFAULT '',
+                output_summary  TEXT    NOT NULL DEFAULT '',
+                status          TEXT    NOT NULL DEFAULT 'pending',
+                created_at      TEXT    NOT NULL
+            );
+
             CREATE INDEX IF NOT EXISTS idx_check_ins_goal_created
                 ON check_ins(goal_id, created_at DESC);
+
+            CREATE INDEX IF NOT EXISTS idx_agent_handoffs_goal
+                ON agent_handoffs(goal_id, created_at DESC);
         """)
 
 
@@ -677,3 +693,55 @@ def update_suggestion_status(suggestion_id: int, status: str) -> Optional[Proact
     ps = _row_to_suggestion(row)
     ps.status = status
     return ps
+
+
+# ─── Agent Handoffs ──────────────────────────────────────────────────────────
+
+def _row_to_handoff(row: sqlite3.Row) -> AgentHandoff:
+    return AgentHandoff(
+        id=row["id"],
+        goal_id=row["goal_id"],
+        from_agent=row["from_agent"],
+        to_agent=row["to_agent"],
+        task_id=row["task_id"],
+        input_summary=row["input_summary"],
+        output_summary=row["output_summary"],
+        status=row["status"],
+        created_at=datetime.fromisoformat(row["created_at"]) if row["created_at"] else None,
+    )
+
+
+def create_handoff(handoff: AgentHandoff) -> AgentHandoff:
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        cur = con.execute(
+            """INSERT INTO agent_handoffs
+               (goal_id, from_agent, to_agent, task_id, input_summary, output_summary, status, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (handoff.goal_id, handoff.from_agent, handoff.to_agent,
+             handoff.task_id, handoff.input_summary, handoff.output_summary,
+             handoff.status, now),
+        )
+        handoff.id = cur.lastrowid
+        handoff.created_at = datetime.fromisoformat(now)
+    return handoff
+
+
+def update_handoff(handoff: AgentHandoff) -> AgentHandoff:
+    with _conn() as con:
+        con.execute(
+            """UPDATE agent_handoffs
+               SET task_id = ?, output_summary = ?, status = ?
+               WHERE id = ?""",
+            (handoff.task_id, handoff.output_summary, handoff.status, handoff.id),
+        )
+    return handoff
+
+
+def list_handoffs(goal_id: int) -> List[AgentHandoff]:
+    with _conn() as con:
+        rows = con.execute(
+            "SELECT * FROM agent_handoffs WHERE goal_id = ? ORDER BY created_at ASC",
+            (goal_id,),
+        ).fetchall()
+    return [_row_to_handoff(r) for r in rows]

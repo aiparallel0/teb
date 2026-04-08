@@ -257,3 +257,32 @@ class ProactiveSuggestion:
             "status": self.status,
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }
+
+
+# ─── Multi-Agent Delegation ─────────────────────────────────────────────────
+
+@dataclass
+class AgentHandoff:
+    """A record of one agent delegating work to another in a goal's orchestration."""
+    goal_id: int
+    from_agent: str                    # agent type that delegated (e.g. "coordinator")
+    to_agent: str                      # agent type that received (e.g. "web_dev")
+    task_id: Optional[int] = None      # task created by the delegation (if any)
+    input_summary: str = ""            # what was asked
+    output_summary: str = ""           # what was produced
+    status: str = "pending"            # pending | in_progress | completed | failed
+    id: Optional[int] = None
+    created_at: Optional[datetime] = None
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "goal_id": self.goal_id,
+            "from_agent": self.from_agent,
+            "to_agent": self.to_agent,
+            "task_id": self.task_id,
+            "input_summary": self.input_summary,
+            "output_summary": self.output_summary,
+            "status": self.status,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
