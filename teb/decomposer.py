@@ -603,10 +603,74 @@ def get_clarifying_questions(goal: Goal) -> List[ClarifyingQuestion]:
 
 
 def get_next_question(goal: Goal) -> Optional[ClarifyingQuestion]:
-    """Return the first unanswered clarifying question, or None if all answered."""
-    for q in get_clarifying_questions(goal):
+    """Return the first unanswered clarifying question, or None if all answered.
+
+    After the first 2 template questions are answered, generates dynamic
+    AI-powered follow-up questions based on the user's answers so far (5.1).
+    """
+    template_questions = get_clarifying_questions(goal)
+
+    # Count how many template questions have been answered
+    answered_count = sum(1 for q in template_questions if q.key in goal.answers)
+
+    # Return next unanswered template question if fewer than 2 answered
+    if answered_count < 2:
+        for q in template_questions:
+            if q.key not in goal.answers:
+                return q
+        return None
+
+    # Check if there are still unanswered template questions
+    for q in template_questions:
         if q.key not in goal.answers:
             return q
+
+    # 5.1: After all template questions answered, try generating a dynamic one
+    if config.has_ai() and len(goal.answers) >= 2:
+        dynamic = _generate_dynamic_question(goal)
+        if dynamic:
+            return dynamic
+
+    return None
+
+
+def _generate_dynamic_question(goal: Goal) -> Optional[ClarifyingQuestion]:
+    """Generate an AI-powered follow-up question based on the user's answers so far."""
+    try:
+        from teb.ai_client import ai_chat_json  # noqa: PLC0415
+
+        # Only generate if we haven't already asked a dynamic question
+        dynamic_key = f"dynamic_{len(goal.answers)}"
+        if dynamic_key in goal.answers:
+            return None
+
+        answers_text = "\n".join(f"- {k}: {v}" for k, v in goal.answers.items())
+
+        result = ai_chat_json(
+            system=(
+                "You are a goal-clarification assistant. Based on the user's goal and "
+                "their answers so far, generate ONE specific follow-up question that would help "
+                "create a better, more personalized action plan. The question should dig deeper "
+                "into something the user mentioned or clarify a gap in their answers. "
+                "Return JSON: {\"key\": \"unique_key\", \"text\": \"question text\", \"hint\": \"example answer\"}"
+            ),
+            user=(
+                f"Goal: {goal.title}\n"
+                f"Description: {goal.description}\n\n"
+                f"Answers so far:\n{answers_text}\n\n"
+                f"Generate one follow-up question."
+            ),
+            temperature=0.3,
+        )
+
+        if result.get("text"):
+            return ClarifyingQuestion(
+                key=result.get("key", dynamic_key),
+                text=str(result["text"]),
+                hint=str(result.get("hint", "")),
+            )
+    except Exception:
+        pass
     return None
 
 
@@ -677,17 +741,35 @@ class _UserProfile:
     raw_answers: Dict[str, str] = field(default_factory=dict)
 
 
+def _fuzzy_match(text: str, keywords: List[str], threshold: float = 0.7) -> bool:
+    """Check if text contains a fuzzy match to any keyword using difflib."""
+    import difflib
+    words = text.lower().split()
+    for kw in keywords:
+        # Direct substring match first (faster)
+        if kw in text:
+            return True
+        # Fuzzy match each word against the keyword
+        matches = difflib.get_close_matches(kw, words, n=1, cutoff=threshold)
+        if matches:
+            return True
+    return False
+
+
 def _build_user_profile(answers: Dict[str, str]) -> _UserProfile:
-    """Parse clarifying answers into a structured user profile."""
+    """Parse clarifying answers into a structured user profile.
+
+    Uses fuzzy matching (5.3) to handle typos and varied phrasing.
+    """
     profile = _UserProfile(raw_answers=dict(answers))
 
     # ─── Skill level ───────────────────────────────────────────────────
     skill = answers.get("skill_level", "").lower()
-    if any(w in skill for w in ("beginner", "none", "zero", "no experience", "never", "starting")):
+    if _fuzzy_match(skill, ["beginner", "none", "zero", "no experience", "never", "starting"]):
         profile.skill_level = "beginner"
-    elif any(w in skill for w in ("intermediate", "some", "a bit", "familiar", "decent")):
+    elif _fuzzy_match(skill, ["intermediate", "some", "a bit", "familiar", "decent"]):
         profile.skill_level = "intermediate"
-    elif any(w in skill for w in ("advanced", "expert", "professional", "years", "senior")):
+    elif _fuzzy_match(skill, ["advanced", "expert", "professional", "years", "senior"]):
         profile.skill_level = "advanced"
 
     # ─── Time per day ──────────────────────────────────────────────────
@@ -698,24 +780,24 @@ def _build_user_profile(answers: Dict[str, str]) -> _UserProfile:
 
     # ─── Timeline ──────────────────────────────────────────────────────
     tl = answers.get("timeline", "").lower()
-    if any(w in tl for w in ("week", "days", "asap", "urgent", "quick", "immediately")):
+    if _fuzzy_match(tl, ["week", "days", "asap", "urgent", "quick", "immediately"]):
         profile.timeline = "short"
-    elif any(w in tl for w in ("month", "1-3", "a few months", "quarter")):
+    elif _fuzzy_match(tl, ["month", "1-3", "a few months", "quarter"]):
         profile.timeline = "medium"
-    elif any(w in tl for w in ("year", "no rush", "long", "6 month", "no hurry")):
+    elif _fuzzy_match(tl, ["year", "no rush", "long", "6 month", "no hurry"]):
         profile.timeline = "long"
 
     # ─── Technical skills ──────────────────────────────────────────────
     tech = answers.get("technical_skills", "").lower()
-    if any(w in tech for w in ("code", "python", "javascript", "design", "html", "program", "react",
-                                "developer", "engineer", "writing", "marketing")):
+    if _fuzzy_match(tech, ["code", "python", "javascript", "design", "html", "program", "react",
+                            "developer", "engineer", "writing", "marketing"]):
         profile.has_technical_skills = True
-    elif any(w in tech for w in ("none", "no", "zero", "nothing")):
+    elif _fuzzy_match(tech, ["none", "no", "zero", "nothing"]):
         profile.has_technical_skills = False
 
     # ─── Income urgency ────────────────────────────────────────────────
     urgency = answers.get("income_urgency", "").lower()
-    if any(w in urgency for w in ("this month", "30 day", "asap", "urgent", "need money now", "immediately")):
+    if _fuzzy_match(urgency, ["this month", "30 day", "asap", "urgent", "need money now", "immediately"]):
         profile.income_urgent = True
 
     return profile

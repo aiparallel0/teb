@@ -932,6 +932,27 @@ async def list_agent_types():
     return [a.to_dict() for a in agents.list_agents()]
 
 
+@app.post("/api/agents/register", status_code=201)
+async def register_agent_endpoint(request: Request):
+    """Register a new agent type dynamically (admin only)."""
+    _require_admin(request)
+    body = await request.json()
+    agent_type = body.get("agent_type", "")
+    if not agent_type or not body.get("name"):
+        raise HTTPException(status_code=422, detail="agent_type and name are required")
+
+    spec = agents.AgentSpec(
+        agent_type=agent_type,
+        name=body.get("name", ""),
+        description=body.get("description", ""),
+        expertise=body.get("expertise", []),
+        system_prompt=body.get("system_prompt", "You are a helpful agent."),
+        can_delegate_to=body.get("can_delegate_to", []),
+    )
+    agents.register_agent(spec)
+    return spec.to_dict()
+
+
 @app.post("/api/goals/{goal_id}/orchestrate")
 async def orchestrate_goal(goal_id: int, request: Request):
     """

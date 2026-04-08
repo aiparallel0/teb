@@ -80,6 +80,19 @@ def list_agents() -> List[AgentSpec]:
     return list(_AGENTS.values())
 
 
+def register_agent(spec: AgentSpec) -> None:
+    """Register a new agent at runtime, allowing dynamic extension of the agent catalog."""
+    _AGENTS[spec.agent_type] = spec
+
+
+def unregister_agent(agent_type: str) -> bool:
+    """Remove a dynamically registered agent. Returns True if removed."""
+    if agent_type in _AGENTS:
+        del _AGENTS[agent_type]
+        return True
+    return False
+
+
 # ─── Built-in agents ─────────────────────────────────────────────────────────
 
 _register(AgentSpec(

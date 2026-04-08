@@ -19,6 +19,7 @@ Flow:
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
@@ -29,7 +30,8 @@ from teb.models import BrowserAction, Integration, Task
 
 # ─── Browser step / plan ─────────────────────────────────────────────────────
 
-_VALID_ACTION_TYPES = {"navigate", "click", "type", "extract", "screenshot", "wait", "select"}
+_VALID_ACTION_TYPES = {"navigate", "click", "type", "extract", "screenshot", "wait", "select",
+                       "scroll", "hover", "upload", "accept_dialog"}
 
 
 @dataclass
@@ -189,7 +191,11 @@ def _generate_browser_plan_ai(
             "- select: select a dropdown option (target = CSS selector, value = option text)\n"
             "- extract: extract text from an element (target = CSS selector)\n"
             "- screenshot: take a screenshot of the current page\n"
-            "- wait: wait for a number of seconds (value = seconds)\n\n"
+            "- wait: wait for a number of seconds (value = seconds)\n"
+            "- scroll: scroll the page (value = 'down', 'up', or pixel amount)\n"
+            "- hover: hover over an element (target = CSS selector)\n"
+            "- upload: upload a file (target = file input selector, value = file path)\n"
+            "- accept_dialog: accept a browser dialog/alert\n\n"
             "Return ONLY valid JSON:\n"
             "{\n"
             '  "can_automate": true/false,\n'
@@ -289,18 +295,28 @@ def is_playwright_available() -> bool:
         return False
 
 
-def execute_browser_plan(plan: BrowserPlan) -> List[BrowserStepResult]:
+def execute_browser_plan(plan: BrowserPlan, user_id: Optional[int] = None) -> List[BrowserStepResult]:
     """
     Execute a browser plan.
 
     If Playwright is available, runs in a headless browser.
     Otherwise returns each step as "manual" with instructions.
+
+    Args:
+        plan: The browser automation plan to execute
+        user_id: Optional user ID for session persistence (6.1)
     """
     if not plan.can_automate or not plan.steps:
         return []
 
     if is_playwright_available():
-        return _execute_with_playwright(plan)
+        # 6.1: Use per-user session storage for cookie persistence
+        storage_state = None
+        if user_id is not None:
+            state_dir = "/tmp/teb_browser_sessions"
+            os.makedirs(state_dir, exist_ok=True)
+            storage_state = os.path.join(state_dir, f"user_{user_id}.json")
+        return _execute_with_playwright(plan, storage_state=storage_state)
     return _execute_manual_fallback(plan)
 
 
@@ -316,15 +332,28 @@ def _execute_manual_fallback(plan: BrowserPlan) -> List[BrowserStepResult]:
     return results
 
 
-def _execute_with_playwright(plan: BrowserPlan) -> List[BrowserStepResult]:
-    """Execute browser steps using Playwright headless browser."""
+def _execute_with_playwright(plan: BrowserPlan, storage_state: Optional[str] = None) -> List[BrowserStepResult]:
+    """Execute browser steps using Playwright headless browser.
+
+    Supports session persistence via Playwright's storage_state feature (6.1).
+    """
     from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout  # noqa: PLC0415
 
     results: List[BrowserStepResult] = []
 
     with sync_playwright() as pw:
         browser = pw.chromium.launch(headless=True)
-        page = browser.new_page()
+
+        # 6.1: Load persisted session state (cookies, localStorage) if available
+        context_kwargs: Dict[str, Any] = {}
+        if storage_state and os.path.isfile(storage_state):
+            context_kwargs["storage_state"] = storage_state
+
+        context = browser.new_context(**context_kwargs)
+        page = context.new_page()
+
+        # 6.2: Set up dialog auto-accept handler
+        page.on("dialog", lambda dialog: dialog.accept())
 
         try:
             for step in plan.steps:
@@ -333,6 +362,12 @@ def _execute_with_playwright(plan: BrowserPlan) -> List[BrowserStepResult]:
                 if not result.success:
                     break
         finally:
+            # 6.1: Save session state for reuse
+            if storage_state:
+                try:
+                    context.storage_state(path=storage_state)
+                except Exception:
+                    pass
             browser.close()
 
     return results
@@ -373,6 +408,37 @@ def _execute_single_step(page: Any, step: BrowserStep) -> BrowserStepResult:
             seconds = float(step.value) if step.value else 1.0
             seconds = min(seconds, 30.0)  # cap at 30 seconds
             page.wait_for_timeout(int(seconds * 1000))
+            return BrowserStepResult(step=step, success=True)
+
+        elif step.action_type == "scroll":
+            # 6.2: Scroll the page
+            value = step.value.lower() if step.value else "down"
+            if value == "down":
+                page.evaluate("window.scrollBy(0, 500)")
+            elif value == "up":
+                page.evaluate("window.scrollBy(0, -500)")
+            else:
+                # Try parsing as pixel amount
+                try:
+                    pixels = int(value)
+                    page.evaluate(f"window.scrollBy(0, {pixels})")
+                except ValueError:
+                    page.evaluate("window.scrollBy(0, 500)")
+            return BrowserStepResult(step=step, success=True)
+
+        elif step.action_type == "hover":
+            # 6.2: Hover over an element
+            page.hover(step.target, timeout=10000)
+            return BrowserStepResult(step=step, success=True)
+
+        elif step.action_type == "upload":
+            # 6.2: Upload a file
+            page.set_input_files(step.target, step.value, timeout=10000)
+            return BrowserStepResult(step=step, success=True)
+
+        elif step.action_type == "accept_dialog":
+            # 6.2: Dialog acceptance is handled by the page-level handler
+            # This step is a no-op marker; the dialog handler auto-accepts
             return BrowserStepResult(step=step, success=True)
 
         else:
