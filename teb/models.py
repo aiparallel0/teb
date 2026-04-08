@@ -10,12 +10,18 @@ class User:
     email: str
     password_hash: str = ""
     id: Optional[int] = None
+    role: str = "user"                # user | admin
+    email_verified: bool = False
+    failed_login_attempts: int = 0
+    locked_until: Optional[datetime] = None
     created_at: Optional[datetime] = None
 
     def to_dict(self) -> dict:
         return {
             "id": self.id,
             "email": self.email,
+            "role": self.role,
+            "email_verified": self.email_verified,
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }
 

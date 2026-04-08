@@ -907,7 +907,13 @@ def decompose(goal: Goal) -> List[Task]:
 
 
 def _apply_success_path_insights(goal: Goal, tasks: List[Task]) -> List[Task]:
-    """Apply insights from success paths of similar completed goals."""
+    """Apply insights from success paths of similar completed goals.
+
+    Includes:
+    - 1.3: Annotate commonly-skipped tasks
+    - 2.3: Apply time scaling from past completions
+    - 2.4: Surface commonly-added tasks as suggestions in descriptions
+    """
     try:
         from teb import storage as _storage  # noqa: PLC0415
         template_name = _detect_template(goal)
@@ -921,14 +927,25 @@ def _apply_success_path_insights(goal: Goal, tasks: List[Task]) -> List[Task]:
 
         # Collect commonly-skipped task titles from insights
         commonly_skipped: Set[str] = set()
+        commonly_added: List[str] = []
+        avg_time_factor = 1.0
+
         for insight in insights:
             if insight.get("type") == "commonly_skipped":
                 for item in insight.get("items", []):
                     if isinstance(item, str):
                         commonly_skipped.add(item.lower())
-
-        if not commonly_skipped:
-            return tasks
+            # 2.4: Collect commonly-added tasks
+            if insight.get("type") == "commonly_added":
+                for item in insight.get("items", []):
+                    if isinstance(item, str):
+                        commonly_added.append(item)
+            # 2.3: Collect time scaling data
+            if insight.get("type") == "average_tasks":
+                avg_count = insight.get("value", 0)
+                template_count = len(tasks)
+                if avg_count > 0 and template_count > 0:
+                    avg_time_factor = avg_count / template_count
 
         # Mark commonly-skipped tasks with a note rather than removing them
         for t in tasks:
@@ -937,6 +954,16 @@ def _apply_success_path_insights(goal: Goal, tasks: List[Task]) -> List[Task]:
                     t.description + " [Note: Many users skip this step. "
                     "Consider whether it applies to your situation.]"
                 )
+
+        # 2.3: Apply time scaling from past paths if significantly different
+        if 0.6 <= avg_time_factor <= 1.5 and avg_time_factor != 1.0:
+            for t in tasks:
+                t.estimated_minutes = max(5, round(t.estimated_minutes * avg_time_factor))
+
+        # 2.4: Add note about commonly-added tasks to the last task
+        if commonly_added and tasks:
+            added_note = " [Tip from successful users: Consider also adding: " + ", ".join(commonly_added[:3]) + "]"
+            tasks[-1].description = tasks[-1].description + added_note
 
         return tasks
     except Exception:

@@ -157,6 +157,14 @@ class AuthLogin(BaseModel):
     password: str
 
 
+class AuthRefresh(BaseModel):
+    refresh_token: str
+
+
+class AuthLogout(BaseModel):
+    refresh_token: Optional[str] = None
+
+
 class TelegramUpdate(BaseModel):
     """Minimal Telegram webhook update structure."""
     message: Optional[dict] = None
@@ -182,6 +190,15 @@ def _require_user(request: Request) -> int:
     uid = _get_user_id(request)
     if uid is None:
         raise HTTPException(status_code=401, detail="Authentication required")
+    return uid
+
+
+def _require_admin(request: Request) -> int:
+    """Extract user_id and verify admin role, or raise 401/403."""
+    uid = _require_user(request)
+    user = storage.get_user(uid)
+    if not user or user.role != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
     return uid
 
 
@@ -237,6 +254,24 @@ async def auth_me(request: Request):
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
     return user.to_dict()
+
+
+@app.post("/api/auth/refresh")
+async def auth_refresh(body: AuthRefresh):
+    """Exchange a refresh token for a new access token + refresh token."""
+    try:
+        result = auth.refresh_access_token(body.refresh_token)
+    except ValueError as exc:
+        raise HTTPException(status_code=401, detail=str(exc))
+    return result
+
+
+@app.post("/api/auth/logout")
+async def auth_logout(request: Request, body: AuthLogout):
+    """Revoke refresh tokens. Revokes all tokens if no specific token provided."""
+    uid = _require_user(request)
+    auth.logout_user(uid, body.refresh_token)
+    return {"message": "Logged out"}
 
 
 # ─── Frontend ─────────────────────────────────────────────────────────────────
@@ -379,7 +414,16 @@ async def get_focus(goal_id: int, request: Request):
     focus = decomposer.get_focus_task(tasks)
     if focus is None:
         return {"focus_task": None, "message": "All tasks completed — well done!"}
-    return {"focus_task": focus.to_dict()}
+
+    result: dict = {"focus_task": focus.to_dict()}
+
+    # 2.1: Surface stall detection in focus endpoint
+    stall_info = decomposer._detect_task_stall(focus)
+    if stall_info:
+        result["stall_detected"] = True
+        result["stall_message"] = stall_info["message"]
+        result["sub_task_suggestion"] = stall_info.get("sub_task")
+    return result
 
 
 # ─── Progress summary ─────────────────────────────────────────────────────────
@@ -392,6 +436,16 @@ async def get_progress(goal_id: int, request: Request):
     summary = decomposer.get_progress_summary(tasks)
     summary["goal_id"] = goal_id
     summary["goal_status"] = goal.status
+
+    # 2.1: Surface stall detection in progress endpoint
+    focus = decomposer.get_focus_task(tasks)
+    if focus:
+        stall_info = decomposer._detect_task_stall(focus)
+        if stall_info:
+            summary["stall_detected"] = True
+            summary["stall_message"] = stall_info["message"]
+            summary["sub_task_suggestion"] = stall_info.get("sub_task")
+
     return summary
 
 
