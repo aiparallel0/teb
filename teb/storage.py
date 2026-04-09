@@ -2,7 +2,7 @@ import json
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timezone
-from typing import Generator, List, Optional
+from typing import Generator, List, Optional, Set
 
 from teb.config import get_db_path
 from teb.models import (
@@ -408,6 +408,58 @@ def _run_migrations(con: sqlite3.Connection) -> None:
     if not _has_column("users", "locked_until"):
         con.execute("ALTER TABLE users ADD COLUMN locked_until TEXT DEFAULT NULL")
 
+    # api_credentials.user_id (scope credentials to user)
+    if not _has_column("api_credentials", "user_id"):
+        con.execute("ALTER TABLE api_credentials ADD COLUMN user_id INTEGER REFERENCES users(id) ON DELETE CASCADE")
+        con.execute("CREATE INDEX IF NOT EXISTS idx_api_credentials_user ON api_credentials(user_id)")
+
+    # goals.auto_execute (autonomous execution opt-in)
+    if not _has_column("goals", "auto_execute"):
+        con.execute("ALTER TABLE goals ADD COLUMN auto_execute INTEGER NOT NULL DEFAULT 0")
+
+    # spending_budgets.autopilot_enabled
+    if not _has_column("spending_budgets", "autopilot_enabled"):
+        con.execute("ALTER TABLE spending_budgets ADD COLUMN autopilot_enabled INTEGER NOT NULL DEFAULT 0")
+
+    # spending_budgets.autopilot_threshold
+    if not _has_column("spending_budgets", "autopilot_threshold"):
+        con.execute("ALTER TABLE spending_budgets ADD COLUMN autopilot_threshold REAL NOT NULL DEFAULT 50.0")
+
+    # deployments table
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS deployments (
+            id               INTEGER PRIMARY KEY AUTOINCREMENT,
+            task_id          INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+            goal_id          INTEGER NOT NULL REFERENCES goals(id) ON DELETE CASCADE,
+            service          TEXT    NOT NULL,
+            project_name     TEXT    NOT NULL DEFAULT '',
+            repository_url   TEXT    NOT NULL DEFAULT '',
+            deploy_url       TEXT    NOT NULL DEFAULT '',
+            status           TEXT    NOT NULL DEFAULT 'pending',
+            provider_data    TEXT    NOT NULL DEFAULT '{}',
+            last_health_check TEXT   DEFAULT NULL,
+            health_status    TEXT    NOT NULL DEFAULT 'unknown',
+            created_at       TEXT    NOT NULL,
+            updated_at       TEXT    NOT NULL
+        )
+    """)
+    con.execute("CREATE INDEX IF NOT EXISTS idx_deployments_goal ON deployments(goal_id)")
+
+    # provisioning_logs table
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS provisioning_logs (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            task_id         INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+            service_name    TEXT    NOT NULL,
+            action          TEXT    NOT NULL DEFAULT 'signup',
+            status          TEXT    NOT NULL DEFAULT 'pending',
+            result_data     TEXT    NOT NULL DEFAULT '{}',
+            error           TEXT    NOT NULL DEFAULT '',
+            created_at      TEXT    NOT NULL
+        )
+    """)
+    con.execute("CREATE INDEX IF NOT EXISTS idx_provisioning_logs_task ON provisioning_logs(task_id)")
+
     # refresh_tokens table
     con.execute("""
         CREATE TABLE IF NOT EXISTS refresh_tokens (
@@ -597,6 +649,7 @@ def _row_to_goal(row: sqlite3.Row) -> Goal:
         answers=json.loads(row["answers"]),
     )
     g.user_id = row["user_id"] if "user_id" in row.keys() else None
+    g.auto_execute = bool(row["auto_execute"]) if "auto_execute" in row.keys() else False
     g.created_at = datetime.fromisoformat(row["created_at"])
     g.updated_at = datetime.fromisoformat(row["updated_at"])
     return g
@@ -606,9 +659,10 @@ def create_goal(goal: Goal) -> Goal:
     now = datetime.now(timezone.utc).isoformat()
     with _conn() as con:
         cur = con.execute(
-            "INSERT INTO goals (user_id, title, description, status, answers, created_at, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (goal.user_id, goal.title, goal.description, goal.status, json.dumps(goal.answers), now, now),
+            "INSERT INTO goals (user_id, title, description, status, answers, auto_execute, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (goal.user_id, goal.title, goal.description, goal.status,
+             json.dumps(goal.answers), int(goal.auto_execute), now, now),
         )
         goal.id = cur.lastrowid
         goal.created_at = datetime.fromisoformat(now)
@@ -640,8 +694,9 @@ def update_goal(goal: Goal) -> Goal:
     now = datetime.now(timezone.utc).isoformat()
     with _conn() as con:
         con.execute(
-            "UPDATE goals SET title=?, description=?, status=?, answers=?, updated_at=? WHERE id=?",
-            (goal.title, goal.description, goal.status, json.dumps(goal.answers), now, goal.id),
+            "UPDATE goals SET title=?, description=?, status=?, answers=?, auto_execute=?, updated_at=? WHERE id=?",
+            (goal.title, goal.description, goal.status, json.dumps(goal.answers),
+             int(goal.auto_execute), now, goal.id),
         )
     goal.updated_at = datetime.fromisoformat(now)
     return goal
@@ -739,6 +794,7 @@ def _row_to_credential(row: sqlite3.Row) -> ApiCredential:
         auth_header=row["auth_header"],
         auth_value=_decrypt_value(row["auth_value"]),
         description=row["description"],
+        user_id=row["user_id"] if "user_id" in row.keys() else None,
         created_at=datetime.fromisoformat(row["created_at"]),
     )
 
@@ -748,9 +804,9 @@ def create_credential(cred: ApiCredential) -> ApiCredential:
     encrypted_value = _encrypt_value(cred.auth_value)
     with _conn() as con:
         cur = con.execute(
-            "INSERT INTO api_credentials (name, base_url, auth_header, auth_value, description, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            (cred.name, cred.base_url, cred.auth_header, encrypted_value, cred.description, now),
+            "INSERT INTO api_credentials (name, base_url, auth_header, auth_value, description, user_id, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (cred.name, cred.base_url, cred.auth_header, encrypted_value, cred.description, cred.user_id, now),
         )
         cred.id = cur.lastrowid
         cred.created_at = datetime.fromisoformat(now)
@@ -763,9 +819,17 @@ def get_credential(cred_id: int) -> Optional[ApiCredential]:
     return _row_to_credential(row) if row else None
 
 
-def list_credentials() -> List[ApiCredential]:
+def list_credentials(user_id: Optional[int] = None) -> List[ApiCredential]:
+    """List credentials. If user_id is given, returns only that user's credentials
+    plus any legacy unscoped credentials (user_id IS NULL)."""
     with _conn() as con:
-        rows = con.execute("SELECT * FROM api_credentials ORDER BY created_at DESC").fetchall()
+        if user_id is not None:
+            rows = con.execute(
+                "SELECT * FROM api_credentials WHERE user_id = ? OR user_id IS NULL ORDER BY created_at DESC",
+                (user_id,),
+            ).fetchall()
+        else:
+            rows = con.execute("SELECT * FROM api_credentials ORDER BY created_at DESC").fetchall()
     return [_row_to_credential(r) for r in rows]
 
 
@@ -1349,6 +1413,8 @@ def _row_to_spending_budget(row: sqlite3.Row) -> SpendingBudget:
         require_approval=bool(row["require_approval"]),
         spent_today=row["spent_today"],
         spent_total=row["spent_total"],
+        autopilot_enabled=bool(row["autopilot_enabled"]) if "autopilot_enabled" in row.keys() else False,
+        autopilot_threshold=row["autopilot_threshold"] if "autopilot_threshold" in row.keys() else 50.0,
         created_at=datetime.fromisoformat(row["created_at"]),
         updated_at=datetime.fromisoformat(row["updated_at"]),
     )
@@ -1360,11 +1426,14 @@ def create_spending_budget(budget: SpendingBudget) -> SpendingBudget:
         cur = con.execute(
             """INSERT INTO spending_budgets
                (goal_id, daily_limit, total_limit, category, require_approval,
-                spent_today, spent_total, created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                spent_today, spent_total, autopilot_enabled, autopilot_threshold,
+                created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (budget.goal_id, budget.daily_limit, budget.total_limit,
              budget.category, int(budget.require_approval),
-             budget.spent_today, budget.spent_total, now, now),
+             budget.spent_today, budget.spent_total,
+             int(budget.autopilot_enabled), budget.autopilot_threshold,
+             now, now),
         )
         budget.id = cur.lastrowid
         budget.created_at = datetime.fromisoformat(now)
@@ -1414,10 +1483,12 @@ def update_spending_budget(budget: SpendingBudget) -> SpendingBudget:
         con.execute(
             """UPDATE spending_budgets
                SET daily_limit=?, total_limit=?, category=?, require_approval=?,
-                   spent_today=?, spent_total=?, updated_at=?
+                   spent_today=?, spent_total=?, autopilot_enabled=?, autopilot_threshold=?,
+                   updated_at=?
                WHERE id=?""",
             (budget.daily_limit, budget.total_limit, budget.category,
              int(budget.require_approval), budget.spent_today, budget.spent_total,
+             int(budget.autopilot_enabled), budget.autopilot_threshold,
              now, budget.id),
         )
     budget.updated_at = datetime.fromisoformat(now)
@@ -1895,3 +1966,178 @@ def increment_service_recommendation(service_id: int) -> None:
             "UPDATE discovered_services SET times_recommended = times_recommended + 1, updated_at = ? WHERE id = ?",
             (now, service_id),
         )
+
+
+# ─── Auto-execute Tasks (autonomous loop) ────────────────────────────────────
+
+def list_auto_execute_tasks() -> List[Task]:
+    """Return tasks whose goal has auto_execute=True and that are in 'todo' status.
+
+    Orders by order_index so the execution loop picks up tasks in the intended
+    sequence. Only returns one task per goal (the next pending task).
+    """
+    with _conn() as con:
+        rows = con.execute(
+            """SELECT t.* FROM tasks t
+               JOIN goals g ON t.goal_id = g.id
+               WHERE g.auto_execute = 1
+                 AND g.status IN ('decomposed', 'in_progress')
+                 AND t.status = 'todo'
+               ORDER BY t.goal_id, t.order_index ASC, t.id ASC""",
+        ).fetchall()
+    # Only return the first pending task per goal
+    seen_goals: Set[int] = set()
+    result: List[Task] = []
+    for row in rows:
+        gid = row["goal_id"]
+        if gid not in seen_goals:
+            seen_goals.add(gid)
+            result.append(_row_to_task(row))
+    return result
+
+
+# ─── Deployments ─────────────────────────────────────────────────────────────
+
+def create_deployment(task_id: int, goal_id: int, service: str,
+                      project_name: str = "", repository_url: str = "",
+                      deploy_url: str = "", provider_data: str = "{}") -> dict:
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        cur = con.execute(
+            """INSERT INTO deployments
+               (task_id, goal_id, service, project_name, repository_url,
+                deploy_url, status, provider_data, health_status, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, 'unknown', ?, ?)""",
+            (task_id, goal_id, service, project_name, repository_url,
+             deploy_url, provider_data, now, now),
+        )
+        return {
+            "id": cur.lastrowid, "task_id": task_id, "goal_id": goal_id,
+            "service": service, "project_name": project_name,
+            "repository_url": repository_url, "deploy_url": deploy_url,
+            "status": "pending", "health_status": "unknown",
+        }
+
+
+def update_deployment(deploy_id: int, status: Optional[str] = None,
+                      deploy_url: Optional[str] = None,
+                      health_status: Optional[str] = None,
+                      provider_data: Optional[str] = None) -> Optional[dict]:
+    now = datetime.now(timezone.utc).isoformat()
+    _ALLOWED_COLUMNS = {"status", "deploy_url", "health_status", "last_health_check",
+                        "provider_data", "updated_at"}
+    updates: list[str] = ["updated_at = ?"]
+    params: list = [now]
+    if status is not None:
+        updates.append("status = ?")
+        params.append(status)
+    if deploy_url is not None:
+        updates.append("deploy_url = ?")
+        params.append(deploy_url)
+    if health_status is not None:
+        updates.append("health_status = ?")
+        params.append(health_status)
+        updates.append("last_health_check = ?")
+        params.append(now)
+    if provider_data is not None:
+        updates.append("provider_data = ?")
+        params.append(provider_data)
+    # Validate all column names are in the allowed set
+    for clause in updates:
+        col_name = clause.split(" = ")[0].strip()
+        if col_name not in _ALLOWED_COLUMNS:
+            raise ValueError(f"Invalid column: {col_name}")
+    params.append(deploy_id)
+    set_clause = ", ".join(updates)
+    with _conn() as con:
+        con.execute(
+            f"UPDATE deployments SET {set_clause} WHERE id = ?", params,  # noqa: S608
+        )
+        row = con.execute("SELECT * FROM deployments WHERE id = ?", (deploy_id,)).fetchone()
+    if not row:
+        return None
+    return {
+        "id": row["id"], "task_id": row["task_id"], "goal_id": row["goal_id"],
+        "service": row["service"], "project_name": row["project_name"],
+        "repository_url": row["repository_url"], "deploy_url": row["deploy_url"],
+        "status": row["status"], "health_status": row["health_status"],
+        "last_health_check": row["last_health_check"],
+        "created_at": row["created_at"], "updated_at": row["updated_at"],
+    }
+
+
+def get_deployment(deploy_id: int) -> Optional[dict]:
+    with _conn() as con:
+        row = con.execute("SELECT * FROM deployments WHERE id = ?", (deploy_id,)).fetchone()
+    if not row:
+        return None
+    return {
+        "id": row["id"], "task_id": row["task_id"], "goal_id": row["goal_id"],
+        "service": row["service"], "project_name": row["project_name"],
+        "repository_url": row["repository_url"], "deploy_url": row["deploy_url"],
+        "status": row["status"], "health_status": row["health_status"],
+        "last_health_check": row["last_health_check"],
+        "provider_data": row["provider_data"],
+        "created_at": row["created_at"], "updated_at": row["updated_at"],
+    }
+
+
+def list_deployments(goal_id: Optional[int] = None) -> list[dict]:
+    with _conn() as con:
+        if goal_id is not None:
+            rows = con.execute(
+                "SELECT * FROM deployments WHERE goal_id = ? ORDER BY created_at DESC",
+                (goal_id,),
+            ).fetchall()
+        else:
+            rows = con.execute(
+                "SELECT * FROM deployments ORDER BY created_at DESC"
+            ).fetchall()
+    return [
+        {
+            "id": r["id"], "task_id": r["task_id"], "goal_id": r["goal_id"],
+            "service": r["service"], "project_name": r["project_name"],
+            "repository_url": r["repository_url"], "deploy_url": r["deploy_url"],
+            "status": r["status"], "health_status": r["health_status"],
+            "last_health_check": r["last_health_check"],
+            "created_at": r["created_at"], "updated_at": r["updated_at"],
+        }
+        for r in rows
+    ]
+
+
+# ─── Provisioning Logs ──────────────────────────────────────────────────────
+
+def create_provisioning_log(task_id: int, service_name: str,
+                            action: str = "signup", status: str = "pending",
+                            result_data: str = "{}", error: str = "") -> dict:
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        cur = con.execute(
+            """INSERT INTO provisioning_logs
+               (task_id, service_name, action, status, result_data, error, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (task_id, service_name, action, status, result_data, error, now),
+        )
+        return {
+            "id": cur.lastrowid, "task_id": task_id,
+            "service_name": service_name, "action": action,
+            "status": status, "created_at": now,
+        }
+
+
+def list_provisioning_logs(task_id: int) -> list[dict]:
+    with _conn() as con:
+        rows = con.execute(
+            "SELECT * FROM provisioning_logs WHERE task_id = ? ORDER BY created_at DESC",
+            (task_id,),
+        ).fetchall()
+    return [
+        {
+            "id": r["id"], "task_id": r["task_id"],
+            "service_name": r["service_name"], "action": r["action"],
+            "status": r["status"], "result_data": r["result_data"],
+            "error": r["error"], "created_at": r["created_at"],
+        }
+        for r in rows
+    ]

@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python 3.12](https://img.shields.io/badge/Python-3.12-3776AB.svg)](https://python.org)
-[![Tests: 481 passing](https://img.shields.io/badge/Tests-481_passing-brightgreen.svg)](#running-tests)
+[![Tests: 578 passing](https://img.shields.io/badge/Tests-578_passing-brightgreen.svg)](#running-tests)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.115-009688.svg)](https://fastapi.tiangolo.com)
 
 > *Humans are will without infinite execution; AI is infinite execution without will — teb sits at that seam, taking your raw intentions and dissolving everything beneath them into solved problems. You stop managing tasks and start governing outcomes.*
@@ -263,6 +263,31 @@ All endpoints require `Authorization: Bearer <token>` unless marked *(no auth)*.
 | `GET` | `/api/discover/catalog` | Get the curated service catalog (50+ services) |
 | `POST` | `/api/discover/record` | Record a discovered service |
 
+### Autonomous Execution (Autopilot)
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `POST` | `/api/goals/{id}/auto-execute` | Enable autonomous execution for a goal |
+| `DELETE` | `/api/goals/{id}/auto-execute` | Disable autonomous execution |
+| `GET` | `/api/auto-execute/status` | Get status of autonomous execution system |
+
+### Deployment (Vercel / Railway / Render)
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `POST` | `/api/tasks/{id}/deploy` | Deploy an application for a task |
+| `GET` | `/api/goals/{id}/deployments` | List deployments for a goal |
+| `GET` | `/api/deployments/{id}/health` | Check health of a specific deployment |
+| `GET` | `/api/goals/{id}/deployments/health` | Check health of all deployments for a goal |
+
+### Service Provisioning (Automated Signup)
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `POST` | `/api/tasks/{id}/provision` | Auto-provision a service for a task |
+| `GET` | `/api/provision/services` | List provisionable services |
+| `GET` | `/api/tasks/{id}/provisioning-logs` | View provisioning logs for a task |
+
 ### Messaging (Telegram + Webhooks)
 
 | Method | Endpoint | Description |
@@ -433,6 +458,323 @@ curl -X POST http://localhost:8000/api/payments/accounts \
   -d '{"provider": "stripe", "config": {"api_key": "sk_live_..."}}'
 ```
 
+### Autonomous Execution (Autopilot)
+
+```bash
+# Enable autopilot on a goal — tasks are auto-executed in the background
+curl -X POST http://localhost:8000/api/goals/1/auto-execute \
+  -H "Authorization: Bearer $TOKEN"
+
+# Check autopilot status
+curl http://localhost:8000/api/auto-execute/status \
+  -H "Authorization: Bearer $TOKEN"
+
+# Disable autopilot
+curl -X DELETE http://localhost:8000/api/goals/1/auto-execute \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+### Deploy & Provision
+
+```bash
+# Deploy an application (Vercel, Railway, or Render — detected from task)
+curl -X POST http://localhost:8000/api/tasks/1/deploy \
+  -H "Authorization: Bearer $TOKEN"
+
+# Check deployment health
+curl http://localhost:8000/api/goals/1/deployments/health \
+  -H "Authorization: Bearer $TOKEN"
+
+# Auto-provision a service (e.g. Stripe, Heroku, GitHub — browser automation)
+curl -X POST http://localhost:8000/api/tasks/1/provision \
+  -H "Authorization: Bearer $TOKEN"
+
+# List provisionable services
+curl http://localhost:8000/api/provision/services \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+---
+
+## User Manual — Complete First-Use Walkthrough
+
+This section walks you through using teb end-to-end, from first install to autonomous execution. Follow it step by step.
+
+### Step 1: Install & Start
+
+**Option A — Local (Python 3.12+)**
+
+```bash
+git clone https://github.com/aiparallel0/teb.git
+cd teb
+pip install -r requirements.txt
+cp .env.example .env
+```
+
+Edit `.env` — set **at minimum**:
+```
+TEB_JWT_SECRET=<generate with: python -c "import secrets; print(secrets.token_urlsafe(64))">
+```
+
+Optionally set an AI key for AI-powered features (without one, teb uses built-in templates):
+```
+ANTHROPIC_API_KEY=sk-ant-...
+# or
+OPENAI_API_KEY=sk-...
+```
+
+Start the server:
+```bash
+uvicorn teb.main:app --reload
+# Open http://localhost:8000
+```
+
+**Option B — Docker**
+
+```bash
+git clone https://github.com/aiparallel0/teb.git
+cd teb
+cp .env.example .env    # edit TEB_JWT_SECRET
+docker compose up --build
+# Open http://localhost:8000
+```
+
+### Step 2: Create an Account
+
+Open http://localhost:8000 in your browser. The web UI will prompt you to register.
+
+Or via API:
+```bash
+curl -X POST http://localhost:8000/api/auth/register \
+  -H 'Content-Type: application/json' \
+  -d '{"email": "you@example.com", "password": "strongpassword"}'
+```
+
+Then log in:
+```bash
+curl -X POST http://localhost:8000/api/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"email": "you@example.com", "password": "strongpassword"}'
+```
+
+Save the `token` from the response:
+```bash
+export TOKEN="eyJ..."
+```
+
+### Step 3: Set Your First Goal
+
+**Web UI:** Type your goal in the text box (e.g. "earn $500 freelancing online") and click Create.
+
+**API:**
+```bash
+curl -X POST http://localhost:8000/api/goals \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"title": "earn $500 freelancing online", "description": "complete beginner, have a laptop, can dedicate 2 hours/day"}'
+```
+
+### Step 4: Answer Clarifying Questions
+
+teb will ask 3–5 targeted questions to personalize the plan.
+
+```bash
+# See the next question
+curl http://localhost:8000/api/goals/1/next_question \
+  -H "Authorization: Bearer $TOKEN"
+
+# Answer it
+curl -X POST http://localhost:8000/api/goals/1/clarify \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"key": "technical_skills", "answer": "Basic Python, some HTML/CSS"}'
+```
+
+Repeat until no more questions are returned.
+
+### Step 5: Decompose into Tasks
+
+```bash
+curl -X POST http://localhost:8000/api/goals/1/decompose \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+This creates 6–15 ordered, concrete tasks with time estimates. View them:
+```bash
+curl http://localhost:8000/api/goals/1 \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+### Step 6: Work Through Tasks
+
+**See your next focus task:**
+```bash
+curl http://localhost:8000/api/goals/1/focus \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+**Mark a task done:**
+```bash
+curl -X PATCH http://localhost:8000/api/tasks/1 \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"status": "done"}'
+```
+
+**Or use Drip Mode** — get one task at a time with adaptive questions:
+```bash
+curl http://localhost:8000/api/goals/1/drip \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+### Step 7: Let teb Execute Tasks Automatically
+
+Register an API credential so teb can act on your behalf:
+```bash
+curl -X POST http://localhost:8000/api/credentials \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "name": "Namecheap",
+    "base_url": "https://api.namecheap.com",
+    "auth_header": "X-Api-Key",
+    "auth_value": "your-api-key",
+    "description": "Domain registration"
+  }'
+```
+
+Execute a specific task:
+```bash
+curl -X POST http://localhost:8000/api/tasks/1/execute \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+Or enable full autopilot on a goal:
+```bash
+curl -X POST http://localhost:8000/api/goals/1/auto-execute \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+### Step 8: Set Up Budget Controls
+
+Before teb spends money, set limits:
+```bash
+curl -X POST http://localhost:8000/api/budgets \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"goal_id": 1, "daily_limit": 25, "total_limit": 200, "category": "general", "require_approval": true}'
+```
+
+Approve or deny spending requests:
+```bash
+curl -X POST http://localhost:8000/api/spending/1/action \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"action": "approve"}'
+```
+
+### Step 9: Daily Check-ins & Coaching
+
+Submit a 2-minute check-in (teb responds with coaching):
+```bash
+curl -X POST http://localhost:8000/api/goals/1/checkin \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"done_summary": "Created Upwork profile and sent 3 proposals", "blockers": "Not sure how to price my services"}'
+```
+
+If you go quiet for 48+ hours, teb nudges you:
+```bash
+curl http://localhost:8000/api/goals/1/nudge \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+### Step 10: Track Real Outcomes
+
+Don't just check boxes — measure results:
+```bash
+# Create a metric
+curl -X POST http://localhost:8000/api/goals/1/outcomes \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"label": "Revenue earned", "target_value": 500, "unit": "$"}'
+
+# Update progress
+curl -X PATCH http://localhost:8000/api/outcomes/1 \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"current_value": 150}'
+```
+
+### Step 11: Optional — Notifications
+
+Get notified via Telegram or webhooks:
+```bash
+curl -X POST http://localhost:8000/api/messaging/config \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"channel": "telegram", "config": {"bot_token": "123:ABC...", "chat_id": "your-chat-id"}, "events": ["nudge", "task_done", "spending_request"]}'
+```
+
+### Step 12: Optional — Payments
+
+Connect real payment providers for financial execution:
+```bash
+# Stripe
+curl -X POST http://localhost:8000/api/payments/accounts \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"provider": "stripe", "config": {"api_key": "sk_live_..."}}'
+
+# Mercury banking
+curl -X POST http://localhost:8000/api/payments/accounts \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"provider": "mercury", "config": {"api_key": "..."}}'
+```
+
+### What Works Without Any API Keys
+
+teb is fully functional in **template mode** — no AI keys needed:
+- ✅ Goal creation and clarifying questions
+- ✅ Task decomposition (10 built-in templates)
+- ✅ Task management (create, update, reorder, delete)
+- ✅ Daily check-ins and coaching
+- ✅ Outcome tracking
+- ✅ Budget management and spending approval
+- ✅ User profiles and knowledge base
+- ✅ Service discovery (50+ curated services)
+- ✅ Integration catalog (10 services)
+- ✅ Multi-agent delegation (template mode)
+- ✅ Proactive suggestions (rule-based)
+- ✅ Drip mode micro-tasking
+- ✅ Web UI
+
+### What Requires API Keys
+
+| Feature | Key Required |
+|---|---|
+| AI-enhanced decomposition | `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` |
+| AI coaching feedback | `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` |
+| AI-powered service discovery | `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` |
+| Autonomous API execution | User-registered API credentials |
+| Browser automation | Playwright installed (`pip install playwright && playwright install`) |
+| Telegram notifications | Bot token from [@BotFather](https://t.me/BotFather) |
+| Stripe payments | `TEB_STRIPE_API_KEY` |
+| Mercury banking | `TEB_MERCURY_API_KEY` |
+
+### Production Checklist
+
+Before deploying to production:
+
+- [ ] Set `TEB_JWT_SECRET` to a strong random value
+- [ ] Set `TEB_SECRET_KEY` for credential encryption — ⚠️ **without this, API credentials are stored UNENCRYPTED**
+- [ ] Set `TEB_CORS_ORIGINS` to your specific domain (not `*`)
+- [ ] Review `TEB_AUTOPILOT_DEFAULT_THRESHOLD` (default: $50 per auto-approved transaction)
+- [ ] Set up a reverse proxy (nginx/Caddy) with HTTPS
+- [ ] Use Docker with `docker compose up -d` for persistence
+- [ ] Back up the SQLite database file regularly
+
 ---
 
 ## Configuration
@@ -491,9 +833,9 @@ Without an AI key, teb operates in **template mode** — fully offline, instant.
 
 ```
 teb/
-├── main.py            FastAPI app + 80+ REST endpoints
+├── main.py            FastAPI app + 90 REST endpoints
 ├── models.py          20 dataclass models (Goal, Task, User, etc.)
-├── storage.py         SQLite data access layer (24 tables)
+├── storage.py         SQLite data access layer (26 tables)
 ├── decomposer.py      Template-based + AI decomposition, coaching, drip mode, success paths
 ├── executor.py        AI-powered task execution engine (API calls via httpx)
 ├── browser.py         Browser automation engine (AI plan generation + Playwright)
@@ -501,6 +843,8 @@ teb/
 ├── integrations.py    Pre-built integration catalog (10 services) + matching engine
 ├── payments.py        Real payment integration (Mercury banking + Stripe processing)
 ├── discovery.py       Tool/service discovery engine (50+ curated services + AI discovery)
+├── deployer.py        Deployment engine (Vercel, Railway, Render) + health monitoring
+├── provisioning.py    Service auto-signup via browser automation (6 service templates)
 ├── messaging.py       External messaging (Telegram bots + webhooks)
 ├── ai_client.py       Unified AI client (Anthropic Claude + OpenAI, retry + fallback)
 ├── auth.py            JWT authentication, bcrypt hashing, RBAC, account locking
@@ -520,10 +864,12 @@ tests/
 ├── test_browser_integrations.py Tests for browser automation, integrations, agent messaging
 ├── test_new_features.py         Tests for drip mode, success paths, financial pipeline, messaging
 ├── test_plan_features.py        Tests for new templates, spending resets, user storage
-└── test_mvp_features.py         Tests for payments, discovery, behavior, agent memory
+├── test_mvp_features.py         Tests for payments, discovery, behavior, agent memory
+├── test_autopilot_features.py   Tests for autonomous execution, deployer, provisioning
+└── test_security_fixes.py       Tests for credential scoping, ownership, payment config
 ```
 
-### Database (24 tables)
+### Database (26 tables)
 
 | Table | Purpose |
 |---|---|
@@ -551,6 +897,8 @@ tests/
 | `payment_accounts` | Registered payment accounts |
 | `payment_transactions` | Payment transaction history |
 | `discovered_services` | AI-discovered service records |
+| `deployments` | Application deployment records (Vercel/Railway/Render) |
+| `provisioning_logs` | Service provisioning attempt log |
 
 ### Execution Flow
 
@@ -723,7 +1071,7 @@ pip install -r requirements.txt
 pytest tests/ -v
 ```
 
-481 tests across 9 test files. Tests use an in-memory SQLite database and mock all external services.
+578 tests across 12 test files. Tests use an in-memory SQLite database and mock all external services.
 
 ---
 
@@ -747,9 +1095,13 @@ pytest tests/ -v
 16. ✅ User behavior analytics and abandonment risk analysis
 17. ✅ Persistent agent memory
 18. ✅ JWT authentication with RBAC, refresh tokens, and account locking
-19. 🔲 Additional payment providers (Privacy.com virtual cards, Plaid banking)
-20. 🔲 SMS notifications
-21. 🔲 Payment sandbox/simulation mode
+19. ✅ Autonomous execution loop (background autopilot for tasks)
+20. ✅ Deployment engine (Vercel, Railway, Render — deploy + health monitoring)
+21. ✅ Service provisioning (automated signup via browser automation)
+22. ✅ Credential scoping (per-user API credential isolation)
+23. 🔲 Additional payment providers (Privacy.com virtual cards, Plaid banking)
+24. 🔲 SMS notifications
+25. 🔲 Payment sandbox/simulation mode
 
 ---
 

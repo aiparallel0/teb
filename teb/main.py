@@ -17,7 +17,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from teb import agents, auth, browser, config, decomposer, executor, integrations, messaging, storage
+from teb import agents, auth, browser, config, decomposer, deployer, executor, integrations, messaging, provisioning, storage
 from teb.models import (
     ApiCredential, BrowserAction, CheckIn, ExecutionLog,
     Goal, MessagingConfig, NudgeEvent, OutcomeMetric,
@@ -75,21 +75,156 @@ def reset_rate_limits() -> None:
 
 # ─── Startup / lifespan ───────────────────────────────────────────────────────
 
+import asyncio
+
+_auto_exec_task: Optional[asyncio.Task] = None
+
+
+def _check_budget_approval(task_id: int, task_title: str, goal_id: int) -> Optional[dict]:
+    """Check if any budget for the goal requires manual approval.
+
+    Returns a dict with spending request info if approval is needed, else None.
+    When autopilot is enabled on a budget, approval is bypassed.
+    """
+    budgets = storage.list_spending_budgets(goal_id)
+    for budget in budgets:
+        storage.maybe_reset_daily_spending(budget)
+        if budget.require_approval and not budget.autopilot_enabled:
+            # Create a spending request and signal pause
+            sr = SpendingRequest(
+                task_id=task_id,
+                budget_id=budget.id if budget.id is not None else 0,
+                amount=0,
+                description=f"Automated execution of: {task_title}",
+                service="api_execution",
+                status="pending",
+            )
+            sr = storage.create_spending_request(sr)
+            messaging.send_notification("spending_request", {
+                "request_id": sr.id,
+                "amount": 0,
+                "description": sr.description,
+                "service": sr.service,
+                "task_title": task_title,
+            })
+            return {
+                "spending_request_id": sr.id,
+                "budget_category": budget.category,
+            }
+    return None
+
+
+async def _autonomous_execution_loop() -> None:
+    """Background loop: every N seconds, pick up pending tasks and execute them.
+
+    Only processes tasks from goals with auto_execute=True.
+    Respects budget autopilot settings for financial autonomy.
+    """
+    interval = config.AUTONOMOUS_EXECUTION_INTERVAL
+    while True:
+        try:
+            if not config.AUTONOMOUS_EXECUTION_ENABLED:
+                await asyncio.sleep(interval)
+                continue
+
+            pending = storage.list_auto_execute_tasks()
+            for task in pending:
+                try:
+                    # Get the goal's user_id for credential scoping
+                    goal = storage.get_goal(task.goal_id)
+                    goal_user_id = goal.user_id if goal else None
+                    credentials = storage.list_credentials(user_id=goal_user_id)
+                    plan = executor.generate_plan(task, credentials)
+
+                    if not plan.can_execute:
+                        logger.debug("Task %s cannot be auto-executed: %s", task.id, plan.reason)
+                        continue
+
+                    # Check budget constraints with autopilot support
+                    approval = _check_budget_approval(task.id or 0, task.title, task.goal_id)
+                    if approval:
+                        continue
+
+                    # Execute the task
+                    task.status = "executing"
+                    storage.update_task(task)
+
+                    creds_by_id = {c.id: c for c in credentials if c.id is not None}
+                    results = executor.execute_plan(plan, creds_by_id)
+
+                    # Log results
+                    all_success = True
+                    for result in results:
+                        cred = creds_by_id.get(result.step.credential_id)
+                        log = ExecutionLog(
+                            task_id=task.id or 0,
+                            credential_id=result.step.credential_id,
+                            action=result.step.description,
+                            request_summary=executor.build_request_summary(result.step, cred),
+                            response_summary=executor.build_response_summary(result),
+                            status="success" if result.success else "error",
+                        )
+                        storage.create_execution_log(log)
+                        if not result.success:
+                            all_success = False
+
+                    task.status = "done" if all_success else "failed"
+                    storage.update_task(task)
+
+                    if all_success:
+                        messaging.send_notification("task_done", {
+                            "task_id": task.id,
+                            "task_title": task.title,
+                        })
+                    logger.info("Auto-executed task %s: %s", task.id,
+                                "success" if all_success else "failed")
+
+                except Exception as e:
+                    logger.error("Auto-execution failed for task %s: %s", task.id, e)
+                    task.status = "failed"
+                    storage.update_task(task)
+                    messaging.send_notification("task_done", {
+                        "task_id": task.id,
+                        "task_title": task.title,
+                        "error": str(e),
+                    })
+
+            await asyncio.sleep(interval)
+
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logger.error("Autonomous execution loop error: %s", e)
+            await asyncio.sleep(interval)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    global _auto_exec_task
     storage.init_db()
     integrations.seed_integrations()
-    # Reset stale daily spending counters from previous day(s)
     storage.reset_all_daily_spending()
-    # Clear rate-limit buckets on each fresh start (also ensures clean test runs)
     _rate_buckets.clear()
-    # Warn if JWT secret is the insecure default
     if config.JWT_SECRET == "change-me-in-production-not-safe":
         logger.warning(
             "TEB_JWT_SECRET is set to the default insecure value. "
             "Set a strong secret via environment variable before deploying."
         )
+    if not config.SECRET_KEY:
+        logger.warning(
+            "TEB_SECRET_KEY is not set — API credentials will be stored UNENCRYPTED. "
+            "Generate one with: python -c \"from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())\""
+        )
+    # Start autonomous execution loop
+    _auto_exec_task = asyncio.create_task(_autonomous_execution_loop())
     yield
+    # Shutdown: cancel loop
+    if _auto_exec_task:
+        _auto_exec_task.cancel()
+        try:
+            await _auto_exec_task
+        except asyncio.CancelledError:
+            pass
 
 
 app = FastAPI(title="teb — Task Execution Bridge", lifespan=lifespan)
@@ -173,12 +308,16 @@ class BudgetCreate(BaseModel):
     total_limit: float = 500.0
     category: str = "general"
     require_approval: bool = True
+    autopilot_enabled: bool = False
+    autopilot_threshold: float = 50.0
 
 
 class BudgetUpdate(BaseModel):
     daily_limit: Optional[float] = None
     total_limit: Optional[float] = None
     require_approval: Optional[bool] = None
+    autopilot_enabled: Optional[bool] = None
+    autopilot_threshold: Optional[float] = None
 
 
 class SpendingRequestCreate(BaseModel):
@@ -349,8 +488,9 @@ async def auth_me(request: Request):
 
 
 @app.post("/api/auth/refresh")
-async def auth_refresh(body: AuthRefresh):
+async def auth_refresh(request: Request, body: AuthRefresh):
     """Exchange a refresh token for a new access token + refresh token."""
+    _check_rate_limit(request)
     try:
         result = auth.refresh_access_token(body.refresh_token)
     except ValueError as exc:
@@ -679,7 +819,7 @@ async def delete_task(task_id: int, request: Request):
 
 @app.post("/api/credentials", status_code=201)
 async def create_credential(body: CredentialCreate, request: Request):
-    _require_user(request)
+    uid = _require_user(request)
     name = body.name.strip()
     base_url = body.base_url.strip()
     if not name:
@@ -692,6 +832,7 @@ async def create_credential(body: CredentialCreate, request: Request):
         auth_header=body.auth_header.strip() or "Authorization",
         auth_value=body.auth_value,
         description=body.description.strip(),
+        user_id=uid,
     )
     cred = storage.create_credential(cred)
     return cred.to_dict()
@@ -699,16 +840,19 @@ async def create_credential(body: CredentialCreate, request: Request):
 
 @app.get("/api/credentials")
 async def list_credentials(request: Request):
-    _require_user(request)
-    return [c.to_dict() for c in storage.list_credentials()]
+    uid = _require_user(request)
+    return [c.to_dict() for c in storage.list_credentials(user_id=uid)]
 
 
 @app.delete("/api/credentials/{cred_id}", status_code=200)
 async def delete_credential(cred_id: int, request: Request):
-    _require_user(request)
+    uid = _require_user(request)
     cred = storage.get_credential(cred_id)
     if not cred:
         raise HTTPException(status_code=404, detail="Credential not found")
+    # Users can only delete their own credentials (or legacy unscoped ones)
+    if cred.user_id is not None and cred.user_id != uid:
+        raise HTTPException(status_code=403, detail="Not your credential")
     storage.delete_credential(cred_id)
     return {"deleted": cred_id}
 
@@ -724,7 +868,7 @@ async def execute_task(task_id: int, request: Request):
     if task.status in ("done", "skipped"):
         raise HTTPException(status_code=409, detail="Task is already completed")
 
-    credentials = storage.list_credentials()
+    credentials = storage.list_credentials(user_id=uid)
 
     # Generate execution plan
     plan = executor.generate_plan(task, credentials)
@@ -739,48 +883,26 @@ async def execute_task(task_id: int, request: Request):
         }
 
     # P2.1: Budget validation — check if the goal has a budget and if spending is required
-    budgets = storage.list_spending_budgets(task.goal_id)
-    if budgets:
-        # Check if any budget requires approval
-        for budget in budgets:
-            storage.maybe_reset_daily_spending(budget)
-            if budget.require_approval:
-                # Create a spending request and pause execution
-                from teb.models import SpendingRequest as SpReq
-                sr = SpReq(
-                    task_id=task_id,
-                    budget_id=budget.id,  # type: ignore[arg-type]
-                    amount=0,  # estimated; real amount unknown until execution
-                    description=f"Automated execution of: {task.title}",
-                    service="api_execution",
-                    status="pending",
-                )
-                sr = storage.create_spending_request(sr)
-                messaging.send_notification("spending_request", {
-                    "request_id": sr.id,
-                    "amount": 0,
-                    "description": sr.description,
-                    "service": sr.service,
-                    "task_title": task.title,
-                })
-                # Log pending approval
-                pending_log = ExecutionLog(
-                    task_id=task_id,
-                    credential_id=None,
-                    action="Execution paused — pending budget approval",
-                    request_summary=f"Budget {budget.category} requires approval",
-                    response_summary=f"Spending request #{sr.id} created",
-                    status="success",
-                )
-                storage.create_execution_log(pending_log)
-                return {
-                    "task_id": task_id,
-                    "executed": False,
-                    "reason": "Budget requires approval. A spending request has been created.",
-                    "plan": plan.to_dict(),
-                    "logs": [pending_log.to_dict()],
-                    "spending_request_id": sr.id,
-                }
+    approval = _check_budget_approval(task_id, task.title, task.goal_id)
+    if approval:
+        # Log pending approval
+        pending_log = ExecutionLog(
+            task_id=task_id,
+            credential_id=None,
+            action="Execution paused — pending budget approval",
+            request_summary=f"Budget requires approval",
+            response_summary=f"Spending request #{approval['spending_request_id']} created",
+            status="success",
+        )
+        storage.create_execution_log(pending_log)
+        return {
+            "task_id": task_id,
+            "executed": False,
+            "reason": "Budget requires approval. A spending request has been created.",
+            "plan": plan.to_dict(),
+            "logs": [pending_log.to_dict()],
+            "spending_request_id": approval["spending_request_id"],
+        }
 
     # Mark task as executing
     task.status = "executing"
@@ -1330,6 +1452,8 @@ async def create_budget(body: BudgetCreate, request: Request):
         total_limit=body.total_limit,
         category=body.category,
         require_approval=body.require_approval,
+        autopilot_enabled=body.autopilot_enabled,
+        autopilot_threshold=body.autopilot_threshold,
     )
     budget = storage.create_spending_budget(budget)
     return budget.to_dict()
@@ -1364,6 +1488,12 @@ async def update_budget(budget_id: int, body: BudgetUpdate, request: Request):
         budget.total_limit = body.total_limit
     if body.require_approval is not None:
         budget.require_approval = body.require_approval
+    if body.autopilot_enabled is not None:
+        budget.autopilot_enabled = body.autopilot_enabled
+    if body.autopilot_threshold is not None:
+        if body.autopilot_threshold < 0:
+            raise HTTPException(status_code=422, detail="autopilot_threshold must be non-negative")
+        budget.autopilot_threshold = body.autopilot_threshold
 
     budget = storage.update_spending_budget(budget)
     return budget.to_dict()
@@ -1951,6 +2081,144 @@ async def list_payment_transactions(account_id: int, request: Request):
     if not account or account["user_id"] != uid:
         raise HTTPException(status_code=404, detail="Payment account not found")
     return storage.list_payment_transactions(account_id)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Autonomous Execution Control
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+@app.post("/api/goals/{goal_id}/auto-execute")
+async def enable_auto_execute(goal_id: int, request: Request):
+    """Enable autonomous execution for a goal.
+
+    When enabled, teb's background loop automatically picks up and executes
+    pending tasks for this goal without manual triggering.
+    """
+    uid = _require_user(request)
+    goal = _get_goal_for_user(goal_id, uid)
+    goal.auto_execute = True
+    storage.update_goal(goal)
+    return {"goal_id": goal_id, "auto_execute": True, "message": "Autonomous execution enabled."}
+
+
+@app.delete("/api/goals/{goal_id}/auto-execute")
+async def disable_auto_execute(goal_id: int, request: Request):
+    """Disable autonomous execution for a goal."""
+    uid = _require_user(request)
+    goal = _get_goal_for_user(goal_id, uid)
+    goal.auto_execute = False
+    storage.update_goal(goal)
+    return {"goal_id": goal_id, "auto_execute": False, "message": "Autonomous execution disabled."}
+
+
+@app.get("/api/auto-execute/status")
+async def auto_execute_status(request: Request):
+    """Get the status of the autonomous execution loop and pending tasks."""
+    _require_user(request)
+    pending = storage.list_auto_execute_tasks()
+    return {
+        "loop_enabled": config.AUTONOMOUS_EXECUTION_ENABLED,
+        "loop_running": _auto_exec_task is not None and not _auto_exec_task.done(),
+        "interval_seconds": config.AUTONOMOUS_EXECUTION_INTERVAL,
+        "pending_tasks": len(pending),
+        "pending_task_ids": [t.id for t in pending],
+    }
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Deployment / Infrastructure Lifecycle
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+@app.post("/api/tasks/{task_id}/deploy")
+async def deploy_task(task_id: int, request: Request):
+    """Deploy an application as part of task execution.
+
+    Analyzes the task description to determine the hosting service
+    (Vercel, Railway, Render) and deploys via their API.
+    Requires a matching API credential registered via POST /api/credentials.
+    """
+    uid = _require_user(request)
+    task = _get_task_for_user(task_id, uid)
+    credentials = storage.list_credentials(user_id=uid)
+    plan = deployer.generate_deployment_plan(task, credentials)
+
+    if not plan.can_deploy:
+        return {
+            "task_id": task_id,
+            "deployed": False,
+            "plan": plan.to_dict(),
+        }
+
+    result = deployer.deploy(plan, credentials, task)
+
+    if result.get("success"):
+        task.status = "done"
+        storage.update_task(task)
+    return {
+        "task_id": task_id,
+        "deployed": result.get("success", False),
+        "result": {k: v for k, v in result.items() if k != "success"},
+        "plan": plan.to_dict(),
+    }
+
+
+@app.get("/api/goals/{goal_id}/deployments")
+async def list_goal_deployments(goal_id: int, request: Request):
+    """List all deployments for a goal."""
+    uid = _require_user(request)
+    _get_goal_for_user(goal_id, uid)
+    return storage.list_deployments(goal_id)
+
+
+@app.get("/api/deployments/{deploy_id}/health")
+async def check_deployment_health(deploy_id: int, request: Request):
+    """Run a health check on a deployment."""
+    _require_user(request)
+    return deployer.monitor_deployment(deploy_id)
+
+
+@app.get("/api/goals/{goal_id}/deployments/health")
+async def check_all_deployments_health(goal_id: int, request: Request):
+    """Run health checks on all active deployments for a goal."""
+    uid = _require_user(request)
+    _get_goal_for_user(goal_id, uid)
+    return deployer.monitor_all_deployments(goal_id)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Auto-Provisioning (sign up for services)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+@app.post("/api/tasks/{task_id}/provision")
+async def provision_task_service(task_id: int, request: Request):
+    """Auto-provision a service (sign up + extract credentials).
+
+    Detects the service from the task description and attempts to
+    sign up via browser automation. Without Playwright, returns
+    step-by-step manual instructions.
+    """
+    uid = _require_user(request)
+    task = _get_task_for_user(task_id, uid)
+    result = provisioning.provision_service(task)
+    return {"task_id": task_id, **result}
+
+
+@app.get("/api/provision/services")
+async def list_provisionable_services(request: Request):
+    """List all services that can be auto-provisioned."""
+    _require_user(request)
+    return provisioning.list_provisionable_services()
+
+
+@app.get("/api/tasks/{task_id}/provisioning-logs")
+async def get_provisioning_logs(task_id: int, request: Request):
+    """Get provisioning attempt logs for a task."""
+    uid = _require_user(request)
+    _get_task_for_user(task_id, uid)
+    return storage.list_provisioning_logs(task_id)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

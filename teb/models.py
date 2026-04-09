@@ -34,16 +34,19 @@ class Goal:
     user_id: Optional[int] = None     # FK to users; None for legacy/unscoped goals
     status: str = "drafting"          # drafting | clarifying | decomposed | in_progress | done
     answers: dict = field(default_factory=dict)
+    auto_execute: bool = False        # when True, tasks are auto-picked by the execution loop
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
     def to_dict(self) -> dict:
         return {
             "id": self.id,
+            "user_id": self.user_id,
             "title": self.title,
             "description": self.description,
             "status": self.status,
             "answers": self.answers,
+            "auto_execute": self.auto_execute,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
         }
@@ -86,6 +89,7 @@ class ApiCredential:
     auth_value: str = ""               # the credential (Bearer token, API key, etc.)
     description: str = ""              # what this API can do
     id: Optional[int] = None
+    user_id: Optional[int] = None      # FK to users; None for legacy/unscoped credentials
     created_at: Optional[datetime] = None
 
     def to_dict(self) -> dict:
@@ -413,6 +417,8 @@ class SpendingBudget:
     require_approval: bool = True      # whether each transaction needs manual approval
     spent_today: float = 0.0
     spent_total: float = 0.0
+    autopilot_enabled: bool = False    # when True, auto-approve spending below threshold
+    autopilot_threshold: float = 50.0  # max $ auto-approved per transaction
     id: Optional[int] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
@@ -427,6 +433,8 @@ class SpendingBudget:
             "require_approval": self.require_approval,
             "spent_today": self.spent_today,
             "spent_total": self.spent_total,
+            "autopilot_enabled": self.autopilot_enabled,
+            "autopilot_threshold": self.autopilot_threshold,
             "remaining_daily": max(0, self.daily_limit - self.spent_today),
             "remaining_total": max(0, self.total_limit - self.spent_total),
             "created_at": self.created_at.isoformat() if self.created_at else None,

@@ -36,6 +36,19 @@ CORS_ORIGINS: List[str] = [
 # Logging
 LOG_LEVEL: str = os.getenv("TEB_LOG_LEVEL", "INFO")
 
+# Payment providers
+MERCURY_API_KEY: Optional[str] = os.getenv("TEB_MERCURY_API_KEY")
+MERCURY_BASE_URL: str = os.getenv("TEB_MERCURY_BASE_URL", "https://api.mercury.com/api/v1")
+STRIPE_API_KEY: Optional[str] = os.getenv("TEB_STRIPE_API_KEY")
+STRIPE_BASE_URL: str = os.getenv("TEB_STRIPE_BASE_URL", "https://api.stripe.com/v1")
+
+# Autonomous execution
+AUTONOMOUS_EXECUTION_ENABLED: bool = os.getenv("TEB_AUTONOMOUS_EXECUTION", "true").lower() == "true"
+AUTONOMOUS_EXECUTION_INTERVAL: int = int(os.getenv("TEB_AUTONOMOUS_EXECUTION_INTERVAL", "30"))
+
+# Autopilot default threshold (max $ auto-approved per transaction)
+AUTOPILOT_DEFAULT_THRESHOLD: float = float(os.getenv("TEB_AUTOPILOT_DEFAULT_THRESHOLD", "50.0"))
+
 
 def get_ai_provider() -> Optional[str]:
     """Resolve which AI provider to use. Returns 'anthropic', 'openai', or None."""

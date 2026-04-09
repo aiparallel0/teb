@@ -13,22 +13,22 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 from typing import Any, Dict, List, Optional
 
 import httpx
 
+from teb import config as _config
 from teb import storage
 
 logger = logging.getLogger(__name__)
 
 # ─── Configuration ────────────────────────────────────────────────────────────
 
-MERCURY_API_KEY: str = os.getenv("TEB_MERCURY_API_KEY", "")
-MERCURY_BASE_URL: str = os.getenv("TEB_MERCURY_BASE_URL", "https://api.mercury.com/api/v1")
+MERCURY_API_KEY: str = _config.MERCURY_API_KEY or ""
+MERCURY_BASE_URL: str = _config.MERCURY_BASE_URL
 
-STRIPE_API_KEY: str = os.getenv("TEB_STRIPE_API_KEY", "")
-STRIPE_BASE_URL: str = os.getenv("TEB_STRIPE_BASE_URL", "https://api.stripe.com/v1")
+STRIPE_API_KEY: str = _config.STRIPE_API_KEY or ""
+STRIPE_BASE_URL: str = _config.STRIPE_BASE_URL
 
 _HTTP_TIMEOUT = 30
 
