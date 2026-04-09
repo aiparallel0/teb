@@ -162,7 +162,7 @@ def deploy(plan: DeploymentPlan, credentials: List[ApiCredential],
     deploy_url = result.get("url", "")
     status = "deployed" if result.get("success") else "failed"
     storage.create_deployment(
-        task_id=task.id or 0,
+        task_id=task.id if task.id is not None else 0,
         goal_id=task.goal_id,
         service=plan.service,
         project_name=plan.project_name,

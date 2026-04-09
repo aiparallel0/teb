@@ -2,7 +2,7 @@ import json
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timezone
-from typing import Generator, List, Optional
+from typing import Generator, List, Optional, Set
 
 from teb.config import get_db_path
 from teb.models import (
@@ -1986,7 +1986,7 @@ def list_auto_execute_tasks() -> List[Task]:
                ORDER BY t.goal_id, t.order_index ASC, t.id ASC""",
         ).fetchall()
     # Only return the first pending task per goal
-    seen_goals: set[int] = set()
+    seen_goals: Set[int] = set()
     result: List[Task] = []
     for row in rows:
         gid = row["goal_id"]

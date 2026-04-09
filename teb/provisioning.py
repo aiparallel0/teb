@@ -214,7 +214,7 @@ def provision_service(task: Task) -> Dict[str, Any]:
 
     if not plan.can_provision:
         storage.create_provisioning_log(
-            task_id=task.id or 0,
+            task_id=task.id if task.id is not None else 0,
             service_name=plan.service_name,
             action="signup",
             status="failed",
@@ -249,7 +249,7 @@ def provision_service(task: Task) -> Dict[str, Any]:
 
     # Log provisioning attempt
     storage.create_provisioning_log(
-        task_id=task.id or 0,
+        task_id=task.id if task.id is not None else 0,
         service_name=plan.service_name,
         action="signup",
         status="success" if result.get("success") else "manual_required",

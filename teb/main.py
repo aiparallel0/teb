@@ -93,7 +93,7 @@ def _check_budget_approval(task_id: int, task_title: str, goal_id: int) -> Optio
             # Create a spending request and signal pause
             sr = SpendingRequest(
                 task_id=task_id,
-                budget_id=budget.id or 0,
+                budget_id=budget.id if budget.id is not None else 0,
                 amount=0,
                 description=f"Automated execution of: {task_title}",
                 service="api_execution",
