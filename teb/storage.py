@@ -408,6 +408,11 @@ def _run_migrations(con: sqlite3.Connection) -> None:
     if not _has_column("users", "locked_until"):
         con.execute("ALTER TABLE users ADD COLUMN locked_until TEXT DEFAULT NULL")
 
+    # api_credentials.user_id (scope credentials to user)
+    if not _has_column("api_credentials", "user_id"):
+        con.execute("ALTER TABLE api_credentials ADD COLUMN user_id INTEGER REFERENCES users(id) ON DELETE CASCADE")
+        con.execute("CREATE INDEX IF NOT EXISTS idx_api_credentials_user ON api_credentials(user_id)")
+
     # goals.auto_execute (autonomous execution opt-in)
     if not _has_column("goals", "auto_execute"):
         con.execute("ALTER TABLE goals ADD COLUMN auto_execute INTEGER NOT NULL DEFAULT 0")
@@ -789,6 +794,7 @@ def _row_to_credential(row: sqlite3.Row) -> ApiCredential:
         auth_header=row["auth_header"],
         auth_value=_decrypt_value(row["auth_value"]),
         description=row["description"],
+        user_id=row["user_id"] if "user_id" in row.keys() else None,
         created_at=datetime.fromisoformat(row["created_at"]),
     )
 
@@ -798,9 +804,9 @@ def create_credential(cred: ApiCredential) -> ApiCredential:
     encrypted_value = _encrypt_value(cred.auth_value)
     with _conn() as con:
         cur = con.execute(
-            "INSERT INTO api_credentials (name, base_url, auth_header, auth_value, description, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
-            (cred.name, cred.base_url, cred.auth_header, encrypted_value, cred.description, now),
+            "INSERT INTO api_credentials (name, base_url, auth_header, auth_value, description, user_id, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (cred.name, cred.base_url, cred.auth_header, encrypted_value, cred.description, cred.user_id, now),
         )
         cred.id = cur.lastrowid
         cred.created_at = datetime.fromisoformat(now)
@@ -813,9 +819,17 @@ def get_credential(cred_id: int) -> Optional[ApiCredential]:
     return _row_to_credential(row) if row else None
 
 
-def list_credentials() -> List[ApiCredential]:
+def list_credentials(user_id: Optional[int] = None) -> List[ApiCredential]:
+    """List credentials. If user_id is given, returns only that user's credentials
+    plus any legacy unscoped credentials (user_id IS NULL)."""
     with _conn() as con:
-        rows = con.execute("SELECT * FROM api_credentials ORDER BY created_at DESC").fetchall()
+        if user_id is not None:
+            rows = con.execute(
+                "SELECT * FROM api_credentials WHERE user_id = ? OR user_id IS NULL ORDER BY created_at DESC",
+                (user_id,),
+            ).fetchall()
+        else:
+            rows = con.execute("SELECT * FROM api_credentials ORDER BY created_at DESC").fetchall()
     return [_row_to_credential(r) for r in rows]
 
 

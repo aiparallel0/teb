@@ -130,7 +130,10 @@ async def _autonomous_execution_loop() -> None:
             pending = storage.list_auto_execute_tasks()
             for task in pending:
                 try:
-                    credentials = storage.list_credentials()
+                    # Get the goal's user_id for credential scoping
+                    goal = storage.get_goal(task.goal_id)
+                    goal_user_id = goal.user_id if goal else None
+                    credentials = storage.list_credentials(user_id=goal_user_id)
                     plan = executor.generate_plan(task, credentials)
 
                     if not plan.can_execute:
@@ -206,6 +209,11 @@ async def lifespan(app: FastAPI):
         logger.warning(
             "TEB_JWT_SECRET is set to the default insecure value. "
             "Set a strong secret via environment variable before deploying."
+        )
+    if not config.SECRET_KEY:
+        logger.warning(
+            "TEB_SECRET_KEY is not set — API credentials will be stored UNENCRYPTED. "
+            "Generate one with: python -c \"from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())\""
         )
     # Start autonomous execution loop
     _auto_exec_task = asyncio.create_task(_autonomous_execution_loop())
@@ -480,8 +488,9 @@ async def auth_me(request: Request):
 
 
 @app.post("/api/auth/refresh")
-async def auth_refresh(body: AuthRefresh):
+async def auth_refresh(request: Request, body: AuthRefresh):
     """Exchange a refresh token for a new access token + refresh token."""
+    _check_rate_limit(request)
     try:
         result = auth.refresh_access_token(body.refresh_token)
     except ValueError as exc:
@@ -810,7 +819,7 @@ async def delete_task(task_id: int, request: Request):
 
 @app.post("/api/credentials", status_code=201)
 async def create_credential(body: CredentialCreate, request: Request):
-    _require_user(request)
+    uid = _require_user(request)
     name = body.name.strip()
     base_url = body.base_url.strip()
     if not name:
@@ -823,6 +832,7 @@ async def create_credential(body: CredentialCreate, request: Request):
         auth_header=body.auth_header.strip() or "Authorization",
         auth_value=body.auth_value,
         description=body.description.strip(),
+        user_id=uid,
     )
     cred = storage.create_credential(cred)
     return cred.to_dict()
@@ -830,16 +840,19 @@ async def create_credential(body: CredentialCreate, request: Request):
 
 @app.get("/api/credentials")
 async def list_credentials(request: Request):
-    _require_user(request)
-    return [c.to_dict() for c in storage.list_credentials()]
+    uid = _require_user(request)
+    return [c.to_dict() for c in storage.list_credentials(user_id=uid)]
 
 
 @app.delete("/api/credentials/{cred_id}", status_code=200)
 async def delete_credential(cred_id: int, request: Request):
-    _require_user(request)
+    uid = _require_user(request)
     cred = storage.get_credential(cred_id)
     if not cred:
         raise HTTPException(status_code=404, detail="Credential not found")
+    # Users can only delete their own credentials (or legacy unscoped ones)
+    if cred.user_id is not None and cred.user_id != uid:
+        raise HTTPException(status_code=403, detail="Not your credential")
     storage.delete_credential(cred_id)
     return {"deleted": cred_id}
 
@@ -855,7 +868,7 @@ async def execute_task(task_id: int, request: Request):
     if task.status in ("done", "skipped"):
         raise HTTPException(status_code=409, detail="Task is already completed")
 
-    credentials = storage.list_credentials()
+    credentials = storage.list_credentials(user_id=uid)
 
     # Generate execution plan
     plan = executor.generate_plan(task, credentials)
@@ -2128,7 +2141,7 @@ async def deploy_task(task_id: int, request: Request):
     """
     uid = _require_user(request)
     task = _get_task_for_user(task_id, uid)
-    credentials = storage.list_credentials()
+    credentials = storage.list_credentials(user_id=uid)
     plan = deployer.generate_deployment_plan(task, credentials)
 
     if not plan.can_deploy:

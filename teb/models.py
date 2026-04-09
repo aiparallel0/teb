@@ -41,6 +41,7 @@ class Goal:
     def to_dict(self) -> dict:
         return {
             "id": self.id,
+            "user_id": self.user_id,
             "title": self.title,
             "description": self.description,
             "status": self.status,
@@ -88,6 +89,7 @@ class ApiCredential:
     auth_value: str = ""               # the credential (Bearer token, API key, etc.)
     description: str = ""              # what this API can do
     id: Optional[int] = None
+    user_id: Optional[int] = None      # FK to users; None for legacy/unscoped credentials
     created_at: Optional[datetime] = None
 
     def to_dict(self) -> dict:
