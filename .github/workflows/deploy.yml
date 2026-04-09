@@ -1,0 +1,29 @@
+name: Deploy to portearchive.com
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production
+
+    steps:
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: ${{ secrets.DEPLOY_USER }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          script: |
+            set -e
+            cd /opt/teb
+            git pull origin main
+            sudo cp nginx/teb.conf /etc/nginx/snippets/teb.conf
+            sudo nginx -t
+            docker compose up -d --build
+            sudo systemctl reload nginx

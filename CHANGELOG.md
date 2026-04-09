@@ -71,10 +71,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - CORS middleware with configurable origins
 
 #### Infrastructure
-- FastAPI REST API (80+ endpoints)
-- SQLite database with 24 tables and WAL mode
-- Docker support with health checks and non-root user
+- FastAPI REST API (90 endpoints)
+- SQLite database with 27 tables and WAL mode
+- Docker support with health checks, non-root user, and Playwright pre-installed
 - docker-compose with persistent volume
+- Docker entrypoint auto-generates `TEB_SECRET_KEY` if not set
 - Structured logging with configurable levels
 - Single-page web frontend (HTML + vanilla JS + CSS)
-- 481 automated tests across 9 test files
+- One-liner start script (`start.sh`) with secret auto-generation
+- `pip install teb` support with CLI entry point
+- Database backup script (`deploy/backup.sh`) with systemd timer
+- SQL migration system (`migrations/migrate.py`)
+- CI/CD workflows: tests, Docker build, PyPI publish, Docker Hub publish, deploy
+- Systemd service file with full installation instructions
+- nginx reverse-proxy config for `/teb` path
+- HTTPS/TLS setup documentation (Certbot + Caddy)
+- 578 automated tests across 11 test files

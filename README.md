@@ -59,6 +59,24 @@ Then tracks whether you actually earned any money.
 
 ## Quick Start
 
+### One-liner
+
+```bash
+git clone https://github.com/aiparallel0/teb.git && cd teb && bash start.sh
+```
+
+`start.sh` auto-generates `TEB_JWT_SECRET` and `TEB_SECRET_KEY`, copies `.env.example` to `.env` if absent, installs dependencies, and starts the server. Pass `--docker` for Docker mode.
+
+### pip install
+
+```bash
+pip install teb
+cp .env.example .env   # set TEB_JWT_SECRET (TEB_SECRET_KEY is auto-generated)
+teb                     # starts the server at http://localhost:8000
+```
+
+### Manual
+
 ```bash
 pip install -r requirements.txt
 cp .env.example .env          # edit .env — set TEB_JWT_SECRET at minimum
@@ -75,6 +93,13 @@ docker compose up --build
 ```
 
 The container runs as a non-root user with a health check at `/health`. Data persists via the `teb-data` Docker volume.
+
+### Pre-built Docker image
+
+```bash
+docker pull aiparallel0/teb:latest
+docker run -e TEB_JWT_SECRET=your-secret -p 8000:8000 aiparallel0/teb
+```
 
 ---
 
@@ -835,7 +860,7 @@ Without an AI key, teb operates in **template mode** — fully offline, instant.
 teb/
 ├── main.py            FastAPI app + 90 REST endpoints
 ├── models.py          20 dataclass models (Goal, Task, User, etc.)
-├── storage.py         SQLite data access layer (26 tables)
+├── storage.py         SQLite data access layer (27 tables)
 ├── decomposer.py      Template-based + AI decomposition, coaching, drip mode, success paths
 ├── executor.py        AI-powered task execution engine (API calls via httpx)
 ├── browser.py         Browser automation engine (AI plan generation + Playwright)
@@ -867,9 +892,19 @@ tests/
 ├── test_mvp_features.py         Tests for payments, discovery, behavior, agent memory
 ├── test_autopilot_features.py   Tests for autonomous execution, deployer, provisioning
 └── test_security_fixes.py       Tests for credential scoping, ownership, payment config
+deploy/
+├── backup.sh                    Database backup script (SQLite .backup)
+├── docker-entrypoint.sh         Docker entrypoint (auto-generates TEB_SECRET_KEY)
+└── systemd/
+    ├── teb.service              Systemd unit file
+    ├── teb-backup.service       Backup service (triggered by timer)
+    └── teb-backup.timer         Daily backup timer
+migrations/
+├── migrate.py                   SQL migration runner
+└── versions/                    Numbered .sql migration files
 ```
 
-### Database (26 tables)
+### Database (27 tables)
 
 | Table | Purpose |
 |---|---|
@@ -899,6 +934,7 @@ tests/
 | `discovered_services` | AI-discovered service records |
 | `deployments` | Application deployment records (Vercel/Railway/Render) |
 | `provisioning_logs` | Service provisioning attempt log |
+| `telegram_sessions` | Telegram bot session state |
 
 ### Execution Flow
 
@@ -1071,7 +1107,144 @@ pip install -r requirements.txt
 pytest tests/ -v
 ```
 
-578 tests across 12 test files. Tests use an in-memory SQLite database and mock all external services.
+578 tests across 11 test files. Tests use an in-memory SQLite database and mock all external services.
+
+---
+
+## Deployment
+
+### Systemd (bare-metal)
+
+1. Deploy the repo to `/opt/teb` and create a virtualenv:
+   ```bash
+   sudo useradd -r -s /usr/sbin/nologin appuser
+   git clone https://github.com/aiparallel0/teb.git /opt/teb
+   cd /opt/teb
+   python3 -m venv venv && venv/bin/pip install -r requirements.txt
+   cp .env.example .env   # edit .env — set TEB_JWT_SECRET and TEB_SECRET_KEY
+   sudo chown -R appuser:appuser /opt/teb
+   ```
+2. Install the systemd unit:
+   ```bash
+   sudo cp deploy/systemd/teb.service /etc/systemd/system/teb.service
+   sudo systemctl daemon-reload
+   sudo systemctl enable --now teb
+   ```
+
+### Docker Compose (production)
+
+```bash
+cp .env.example .env  # edit TEB_JWT_SECRET
+docker compose up -d --build
+```
+
+The Docker entrypoint auto-generates `TEB_SECRET_KEY` (Fernet encryption key) if not already set.
+
+---
+
+## HTTPS / TLS
+
+The existing `nginx/teb.conf` handles the `/teb` reverse-proxy path but does not include TLS configuration. Choose one of the options below.
+
+### Option A — Certbot with nginx
+
+```bash
+sudo apt install certbot python3-certbot-nginx
+sudo certbot --nginx -d portearchive.com
+```
+
+Certbot will automatically configure TLS in the nginx server block and set up auto-renewal.
+
+### Option B — Caddy (auto-HTTPS)
+
+Create a `Caddyfile`:
+
+```
+portearchive.com {
+    handle_path /teb/* {
+        reverse_proxy localhost:8000
+    }
+}
+```
+
+Run with:
+```bash
+caddy run
+```
+
+Caddy automatically provisions and renews TLS certificates via Let's Encrypt.
+
+---
+
+## Database Backups
+
+A backup script is provided at `deploy/backup.sh`. It uses SQLite's `.backup` command for a safe, consistent copy and prunes backups older than 30 days.
+
+### Manual backup
+
+```bash
+bash deploy/backup.sh /path/to/teb.db
+```
+
+### Cron (daily at 02:00)
+
+```bash
+0 2 * * * /opt/teb/deploy/backup.sh /opt/teb/data/teb.db >> /var/log/teb-backup.log 2>&1
+```
+
+### Systemd timer (recommended)
+
+```bash
+sudo cp deploy/systemd/teb-backup.service /etc/systemd/system/
+sudo cp deploy/systemd/teb-backup.timer /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now teb-backup.timer
+```
+
+Environment variables:
+- `BACKUP_DIR` — backup destination (default: `/opt/teb/backups`)
+- `KEEP_DAYS` — number of days to retain backups (default: `30`)
+
+---
+
+## Database Migrations
+
+teb includes a lightweight SQL migration system in `migrations/`.
+
+### Apply pending migrations
+
+```bash
+python -m migrations.migrate
+# or with a specific database path:
+python -m migrations.migrate --db /opt/teb/data/teb.db
+```
+
+### Create a new migration
+
+```bash
+python -m migrations.migrate --new "add_foobar_column"
+```
+
+This creates a numbered `.sql` file in `migrations/versions/`. Write your `ALTER TABLE` / `CREATE TABLE` statements there. Migrations run inside a transaction and are tracked in the `schema_migrations` table.
+
+---
+
+## Browser Automation (Playwright)
+
+Browser automation requires Playwright to be installed:
+
+```bash
+pip install playwright
+playwright install --with-deps chromium
+```
+
+**start.sh:** Set `ENABLE_BROWSER=true` before running `start.sh` to auto-install Playwright:
+
+```bash
+ENABLE_BROWSER=true bash start.sh
+```
+
+**Docker:** The Dockerfile installs Playwright and Chromium automatically. No extra steps needed.
 
 ---
 
@@ -1099,9 +1272,15 @@ pytest tests/ -v
 20. ✅ Deployment engine (Vercel, Railway, Render — deploy + health monitoring)
 21. ✅ Service provisioning (automated signup via browser automation)
 22. ✅ Credential scoping (per-user API credential isolation)
-23. 🔲 Additional payment providers (Privacy.com virtual cards, Plaid banking)
-24. 🔲 SMS notifications
-25. 🔲 Payment sandbox/simulation mode
+23. ✅ PyPI package (`pip install teb`)
+24. ✅ Docker Hub image (`docker pull aiparallel0/teb`)
+25. ✅ CI/CD pipeline (test → publish → deploy)
+26. ✅ Database backup system (script + systemd timer)
+27. ✅ Database migration system (SQL-based)
+28. ✅ HTTPS/TLS documentation
+29. 🔲 Additional payment providers (Privacy.com virtual cards, Plaid banking)
+30. 🔲 SMS notifications
+31. 🔲 Payment sandbox/simulation mode
 
 ---
 

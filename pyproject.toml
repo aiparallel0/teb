@@ -36,6 +36,16 @@ dev = [
     "pytest-asyncio==0.24.0",
 ]
 
+[project.scripts]
+teb = "teb.main:cli"
+
+[project.urls]
+Homepage = "https://github.com/aiparallel0/teb"
+Documentation = "https://github.com/aiparallel0/teb#readme"
+Repository = "https://github.com/aiparallel0/teb"
+Issues = "https://github.com/aiparallel0/teb/issues"
+Changelog = "https://github.com/aiparallel0/teb/blob/main/CHANGELOG.md"
+
 [build-system]
 requires = ["setuptools>=75.0"]
 build-backend = "setuptools.build_meta"
