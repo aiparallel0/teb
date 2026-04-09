@@ -9,6 +9,8 @@ services:
     environment:
       - DATABASE_URL=sqlite:///data/teb.db
       - TEB_JWT_SECRET=${TEB_JWT_SECRET:?Set TEB_JWT_SECRET in .env}
+      # Base path for reverse-proxy mounting (e.g. /teb for portearchive.com)
+      # - TEB_BASE_PATH=/teb
       # Uncomment and set your AI provider keys:
       # - OPENAI_API_KEY=${OPENAI_API_KEY}
       # - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}

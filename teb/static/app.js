@@ -1,5 +1,8 @@
 /* app.js — teb frontend */
 
+// ─── Base path (injected by server; falls back to "" for standalone) ──────────
+const BASE_PATH = (window.__BASE_PATH__ || '').replace(/\/$/, '');
+
 // ─── Auth-aware API wrapper ──────────────────────────────────────────────────
 
 function authHeaders() {
@@ -11,7 +14,7 @@ function authHeaders() {
 
 const api = {
   async post(url, body) {
-    const r = await fetch(url, {
+    const r = await fetch(BASE_PATH + url, {
       method: 'POST',
       headers: authHeaders(),
       body: JSON.stringify(body),
@@ -23,7 +26,7 @@ const api = {
     return r.json();
   },
   async get(url) {
-    const r = await fetch(url, { headers: authHeaders() });
+    const r = await fetch(BASE_PATH + url, { headers: authHeaders() });
     if (!r.ok) {
       const err = await r.json().catch(() => ({ detail: r.statusText }));
       throw new Error(err.detail || r.statusText);
@@ -31,7 +34,7 @@ const api = {
     return r.json();
   },
   async patch(url, body) {
-    const r = await fetch(url, {
+    const r = await fetch(BASE_PATH + url, {
       method: 'PATCH',
       headers: authHeaders(),
       body: JSON.stringify(body),
@@ -43,7 +46,7 @@ const api = {
     return r.json();
   },
   async del(url) {
-    const r = await fetch(url, { method: 'DELETE', headers: authHeaders() });
+    const r = await fetch(BASE_PATH + url, { method: 'DELETE', headers: authHeaders() });
     if (!r.ok) {
       const err = await r.json().catch(() => ({ detail: r.statusText }));
       throw new Error(err.detail || r.statusText);
@@ -55,9 +58,26 @@ const api = {
 // ─── State ────────────────────────────────────────────────────────────────────
 
 let currentGoalId = null;
+let currentGoalTitle = '';
 let currentTasks = [];
 let dripMode = true; // default to drip mode
 let authMode = 'login'; // 'login' or 'register'
+let autopilotEnabled = false;
+let _pendingOutcomeSuggestions = null;
+
+// ─── Loading overlay ──────────────────────────────────────────────────────────
+
+function showLoading(msg) {
+  const overlay = document.getElementById('loading-overlay');
+  const msgEl = document.getElementById('loading-message');
+  if (msgEl) msgEl.textContent = msg || 'Loading…';
+  if (overlay) overlay.style.display = 'flex';
+}
+
+function hideLoading() {
+  const overlay = document.getElementById('loading-overlay');
+  if (overlay) overlay.style.display = 'none';
+}
 
 // ─── Screen management ────────────────────────────────────────────────────────
 
@@ -263,22 +283,22 @@ document.getElementById('back-from-clarify').addEventListener('click', () => {
 // ─── Decompose ────────────────────────────────────────────────────────────────
 
 async function triggerDecompose(goalId) {
-  const btn = document.getElementById('btn-clarify-next');
-  btn.disabled = true;
+  showLoading('Building your action plan…');
   try {
-    const result = await api.post(`/api/goals/${goalId}/decompose`, {});
+    await api.post(`/api/goals/${goalId}/decompose`, {});
     const goal = await api.get(`/api/goals/${goalId}`);
-    showTasksScreen(goal);
+    hideLoading();
+    await showTasksScreen(goal, /* freshDecompose */ true);
   } catch (e) {
+    hideLoading();
     showError('error-clarify', e.message);
-  } finally {
-    btn.disabled = false;
   }
 }
 
 // ─── Tasks screen ─────────────────────────────────────────────────────────────
 
-function showTasksScreen(goal) {
+async function showTasksScreen(goal, freshDecompose) {
+  currentGoalTitle = goal.title;
   document.getElementById('tasks-goal-title').textContent = goal.title;
   currentTasks = goal.tasks || [];
   renderTasks(currentTasks);
@@ -289,9 +309,18 @@ function showTasksScreen(goal) {
   loadCheckinHistory();
   loadOutcomeMetrics();
   loadNudge();
+  loadAutopilotStatus();
   showScreen('screen-tasks');
   // Default to drip mode
   setDripMode(true);
+
+  // After a fresh decompose, auto-fetch outcome suggestions
+  if (freshDecompose) {
+    await autoSuggestOutcomes(goal.id);
+  }
+
+  // Load proactive suggestions and service discovery in background
+  loadProactiveSuggestions();
 }
 
 // ─── Drip Mode ────────────────────────────────────────────────────────────────
@@ -664,11 +693,14 @@ document.getElementById('btn-redecompose').addEventListener('click', async () =>
   showError('error-tasks', '');
   const btn = document.getElementById('btn-redecompose');
   btn.disabled = true;
+  showLoading('Re-generating tasks…');
   try {
-    const result = await api.post(`/api/goals/${currentGoalId}/decompose`, {});
+    await api.post(`/api/goals/${currentGoalId}/decompose`, {});
     const goal = await api.get(`/api/goals/${currentGoalId}`);
+    hideLoading();
     showTasksScreen(goal);
   } catch (e) {
+    hideLoading();
     showError('error-tasks', e.message);
   } finally {
     btn.disabled = false;
@@ -693,11 +725,249 @@ document.getElementById('btn-add-task').addEventListener('click', async () => {
   }
 });
 
+// ─── Autopilot toggle ─────────────────────────────────────────────────────────
+
+async function loadAutopilotStatus() {
+  if (!currentGoalId) return;
+  try {
+    const goal = await api.get(`/api/goals/${currentGoalId}`);
+    autopilotEnabled = !!goal.auto_execute;
+    const toggle = document.getElementById('autopilot-toggle');
+    const status = document.getElementById('autopilot-status');
+    if (toggle) toggle.checked = autopilotEnabled;
+    if (status) status.textContent = autopilotEnabled ? 'On' : 'Off';
+  } catch (e) {
+    // Silent fail
+  }
+}
+
+document.getElementById('autopilot-toggle').addEventListener('change', async (e) => {
+  const enabled = e.target.checked;
+  const status = document.getElementById('autopilot-status');
+  try {
+    if (enabled) {
+      await api.post(`/api/goals/${currentGoalId}/auto-execute`, {});
+      autopilotEnabled = true;
+      if (status) status.textContent = 'On';
+      // Check if a budget exists; if not, show the budget prompt
+      await checkBudgetPrompt();
+    } else {
+      await api.del(`/api/goals/${currentGoalId}/auto-execute`);
+      autopilotEnabled = false;
+      if (status) status.textContent = 'Off';
+      document.getElementById('budget-prompt').style.display = 'none';
+    }
+  } catch (e) {
+    e.target.checked = !enabled;
+    showError('error-tasks', e.message);
+  }
+});
+
+async function checkBudgetPrompt() {
+  try {
+    const budgets = await api.get(`/api/goals/${currentGoalId}/budgets`);
+    if (!budgets || !budgets.length) {
+      document.getElementById('budget-prompt').style.display = 'block';
+    } else {
+      document.getElementById('budget-prompt').style.display = 'none';
+    }
+  } catch (e) {
+    // Show prompt if we can't determine
+    document.getElementById('budget-prompt').style.display = 'block';
+  }
+}
+
+document.getElementById('btn-set-budget').addEventListener('click', async () => {
+  const daily = parseFloat(document.getElementById('budget-daily').value) || 50;
+  const total = parseFloat(document.getElementById('budget-total').value) || 500;
+  showError('error-budget', '');
+  try {
+    await api.post('/api/budgets', {
+      goal_id: currentGoalId,
+      daily_limit: daily,
+      total_limit: total,
+      category: 'general',
+      require_approval: true,
+      autopilot_enabled: true,
+      autopilot_threshold: daily,
+    });
+    document.getElementById('budget-prompt').style.display = 'none';
+  } catch (e) {
+    showError('error-budget', e.message);
+  }
+});
+
+// ─── AI Orchestrate ───────────────────────────────────────────────────────────
+
+document.getElementById('btn-orchestrate').addEventListener('click', async () => {
+  const btn = document.getElementById('btn-orchestrate');
+  const panel = document.getElementById('agent-activity-panel');
+  const content = document.getElementById('agent-activity-content');
+
+  btn.disabled = true;
+  btn.textContent = '🤖 Orchestrating…';
+  panel.style.display = 'block';
+  content.innerHTML = '<p style="color:var(--muted)">Dispatching agents…</p>';
+
+  try {
+    const result = await api.post(`/api/goals/${currentGoalId}/orchestrate`, {});
+    const handoffs = result.handoffs || [];
+    const messages = result.messages || [];
+
+    let html = '';
+    if (handoffs.length) {
+      html += '<div class="agent-handoffs"><strong>Agent chain:</strong> ';
+      html += handoffs.map(h =>
+        `<span class="agent-tag">${escHtml(h.from_agent || '')} → ${escHtml(h.to_agent || '')}</span>`
+      ).join(' ');
+      html += '</div>';
+    }
+    if (messages.length) {
+      html += '<div class="agent-messages">';
+      messages.slice(0, 10).forEach(m => {
+        html += `<div class="agent-msg"><span class="agent-msg-from">${escHtml(m.from_agent || 'agent')}</span>: ${escHtml(m.content || '')}</div>`;
+      });
+      html += '</div>';
+    }
+    if (!html) html = '<p>Orchestration complete. Check back for task updates.</p>';
+    content.innerHTML = html;
+    panel.open = true;
+    // Refresh tasks after orchestration
+    await refreshGoalView();
+  } catch (e) {
+    content.innerHTML = `<p class="error">${escHtml(e.message)}</p>`;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '🤖 AI Orchestrate';
+  }
+});
+
+// ─── Auto outcome suggestions ─────────────────────────────────────────────────
+
+async function autoSuggestOutcomes(goalId) {
+  try {
+    const suggestions = await api.get(`/api/goals/${goalId}/outcome_suggestions`);
+    if (!suggestions || !suggestions.length) return;
+
+    _pendingOutcomeSuggestions = suggestions;
+    const banner = document.getElementById('outcome-suggestions-banner');
+    const text = document.getElementById('outcome-suggestions-text');
+    const labels = suggestions.map(s => escHtml(s.label)).join(', ');
+    text.innerHTML = `We suggest tracking these metrics: <strong>${labels}</strong>. Add them?`;
+    banner.style.display = 'flex';
+  } catch (e) {
+    // Silent fail — suggestions are optional
+  }
+}
+
+document.getElementById('btn-add-all-outcomes').addEventListener('click', async () => {
+  const banner = document.getElementById('outcome-suggestions-banner');
+  if (!_pendingOutcomeSuggestions) return;
+  try {
+    for (const s of _pendingOutcomeSuggestions) {
+      await api.post(`/api/goals/${currentGoalId}/outcomes`, {
+        label: s.label,
+        target_value: s.target_value,
+        unit: s.unit || '',
+      });
+    }
+    _pendingOutcomeSuggestions = null;
+    banner.style.display = 'none';
+    loadOutcomeMetrics();
+  } catch (e) {
+    showError('error-tasks', e.message);
+  }
+});
+
+document.getElementById('btn-skip-outcomes').addEventListener('click', () => {
+  _pendingOutcomeSuggestions = null;
+  document.getElementById('outcome-suggestions-banner').style.display = 'none';
+});
+
+// ─── Proactive suggestions ────────────────────────────────────────────────────
+
+async function loadProactiveSuggestions() {
+  if (!currentGoalId) return;
+  try {
+    const suggestions = await api.get(`/api/goals/${currentGoalId}/suggestions`);
+    const container = document.getElementById('suggestions-list');
+    const countEl = document.getElementById('suggestions-count');
+
+    const active = (suggestions || []).filter(s => s.status === 'pending');
+    if (countEl) countEl.textContent = active.length ? `(${active.length})` : '';
+
+    if (!active.length) {
+      container.innerHTML = '<p style="color:var(--muted);font-size:.8rem">No suggestions right now.</p>';
+      return;
+    }
+
+    container.innerHTML = active.map(s => `
+      <div class="suggestion-item" data-id="${s.id}">
+        <div class="suggestion-text">${escHtml(s.content || s.message || '')}</div>
+        <div class="suggestion-actions">
+          <button class="btn-accept-suggestion btn-primary btn-sm" data-id="${s.id}">Accept</button>
+          <button class="btn-dismiss-suggestion btn-secondary btn-sm" data-id="${s.id}">Dismiss</button>
+        </div>
+      </div>
+    `).join('');
+
+    container.querySelectorAll('.btn-accept-suggestion').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        try {
+          await api.post(`/api/suggestions/${btn.dataset.id}`, { status: 'accepted' });
+          loadProactiveSuggestions();
+        } catch (e) { /* silent */ }
+      });
+    });
+    container.querySelectorAll('.btn-dismiss-suggestion').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        try {
+          await api.post(`/api/suggestions/${btn.dataset.id}`, { status: 'dismissed' });
+          loadProactiveSuggestions();
+        } catch (e) { /* silent */ }
+      });
+    });
+  } catch (e) {
+    // Silent fail — suggestions are optional
+  }
+}
+
+// ─── Service discovery ────────────────────────────────────────────────────────
+
+document.getElementById('btn-discover').addEventListener('click', async () => {
+  const btn = document.getElementById('btn-discover');
+  const container = document.getElementById('discovery-list');
+  btn.disabled = true;
+  btn.textContent = 'Searching…';
+  try {
+    const params = currentGoalTitle ? `?goal_title=${encodeURIComponent(currentGoalTitle)}` : '';
+    const res = await api.get(`/api/discover/services${params}`);
+    const services = res.services || res || [];
+    if (!services.length) {
+      container.innerHTML = '<p style="color:var(--muted);font-size:.8rem">No matching services found.</p>';
+    } else {
+      container.innerHTML = services.slice(0, 8).map(s => `
+        <div class="discovery-item">
+          <div class="discovery-name">${escHtml(s.name || s.service_name || '')}</div>
+          <div class="discovery-desc">${escHtml(s.description || '')}</div>
+          ${s.website ? `<a href="${escHtml(s.website)}" target="_blank" rel="noopener" class="discovery-link">Visit →</a>` : ''}
+        </div>
+      `).join('');
+    }
+  } catch (e) {
+    container.innerHTML = `<p class="error">${escHtml(e.message)}</p>`;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Find matching services';
+  }
+});
+
 // ─── Settings Modal ───────────────────────────────────────────────────────────
 
 document.getElementById('btn-settings').addEventListener('click', () => {
   document.getElementById('settings-modal').style.display = 'flex';
   loadExistingConfigs();
+  loadCredentials();
 });
 
 document.getElementById('btn-close-settings').addEventListener('click', () => {
@@ -806,6 +1076,62 @@ async function loadExistingConfigs() {
     // Silent fail
   }
 }
+
+// ─── Credential vault ─────────────────────────────────────────────────────────
+
+async function loadCredentials() {
+  try {
+    const creds = await api.get('/api/credentials');
+    const container = document.getElementById('credentials-list');
+    if (!creds || !creds.length) {
+      container.innerHTML = '<p style="color:var(--muted);font-size:.8rem">No credentials stored yet.</p>';
+      return;
+    }
+    container.innerHTML = creds.map(c => `
+      <div class="credential-item">
+        <div class="credential-info">
+          <span class="credential-name">${escHtml(c.name)}</span>
+          <span class="credential-url">${escHtml(c.base_url)}</span>
+        </div>
+        <button class="btn-delete-credential btn-secondary btn-sm" data-id="${c.id}">Delete</button>
+      </div>
+    `).join('');
+    container.querySelectorAll('.btn-delete-credential').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        try {
+          await api.del(`/api/credentials/${btn.dataset.id}`);
+          loadCredentials();
+        } catch (e) {
+          showError('error-credential', e.message);
+        }
+      });
+    });
+  } catch (e) {
+    // Silent fail
+  }
+}
+
+document.getElementById('btn-add-credential').addEventListener('click', async () => {
+  const name = document.getElementById('cred-name').value.trim();
+  const baseUrl = document.getElementById('cred-base-url').value.trim();
+  const authHeader = document.getElementById('cred-auth-header').value.trim() || 'Authorization';
+  const authValue = document.getElementById('cred-auth-value').value.trim();
+  const desc = document.getElementById('cred-desc').value.trim();
+  showError('error-credential', '');
+  if (!name || !baseUrl) { showError('error-credential', 'Name and base URL are required.'); return; }
+  try {
+    await api.post('/api/credentials', {
+      name, base_url: baseUrl, auth_header: authHeader, auth_value: authValue, description: desc,
+    });
+    document.getElementById('cred-name').value = '';
+    document.getElementById('cred-base-url').value = '';
+    document.getElementById('cred-auth-value').value = '';
+    document.getElementById('cred-desc').value = '';
+    loadCredentials();
+  } catch (e) {
+    showError('error-credential', e.message);
+  }
+});
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 

@@ -69,6 +69,12 @@ def has_ai() -> bool:
     return get_ai_provider() is not None
 
 
+# Base URL path prefix (for mounting behind a reverse proxy, e.g. /teb)
+# Strip trailing slash; treat "/" or "" the same (no prefix)
+_raw_base = os.getenv("TEB_BASE_PATH", "").strip().rstrip("/")
+BASE_PATH: str = "" if _raw_base in ("", "/") else _raw_base
+
+
 # Derive the SQLite file path from DATABASE_URL
 def get_db_path() -> str:
     url = DATABASE_URL

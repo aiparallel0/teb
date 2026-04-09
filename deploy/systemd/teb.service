@@ -1,0 +1,15 @@
+[Unit]
+Description=teb — Task Execution Bridge
+After=network.target
+
+[Service]
+Type=simple
+User=appuser
+WorkingDirectory=/opt/teb
+EnvironmentFile=/opt/teb/.env
+ExecStart=/opt/teb/venv/bin/uvicorn teb.main:asgi_app --host 127.0.0.1 --port 8000
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

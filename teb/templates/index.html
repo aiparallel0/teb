@@ -4,9 +4,19 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>teb — Task Execution Bridge</title>
-  <link rel="stylesheet" href="/static/style.css" />
+  <base href="{{BASE_PATH}}/" />
+  <link rel="stylesheet" href="static/style.css" />
+  <script>window.__BASE_PATH__ = "{{BASE_PATH}}";</script>
 </head>
 <body>
+  <!-- Loading overlay shown during decomposition -->
+  <div id="loading-overlay" class="loading-overlay" style="display:none">
+    <div class="loading-box">
+      <div class="loading-spinner"></div>
+      <p id="loading-message" class="loading-message">Building your action plan…</p>
+    </div>
+  </div>
+
   <div id="app">
     <!-- Auth screen -->
     <section id="screen-auth" class="screen">
@@ -78,6 +88,19 @@
       <div class="tasks-header">
         <a class="back-link" id="back-from-tasks">← Back</a>
         <h2 id="tasks-goal-title"></h2>
+        <div class="tasks-header-controls">
+          <!-- Autopilot toggle -->
+          <div class="autopilot-row">
+            <label class="autopilot-label">Autopilot</label>
+            <label class="toggle-switch">
+              <input type="checkbox" id="autopilot-toggle" />
+              <span class="toggle-slider"></span>
+            </label>
+            <span id="autopilot-status" class="autopilot-status"></span>
+          </div>
+          <!-- Orchestrate button -->
+          <button id="btn-orchestrate" class="btn-secondary btn-sm">🤖 AI Orchestrate</button>
+        </div>
         <div class="progress-bar-wrap">
           <div class="progress-bar-bg">
             <div class="progress-bar-fill" id="progress-fill"></div>
@@ -86,6 +109,34 @@
         </div>
         <div class="progress-detail" id="progress-detail"></div>
         <div id="stall-banner" class="stall-banner" style="display:none"></div>
+      </div>
+
+      <!-- Budget setup prompt (shown when autopilot enabled but no budget) -->
+      <div id="budget-prompt" class="budget-prompt" style="display:none">
+        <p>⚠️ Set a spending limit before autopilot runs.</p>
+        <div class="budget-form">
+          <label for="budget-daily">Daily limit ($)</label>
+          <input id="budget-daily" type="number" value="50" min="0" step="1" />
+          <label for="budget-total" class="mt">Total limit ($)</label>
+          <input id="budget-total" type="number" value="500" min="0" step="10" />
+          <button id="btn-set-budget" class="btn-primary btn-sm mt">Set Budget</button>
+        </div>
+        <div class="error" id="error-budget"></div>
+      </div>
+
+      <!-- Agent Activity panel (shown after orchestration) -->
+      <details id="agent-activity-panel" class="collapsible-panel" style="display:none">
+        <summary>🤖 Agent Activity</summary>
+        <div id="agent-activity-content" class="agent-activity-content"></div>
+      </details>
+
+      <!-- Outcome suggestions banner (auto-shown after decompose) -->
+      <div id="outcome-suggestions-banner" class="outcome-suggestions-banner" style="display:none">
+        <div id="outcome-suggestions-text"></div>
+        <div class="outcome-suggestions-actions">
+          <button id="btn-add-all-outcomes" class="btn-primary btn-sm">Add all</button>
+          <button id="btn-skip-outcomes" class="btn-secondary btn-sm">Skip</button>
+        </div>
       </div>
 
       <!-- Drip mode: single task card -->
@@ -137,6 +188,20 @@
         </div>
       </div>
       <div class="error" id="error-tasks"></div>
+
+      <!-- Proactive suggestions section -->
+      <details id="suggestions-panel" class="collapsible-panel mt">
+        <summary>💡 Suggestions <span id="suggestions-count" class="badge"></span></summary>
+        <div id="suggestions-list" class="suggestions-list"></div>
+      </details>
+
+      <!-- Service discovery section -->
+      <details id="discovery-panel" class="collapsible-panel mt">
+        <summary>🔍 Discover Services</summary>
+        <div id="discovery-list" class="discovery-list">
+          <button id="btn-discover" class="btn-secondary btn-sm">Find matching services</button>
+        </div>
+      </details>
 
       <!-- Daily Check-in Section -->
       <div id="checkin-section" class="checkin-section mt">
@@ -211,10 +276,35 @@
         </div>
 
         <div id="existing-configs" class="mt"></div>
+
+        <hr class="mt" />
+
+        <!-- Credential Vault -->
+        <h3 class="mt">🔑 API Credentials</h3>
+        <p class="sub" style="font-size:.8rem">Stored credentials let teb's autopilot call services on your behalf.</p>
+        <div id="credentials-list" class="credentials-list"></div>
+        <details class="collapsible-panel mt">
+          <summary>Add credential</summary>
+          <div class="credential-form">
+            <label for="cred-name">Name</label>
+            <input id="cred-name" type="text" placeholder="e.g. My Stripe key" />
+            <label for="cred-base-url" class="mt">Base URL</label>
+            <input id="cred-base-url" type="url" placeholder="https://api.example.com" />
+            <label for="cred-auth-header" class="mt">Auth header</label>
+            <input id="cred-auth-header" type="text" value="Authorization" />
+            <label for="cred-auth-value" class="mt">Auth value</label>
+            <input id="cred-auth-value" type="password" placeholder="Bearer sk-…" />
+            <label for="cred-desc" class="mt">Description (optional)</label>
+            <input id="cred-desc" type="text" placeholder="" />
+            <button id="btn-add-credential" class="btn-primary btn-sm mt">Add credential</button>
+            <div class="error" id="error-credential"></div>
+          </div>
+        </details>
       </div>
     </div>
   </div>
 
-  <script src="/static/app.js"></script>
+  <script src="static/app.js"></script>
 </body>
 </html>
+

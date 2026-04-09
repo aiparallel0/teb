@@ -508,10 +508,15 @@ async def auth_logout(request: Request, body: AuthLogout):
 
 # ─── Frontend ─────────────────────────────────────────────────────────────────
 
+def _render_index() -> str:
+    """Render index.html with BASE_PATH substituted."""
+    html = (_TEMPLATES_DIR / "index.html").read_text()
+    return html.replace("{{BASE_PATH}}", config.BASE_PATH)
+
+
 @app.get("/", response_class=HTMLResponse)
 async def serve_frontend():
-    html = (_TEMPLATES_DIR / "index.html").read_text()
-    return HTMLResponse(content=html)
+    return HTMLResponse(content=_render_index())
 
 
 # ─── Goals ────────────────────────────────────────────────────────────────────
@@ -2464,3 +2469,42 @@ async def recommend_path(goal_type: str, request: Request):
         },
         "total_paths": len(paths),
     }
+
+
+# ─── ASGI app for deployment ──────────────────────────────────────────────────
+# When BASE_PATH is set (e.g., "/teb"), wrap the app so it handles requests
+# routed through a reverse proxy at that sub-path.
+# Tests and local dev import `app` directly (BASE_PATH defaults to "").
+# Production deploys via `uvicorn teb.main:asgi_app`.
+
+
+class _PrefixMiddleware:
+    """Strip BASE_PATH prefix so the inner app sees /api/..., /static/..., etc.
+
+    Requests that don't start with the prefix (e.g. GET /health for infra
+    probes sent directly to the port) are forwarded unchanged.
+    """
+
+    def __init__(self, inner, prefix: str) -> None:
+        self._inner = inner
+        self._prefix = prefix.rstrip("/")
+        self._prefix_slash = self._prefix + "/"
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] in ("http", "websocket"):
+            path = scope.get("path", "")
+            if path == self._prefix or path.startswith(self._prefix_slash):
+                # Strip the prefix so the inner app sees its natural paths
+                new_path = path[len(self._prefix):] or "/"
+                scope = dict(
+                    scope,
+                    path=new_path,
+                    root_path=scope.get("root_path", "") + self._prefix,
+                )
+        await self._inner(scope, receive, send)
+
+
+if config.BASE_PATH:
+    asgi_app = _PrefixMiddleware(app, config.BASE_PATH)
+else:
+    asgi_app = app
