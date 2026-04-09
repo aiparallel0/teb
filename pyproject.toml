@@ -1,0 +1,48 @@
+[project]
+name = "teb"
+version = "0.1.0"
+description = "Task Execution Bridge — bridges vague goals to executed tasks with AI-powered decomposition, autonomous execution, and outcome tracking"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.12"
+keywords = ["ai", "task-management", "automation", "goal-tracking", "agents"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Framework :: FastAPI",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Office/Business :: Scheduling",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+dependencies = [
+    "fastapi==0.115.5",
+    "uvicorn==0.32.1",
+    "httpx==0.27.2",
+    "openai==1.57.0",
+    "anthropic==0.42.0",
+    "python-multipart==0.0.22",
+    "jinja2==3.1.4",
+    "anyio==4.7.0",
+    "pyjwt>=2.10.0",
+    "bcrypt>=4.0.0",
+    "cryptography>=46.0.5",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest==8.3.4",
+    "pytest-asyncio==0.24.0",
+]
+
+[build-system]
+requires = ["setuptools>=75.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+
+[tool.setuptools.packages.find]
+include = ["teb*"]
