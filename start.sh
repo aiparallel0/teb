@@ -62,6 +62,14 @@ if $DOCKER_MODE; then
 else
   echo "[start.sh] Installing dependencies …"
   pip install -r requirements.txt -q
+
+  # ── 4a. Playwright browser install (guarded by ENABLE_BROWSER env var) ──────
+  if [[ "${ENABLE_BROWSER:-}" == "true" || "${ENABLE_BROWSER:-}" == "1" ]]; then
+    echo "[start.sh] ENABLE_BROWSER is set — installing Playwright Chromium …"
+    pip install playwright -q
+    playwright install --with-deps chromium
+  fi
+
   echo "[start.sh] Starting server at http://localhost:8000 …"
   uvicorn teb.main:app --reload
 fi

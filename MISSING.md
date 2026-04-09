@@ -6,71 +6,71 @@ Each item is written as an actionable prompt that can be handed to an AI or deve
 ---
 
 ## One-liner start script (`start.sh`)
-**Status:** now added (this PR)
+**Status:** ✅ done
 **Prompt:** A `start.sh` script has been added to the repo root. It auto-generates `TEB_JWT_SECRET` and `TEB_SECRET_KEY`, copies `.env.example` to `.env` if absent, installs dependencies, and starts the server. Usage: `git clone https://github.com/aiparallel0/teb.git && cd teb && bash start.sh` or `bash start.sh --docker` for Docker mode.
 
 ---
 
 ## PyPI package / `pip install teb`
-**Status:** missing
-**Prompt:** Publish `teb` to PyPI so users can `pip install teb`. Steps: (1) verify `pyproject.toml` is complete (name, version, entry points), (2) add a `publish.yml` GitHub Actions workflow using `pypa/gh-action-pypi-publish`, (3) tag a release — the workflow should build and upload the wheel automatically.
+**Status:** ✅ done
+**Prompt:** `pyproject.toml` includes entry points (`teb` CLI command via `teb.main:cli`), project URLs, and complete metadata. A `publish.yml` GitHub Actions workflow uses `pypa/gh-action-pypi-publish` to build and upload the wheel automatically on every GitHub release. Set the `PYPI_API_TOKEN` secret to enable publishing.
 
 ---
 
 ## Docker Hub image
-**Status:** missing
-**Prompt:** Push a pre-built Docker image to Docker Hub (e.g. `aiparallel0/teb:latest`) so users can run `docker pull aiparallel0/teb && docker run -p 8000:8000 aiparallel0/teb` without cloning. Add a GitHub Actions workflow that builds and pushes the image on every release tag.
+**Status:** ✅ done
+**Prompt:** A `docker-publish.yml` GitHub Actions workflow builds and pushes the Docker image to `aiparallel0/teb:latest` (plus semver tags) on every GitHub release. Set `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` secrets to enable publishing. Users can then run `docker pull aiparallel0/teb && docker run -p 8000:8000 aiparallel0/teb`.
 
 ---
 
 ## CI/CD pipeline for auto-deploying to portearchive.com
-**Status:** missing
-**Prompt:** Create `.github/workflows/deploy.yml` that triggers on push to `main`. It should SSH into the portearchive.com server, `git pull`, run `docker compose up -d --build`, and copy `nginx/teb.conf` into the nginx snippets directory then reload nginx. Store the SSH key and server address as GitHub Actions secrets.
+**Status:** ✅ done
+**Prompt:** `.github/workflows/deploy.yml` triggers on push to `main`. It SSHs into the server, runs `git pull`, `docker compose up -d --build`, copies `nginx/teb.conf` as a snippet, and reloads nginx. Required secrets: `DEPLOY_HOST`, `DEPLOY_USER`, `DEPLOY_SSH_KEY`.
 
 ---
 
 ## Hosted version at portearchive.com/teb
-**Status:** not deployed
-**Prompt:** Deploy teb to portearchive.com/teb by: (1) enabling TEB_BASE_PATH=/teb in docker-compose.yml, (2) running `docker compose up -d` on the server, (3) copying nginx/teb.conf as a snippet into the portearchive.com nginx server block and reloading nginx. there's no hosted version,
+**Status:** ready to deploy (requires server-side action)
+**Prompt:** All configuration is in place: `TEB_BASE_PATH=/teb` is set in `docker-compose.yml`, `nginx/teb.conf` routes `/teb` to the upstream, and the deploy workflow automates updates. To activate: run the deploy workflow or manually `docker compose up -d` on the server and include `nginx/teb.conf` in the nginx server block.
 
 ---
 
 ## Systemd service file
-**Status:** incomplete (file exists, missing install comments)
-**Prompt:** `deploy/systemd/teb.service` exists. To install it: `sudo cp deploy/systemd/teb.service /etc/systemd/system/teb.service && sudo systemctl daemon-reload && sudo systemctl enable --now teb`. Ensure `appuser` exists (`sudo useradd -r -s /usr/sbin/nologin appuser`) and the app is deployed to `/opt/teb`.
+**Status:** ✅ done
+**Prompt:** `deploy/systemd/teb.service` includes full installation and prerequisite comments. Install with: `sudo cp deploy/systemd/teb.service /etc/systemd/system/teb.service && sudo systemctl daemon-reload && sudo systemctl enable --now teb`.
 
 ---
 
 ## Automated database backup for `teb.db`
-**Status:** missing
-**Prompt:** Add a cron job or systemd timer that backs up `teb.db` (or the Docker volume) daily. Example: `0 2 * * * sqlite3 /opt/teb/data/teb.db ".backup /opt/teb/backups/teb-$(date +\%F).db"`. Add a `deploy/backup.sh` script and document it in README.
+**Status:** ✅ done
+**Prompt:** `deploy/backup.sh` performs safe SQLite backups and prunes old copies. A systemd timer (`deploy/systemd/teb-backup.timer` + `teb-backup.service`) runs it daily at 02:00. Alternatively, add a cron entry. Documented in README under "Database Backups".
 
 ---
 
 ## Playwright install step
-**Status:** missing from `start.sh` and `Dockerfile`
-**Prompt:** Browser automation requires `playwright install` after `pip install playwright`. Add this step to `start.sh` (guarded by a check for the `ENABLE_BROWSER` env var or presence of playwright in requirements) and to the `Dockerfile` (as `RUN playwright install --with-deps chromium`). Document the optional step in README.
+**Status:** ✅ done
+**Prompt:** `start.sh` installs Playwright when `ENABLE_BROWSER=true` is set. The `Dockerfile` installs Playwright with Chromium automatically (`RUN playwright install --with-deps chromium`). Documented in README under "Browser Automation (Playwright)".
 
 ---
 
 ## `TEB_SECRET_KEY` auto-generation
-**Status:** partially fixed (this PR adds it to `start.sh`)
-**Prompt:** `TEB_SECRET_KEY` (Fernet key for encrypting stored API credentials) is now auto-generated by `start.sh`. For Docker deployments, the `Dockerfile` or an entrypoint script should also generate and persist this key to `.env` or a Docker secret if it is not already set.
+**Status:** ✅ done
+**Prompt:** `start.sh` generates `TEB_SECRET_KEY` (Fernet) on first run. For Docker, `deploy/docker-entrypoint.sh` generates it at container start if not already set via environment variable or `.env` file.
 
 ---
 
 ## HTTPS / TLS setup instructions
-**Status:** missing
-**Prompt:** Add a section to README documenting how to set up HTTPS. Recommend Caddy (`Caddyfile` with `portearchive.com/teb { reverse_proxy localhost:8000 }`) or Certbot with the existing nginx config (`certbot --nginx -d portearchive.com`). The existing `nginx/teb.conf` handles the `/teb` path but does not include TLS configuration.
+**Status:** ✅ done
+**Prompt:** README includes an "HTTPS / TLS" section with two options: (A) Certbot with the existing nginx config (`certbot --nginx -d portearchive.com`), and (B) Caddy with a minimal `Caddyfile` for automatic HTTPS.
 
 ---
 
 ## Database migration system
-**Status:** missing
-**Prompt:** Schema changes currently require manual intervention (`_run_migrations()` in `storage.py` applies ad-hoc ALTER TABLE statements). Replace this with a proper migration tool such as Alembic: (1) `pip install alembic`, (2) `alembic init alembic`, (3) configure `env.py` to use the existing SQLAlchemy metadata, (4) generate migrations with `alembic revision --autogenerate`, (5) apply with `alembic upgrade head`. Add this to the deployment runbook.
+**Status:** ✅ done
+**Prompt:** `migrations/migrate.py` is a lightweight SQL migration runner. Migrations are numbered `.sql` files in `migrations/versions/`. Run `python -m migrations.migrate` to apply, or `python -m migrations.migrate --new "description"` to scaffold a new migration. Tracked in a `schema_migrations` table. Documented in README under "Database Migrations".
 
 ---
 
 ## `TEB_BASE_PATH` set for hosted deployment
-**Status:** fixed in this PR (uncommented in `docker-compose.yml`)
-**Prompt:** `TEB_BASE_PATH=/teb` is now uncommented in `docker-compose.yml` so the app is ready to run at `/teb` on portearchive.com out of the box. The nginx config in `nginx/teb.conf` already routes `/teb` to the upstream service.
+**Status:** ✅ done
+**Prompt:** `TEB_BASE_PATH=/teb` is set in `docker-compose.yml`. The nginx config in `nginx/teb.conf` already routes `/teb` to the upstream service.

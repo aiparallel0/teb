@@ -2508,3 +2508,15 @@ if config.BASE_PATH:
     asgi_app = _PrefixMiddleware(app, config.BASE_PATH)
 else:
     asgi_app = app
+
+
+def cli() -> None:
+    """Entry point for ``pip install teb`` → ``teb`` command."""
+    import uvicorn
+
+    uvicorn.run(
+        "teb.main:asgi_app",
+        host="0.0.0.0",
+        port=int(os.getenv("PORT", "8000")),
+        reload=False,
+    )
