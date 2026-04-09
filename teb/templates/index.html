@@ -5,10 +5,16 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>teb — Task Execution Bridge</title>
   <base href="{{BASE_PATH}}/" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="static/style.css" />
   <script>window.__BASE_PATH__ = "{{BASE_PATH}}";</script>
 </head>
 <body>
+  <!-- Toast notification container -->
+  <div id="toast-container" class="toast-container" aria-live="polite"></div>
+
   <!-- Loading overlay shown during decomposition -->
   <div id="loading-overlay" class="loading-overlay" style="display:none">
     <div class="loading-box">
@@ -19,7 +25,7 @@
 
   <div id="app">
     <!-- Auth screen -->
-    <section id="screen-auth" class="screen">
+    <section id="screen-auth" class="screen" role="main">
       <header class="hero">
         <h1>teb</h1>
         <p class="tagline">Turn your vague goals into focused, actionable tasks.</p>
@@ -38,17 +44,19 @@
         <p class="auth-skip mt" style="text-align:center;font-size:.85rem">
           <a href="#" id="auth-skip-link">Skip — continue without account</a>
         </p>
-        <div class="error" id="error-auth"></div>
+        <div class="error" id="error-auth" role="alert"></div>
       </div>
     </section>
 
     <!-- Landing screen -->
-    <section id="screen-landing" class="screen">
+    <section id="screen-landing" class="screen" role="main">
       <header class="hero">
         <h1>teb</h1>
         <p class="tagline">Turn your vague goals into focused, actionable tasks.</p>
         <div id="user-bar" class="user-bar" style="display:none">
           <span id="user-email"></span>
+          <button id="btn-theme-toggle" class="theme-toggle" title="Toggle dark mode" aria-label="Toggle dark mode">🌙</button>
+          <button id="btn-admin" class="btn-secondary btn-sm" style="display:none">🛡 Admin</button>
           <button id="btn-settings" class="btn-secondary btn-sm">⚙ Settings</button>
           <button id="btn-logout" class="btn-secondary btn-sm">Sign out</button>
         </div>
@@ -56,10 +64,11 @@
       <div class="card">
         <label for="goal-title">What do you want to achieve?</label>
         <input id="goal-title" type="text" placeholder="e.g. earn money online, learn Python, get fit…" autocomplete="off" />
-        <label for="goal-desc" class="mt">A bit more detail (optional)</label>
-        <textarea id="goal-desc" rows="3" placeholder="Any context that might help narrow things down…"></textarea>
+        <label for="goal-desc" class="mt">A bit more detail <span style="font-weight:400;color:var(--muted)">(optional)</span></label>
+        <textarea id="goal-desc" rows="3" placeholder="Any context that might help narrow things down…" maxlength="2000"></textarea>
+        <div id="goal-desc-counter" class="char-counter"></div>
         <button id="btn-create-goal" class="btn-primary">Get my action plan →</button>
-        <div class="error" id="error-landing"></div>
+        <div class="error" id="error-landing" role="alert"></div>
       </div>
       <div id="goal-list-section" class="mt">
         <h3>Previous goals</h3>
@@ -68,7 +77,7 @@
     </section>
 
     <!-- Clarifying questions screen -->
-    <section id="screen-clarify" class="screen">
+    <section id="screen-clarify" class="screen" role="main">
       <div class="card">
         <a class="back-link" id="back-from-clarify">← Back</a>
         <h2 id="clarify-heading">Let's narrow this down</h2>
@@ -79,12 +88,12 @@
         </div>
         <button id="btn-clarify-next" class="btn-primary">Next →</button>
         <button id="btn-skip-clarify" class="btn-secondary">Skip questions &amp; decompose now</button>
-        <div class="error" id="error-clarify"></div>
+        <div class="error" id="error-clarify" role="alert"></div>
       </div>
     </section>
 
     <!-- Tasks screen (includes drip mode + all-tasks toggle) -->
-    <section id="screen-tasks" class="screen">
+    <section id="screen-tasks" class="screen" role="main">
       <div class="tasks-header">
         <a class="back-link" id="back-from-tasks">← Back</a>
         <h2 id="tasks-goal-title"></h2>
@@ -121,7 +130,7 @@
           <input id="budget-total" type="number" value="500" min="0" step="10" />
           <button id="btn-set-budget" class="btn-primary btn-sm mt">Set Budget</button>
         </div>
-        <div class="error" id="error-budget"></div>
+        <div class="error" id="error-budget" role="alert"></div>
       </div>
 
       <!-- Agent Activity panel (shown after orchestration) -->
@@ -159,7 +168,11 @@
           </div>
         </div>
         <div id="drip-done-msg" style="display:none;text-align:center;padding:2rem 0">
-          <h3>🎉 All tasks completed — well done!</h3>
+          <div class="empty-state">
+            <div class="empty-state-icon">🎉</div>
+            <div class="empty-state-title">All tasks completed!</div>
+            <div class="empty-state-desc">Great job — you've finished everything on your list.</div>
+          </div>
         </div>
         <div class="drip-message" id="drip-message"></div>
       </div>
@@ -187,7 +200,7 @@
           <button id="btn-redecompose" class="btn-secondary">↻ Re-generate tasks</button>
         </div>
       </div>
-      <div class="error" id="error-tasks"></div>
+      <div class="error" id="error-tasks" role="alert"></div>
 
       <!-- Proactive suggestions section -->
       <details id="suggestions-panel" class="collapsible-panel mt">
@@ -210,7 +223,7 @@
         <div class="checkin-form">
           <label for="checkin-done">What did you accomplish?</label>
           <textarea id="checkin-done" rows="2" placeholder="e.g. Finished the first module, sent 3 proposals…"></textarea>
-          <label for="checkin-blockers">What's blocking you? (optional)</label>
+          <label for="checkin-blockers">What's blocking you? <span style="font-weight:400;color:var(--muted)">(optional)</span></label>
           <textarea id="checkin-blockers" rows="2" placeholder="e.g. Stuck on setup, no time today…"></textarea>
           <button id="btn-checkin" class="btn-primary btn-sm">Submit check-in →</button>
         </div>
@@ -240,64 +253,150 @@
       <div class="modal-content card">
         <div class="modal-header">
           <h2>⚙ Settings</h2>
-          <button id="btn-close-settings" class="btn-close">&times;</button>
+          <button id="btn-close-settings" class="btn-close" aria-label="Close settings">&times;</button>
         </div>
 
-        <h3>Telegram Notifications</h3>
-        <label for="tg-bot-token">Bot Token</label>
-        <input id="tg-bot-token" type="text" placeholder="123456:ABC-DEF..." />
-        <label for="tg-chat-id" class="mt">Chat ID</label>
-        <input id="tg-chat-id" type="text" placeholder="-100123456789" />
-        <div class="mt">
-          <button id="btn-tg-test" class="btn-secondary btn-sm">Test Telegram</button>
-          <button id="btn-tg-save" class="btn-primary btn-sm">Save Telegram</button>
+        <!-- Settings tabs -->
+        <div class="settings-tabs" role="tablist">
+          <button class="settings-tab active" data-tab="notifications" role="tab" aria-selected="true">Notifications</button>
+          <button class="settings-tab" data-tab="credentials" role="tab" aria-selected="false">Credentials</button>
         </div>
-        <div class="error" id="error-tg"></div>
+
+        <!-- Notifications pane -->
+        <div class="settings-pane active" id="pane-notifications" role="tabpanel">
+          <h3>Telegram Notifications</h3>
+          <label for="tg-bot-token">Bot Token</label>
+          <input id="tg-bot-token" type="text" placeholder="123456:ABC-DEF..." />
+          <label for="tg-chat-id" class="mt">Chat ID</label>
+          <input id="tg-chat-id" type="text" placeholder="-100123456789" />
+          <div class="mt">
+            <button id="btn-tg-test" class="btn-secondary btn-sm">Test Telegram</button>
+            <button id="btn-tg-save" class="btn-primary btn-sm">Save Telegram</button>
+          </div>
+          <div class="error" id="error-tg" role="alert"></div>
+
+          <hr class="mt" />
+
+          <h3 class="mt">Webhook Notifications</h3>
+          <label for="wh-url">Webhook URL</label>
+          <input id="wh-url" type="url" placeholder="https://example.com/webhook" />
+          <div class="mt">
+            <button id="btn-wh-test" class="btn-secondary btn-sm">Test Webhook</button>
+            <button id="btn-wh-save" class="btn-primary btn-sm">Save Webhook</button>
+          </div>
+          <div class="error" id="error-wh" role="alert"></div>
+
+          <hr class="mt" />
+
+          <h3 class="mt">Notification Preferences</h3>
+          <div id="notif-toggles" class="notif-toggles">
+            <label><input type="checkbox" id="notif-nudges" checked /> Nudges</label>
+            <label><input type="checkbox" id="notif-tasks" checked /> Task updates</label>
+            <label><input type="checkbox" id="notif-spending" checked /> Spending requests</label>
+            <label><input type="checkbox" id="notif-checkins" /> Check-in reminders</label>
+          </div>
+
+          <div id="existing-configs" class="mt"></div>
+        </div>
+
+        <!-- Credentials pane -->
+        <div class="settings-pane" id="pane-credentials" role="tabpanel">
+          <h3>🔑 API Credentials</h3>
+          <p class="sub" style="font-size:.8rem">Stored credentials let teb's autopilot call services on your behalf.</p>
+          <div id="credentials-list" class="credentials-list"></div>
+          <details class="collapsible-panel mt">
+            <summary>Add credential</summary>
+            <div class="credential-form">
+              <label for="cred-name">Name</label>
+              <input id="cred-name" type="text" placeholder="e.g. My Stripe key" />
+              <label for="cred-base-url" class="mt">Base URL</label>
+              <input id="cred-base-url" type="url" placeholder="https://api.example.com" />
+              <label for="cred-auth-header" class="mt">Auth header</label>
+              <input id="cred-auth-header" type="text" value="Authorization" />
+              <label for="cred-auth-value" class="mt">Auth value</label>
+              <input id="cred-auth-value" type="password" placeholder="Bearer sk-…" />
+              <label for="cred-desc" class="mt">Description <span style="font-weight:400;color:var(--muted)">(optional)</span></label>
+              <input id="cred-desc" type="text" placeholder="" />
+              <button id="btn-add-credential" class="btn-primary btn-sm mt">Add credential</button>
+              <div class="error" id="error-credential" role="alert"></div>
+            </div>
+          </details>
+        </div>
+      </div>
+    </div>
+    <!-- Admin panel modal -->
+    <div id="admin-modal" class="modal" style="display:none">
+      <div class="modal-content card" style="max-width:900px;width:95vw">
+        <div class="modal-header">
+          <h2>🛡 Admin Panel</h2>
+          <button id="btn-close-admin" class="btn-close" aria-label="Close admin panel">&times;</button>
+        </div>
+
+        <!-- System Stats -->
+        <h3>System Stats</h3>
+        <div id="admin-stats-grid" class="admin-stats-grid"></div>
 
         <hr class="mt" />
 
-        <h3 class="mt">Webhook Notifications</h3>
-        <label for="wh-url">Webhook URL</label>
-        <input id="wh-url" type="url" placeholder="https://example.com/webhook" />
-        <div class="mt">
-          <button id="btn-wh-test" class="btn-secondary btn-sm">Test Webhook</button>
-          <button id="btn-wh-save" class="btn-primary btn-sm">Save Webhook</button>
+        <!-- User Management -->
+        <h3 class="mt">User Management</h3>
+        <div class="admin-search">
+          <input id="admin-user-search" type="text" placeholder="Search users by email…" autocomplete="off" />
         </div>
-        <div class="error" id="error-wh"></div>
+        <div id="admin-users-error" class="error" role="alert"></div>
+        <div style="overflow-x:auto">
+          <table id="admin-users-table" class="admin-table">
+            <thead>
+              <tr>
+                <th>ID</th><th>Email</th><th>Role</th><th>Created</th>
+                <th>Status</th><th>Goals</th><th>Tasks</th><th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="admin-users-tbody"></tbody>
+          </table>
+        </div>
 
         <hr class="mt" />
 
-        <h3 class="mt">Notification Preferences</h3>
-        <div id="notif-toggles" class="notif-toggles">
-          <label><input type="checkbox" id="notif-nudges" checked /> Nudges</label>
-          <label><input type="checkbox" id="notif-tasks" checked /> Task updates</label>
-          <label><input type="checkbox" id="notif-spending" checked /> Spending requests</label>
-          <label><input type="checkbox" id="notif-checkins" /> Check-in reminders</label>
+        <!-- Integration Catalog Manager -->
+        <h3 class="mt">Integration Catalog</h3>
+        <div id="admin-integrations-error" class="error" role="alert"></div>
+        <div style="overflow-x:auto">
+          <table id="admin-integrations-table" class="admin-table">
+            <thead>
+              <tr>
+                <th>Service Name</th><th>Category</th><th>Base URL</th>
+                <th>Auth Type</th><th>Actions</th>
+              </tr>
+            </thead>
+            <tbody id="admin-integrations-tbody"></tbody>
+          </table>
         </div>
 
-        <div id="existing-configs" class="mt"></div>
-
-        <hr class="mt" />
-
-        <!-- Credential Vault -->
-        <h3 class="mt">🔑 API Credentials</h3>
-        <p class="sub" style="font-size:.8rem">Stored credentials let teb's autopilot call services on your behalf.</p>
-        <div id="credentials-list" class="credentials-list"></div>
         <details class="collapsible-panel mt">
-          <summary>Add credential</summary>
+          <summary>Add New Integration</summary>
           <div class="credential-form">
-            <label for="cred-name">Name</label>
-            <input id="cred-name" type="text" placeholder="e.g. My Stripe key" />
-            <label for="cred-base-url" class="mt">Base URL</label>
-            <input id="cred-base-url" type="url" placeholder="https://api.example.com" />
-            <label for="cred-auth-header" class="mt">Auth header</label>
-            <input id="cred-auth-header" type="text" value="Authorization" />
-            <label for="cred-auth-value" class="mt">Auth value</label>
-            <input id="cred-auth-value" type="password" placeholder="Bearer sk-…" />
-            <label for="cred-desc" class="mt">Description (optional)</label>
-            <input id="cred-desc" type="text" placeholder="" />
-            <button id="btn-add-credential" class="btn-primary btn-sm mt">Add credential</button>
-            <div class="error" id="error-credential"></div>
+            <label for="ai-service-name">Service Name</label>
+            <input id="ai-service-name" type="text" placeholder="e.g. my-api" />
+            <label for="ai-category" class="mt">Category</label>
+            <input id="ai-category" type="text" placeholder="e.g. payment, hosting, email" />
+            <label for="ai-base-url" class="mt">Base URL</label>
+            <input id="ai-base-url" type="url" placeholder="https://api.example.com" />
+            <label for="ai-auth-type" class="mt">Auth Type</label>
+            <select id="ai-auth-type">
+              <option value="api_key">api_key</option>
+              <option value="bearer">bearer</option>
+              <option value="oauth2">oauth2</option>
+            </select>
+            <label for="ai-auth-header" class="mt">Auth Header</label>
+            <input id="ai-auth-header" type="text" value="Authorization" />
+            <label for="ai-docs-url" class="mt">Docs URL</label>
+            <input id="ai-docs-url" type="url" placeholder="https://docs.example.com" />
+            <label for="ai-capabilities" class="mt">Capabilities (comma-separated)</label>
+            <input id="ai-capabilities" type="text" placeholder="send emails, manage lists" />
+            <label for="ai-endpoints" class="mt">Common Endpoints (JSON array)</label>
+            <textarea id="ai-endpoints" rows="3" placeholder='[{"method":"POST","path":"/v1/send","description":"Send email"}]'></textarea>
+            <button id="btn-admin-add-integration" class="btn-primary btn-sm mt">Add Integration</button>
           </div>
         </details>
       </div>
@@ -307,4 +406,3 @@
   <script src="static/app.js"></script>
 </body>
 </html>
-

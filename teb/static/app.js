@@ -64,6 +64,87 @@ let dripMode = true; // default to drip mode
 let authMode = 'login'; // 'login' or 'register'
 let autopilotEnabled = false;
 let _pendingOutcomeSuggestions = null;
+let _adminUsersCache = [];
+
+// ─── Toast notification system ────────────────────────────────────────────────
+
+const toast = {
+  _container: null,
+  _getContainer() {
+    if (!this._container) this._container = document.getElementById('toast-container');
+    return this._container;
+  },
+  show(type, title, message, duration = 4000) {
+    const container = this._getContainer();
+    if (!container) return;
+
+    const icons = { success: '✓', error: '✕', info: 'ℹ', warning: '⚠' };
+    const el = document.createElement('div');
+    el.className = `toast toast-${type}`;
+    el.innerHTML = `
+      <span class="toast-icon">${icons[type] || 'ℹ'}</span>
+      <div class="toast-body">
+        <div class="toast-title">${escHtml(title)}</div>
+        ${message ? `<div class="toast-message">${escHtml(message)}</div>` : ''}
+      </div>
+      <button class="toast-close" aria-label="Dismiss">&times;</button>
+    `;
+
+    el.querySelector('.toast-close').addEventListener('click', () => this._dismiss(el));
+    container.appendChild(el);
+
+    if (duration > 0) {
+      setTimeout(() => this._dismiss(el), duration);
+    }
+  },
+  _dismiss(el) {
+    if (!el.parentNode) return;
+    el.classList.add('toast-out');
+    el.addEventListener('animationend', () => el.remove());
+  },
+  success(title, msg) { this.show('success', title, msg); },
+  error(title, msg) { this.show('error', title, msg, 6000); },
+  info(title, msg) { this.show('info', title, msg); },
+  warning(title, msg) { this.show('warning', title, msg, 5000); },
+};
+
+// ─── Dark mode ────────────────────────────────────────────────────────────────
+
+function initTheme() {
+  const saved = localStorage.getItem('teb_theme');
+  if (saved) {
+    document.documentElement.setAttribute('data-theme', saved);
+  } else if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
+    document.documentElement.setAttribute('data-theme', 'dark');
+  }
+  updateThemeIcon();
+
+  // Listen for system preference changes
+  if (window.matchMedia) {
+    window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', (e) => {
+      if (!localStorage.getItem('teb_theme')) {
+        document.documentElement.setAttribute('data-theme', e.matches ? 'dark' : 'light');
+        updateThemeIcon();
+      }
+    });
+  }
+}
+
+function toggleTheme() {
+  const current = document.documentElement.getAttribute('data-theme');
+  const next = current === 'dark' ? 'light' : 'dark';
+  document.documentElement.setAttribute('data-theme', next);
+  localStorage.setItem('teb_theme', next);
+  updateThemeIcon();
+}
+
+function updateThemeIcon() {
+  const btn = document.getElementById('btn-theme-toggle');
+  if (!btn) return;
+  const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+  btn.textContent = isDark ? '☀️' : '🌙';
+  btn.title = isDark ? 'Switch to light mode' : 'Switch to dark mode';
+}
 
 // ─── Loading overlay ──────────────────────────────────────────────────────────
 
@@ -89,6 +170,116 @@ function showScreen(id) {
 function showError(elId, msg) {
   const el = document.getElementById(elId);
   if (el) el.textContent = msg || '';
+}
+
+// ─── Relative time formatting ─────────────────────────────────────────────────
+
+function timeAgo(dateStr) {
+  if (!dateStr) return '';
+  const now = new Date();
+  const past = new Date(dateStr);
+  const diffMs = now - past;
+  const diffMin = Math.floor(diffMs / 60000);
+  const diffHr = Math.floor(diffMs / 3600000);
+  const diffDay = Math.floor(diffMs / 86400000);
+
+  if (diffMin < 1) return 'just now';
+  if (diffMin < 60) return `${diffMin}m ago`;
+  if (diffHr < 24) return `${diffHr}h ago`;
+  if (diffDay < 7) return `${diffDay}d ago`;
+  if (diffDay < 30) return `${Math.floor(diffDay / 7)}w ago`;
+  return past.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+}
+
+// ─── Skeleton loaders ─────────────────────────────────────────────────────────
+
+function showSkeleton(container, count, type) {
+  const html = [];
+  for (let i = 0; i < count; i++) {
+    if (type === 'card') {
+      html.push('<div class="skeleton skeleton-card"></div>');
+    } else if (type === 'stat') {
+      html.push('<div class="skeleton skeleton-stat"></div>');
+    } else {
+      html.push('<div class="skeleton skeleton-text"></div>');
+      html.push('<div class="skeleton skeleton-text"></div>');
+      html.push('<div class="skeleton skeleton-text" style="width:65%"></div>');
+    }
+  }
+  container.innerHTML = html.join('');
+}
+
+// ─── Celebration effect ───────────────────────────────────────────────────────
+
+function triggerCelebration() {
+  const overlay = document.createElement('div');
+  overlay.className = 'celebration-overlay';
+  document.body.appendChild(overlay);
+
+  const colors = ['#3b82f6', '#8b5cf6', '#22c55e', '#f59e0b', '#ef4444', '#ec4899'];
+  for (let i = 0; i < 40; i++) {
+    const particle = document.createElement('div');
+    particle.className = 'confetti-particle';
+    particle.style.left = Math.random() * 100 + '%';
+    particle.style.top = '-10px';
+    particle.style.backgroundColor = colors[Math.floor(Math.random() * colors.length)];
+    particle.style.setProperty('--duration', (1.5 + Math.random() * 1.5) + 's');
+    particle.style.animationDelay = Math.random() * 0.5 + 's';
+    particle.style.width = (6 + Math.random() * 6) + 'px';
+    particle.style.height = (6 + Math.random() * 6) + 'px';
+    overlay.appendChild(particle);
+  }
+  setTimeout(() => overlay.remove(), 3500);
+}
+
+// ─── Animated counter ─────────────────────────────────────────────────────────
+
+function animateCounter(el, targetValue) {
+  const start = parseInt(el.textContent, 10) || 0;
+  const diff = targetValue - start;
+  if (diff === 0) { el.textContent = targetValue; return; }
+  const duration = 600;
+  const startTime = performance.now();
+
+  function step(now) {
+    const elapsed = now - startTime;
+    const progress = Math.min(elapsed / duration, 1);
+    // ease-out cubic
+    const eased = 1 - Math.pow(1 - progress, 3);
+    el.textContent = Math.round(start + diff * eased);
+    if (progress < 1) requestAnimationFrame(step);
+  }
+  requestAnimationFrame(step);
+}
+
+// ─── Debounce ─────────────────────────────────────────────────────────────────
+
+function debounce(fn, ms) {
+  let timer;
+  return (...args) => {
+    clearTimeout(timer);
+    timer = setTimeout(() => fn(...args), ms);
+  };
+}
+
+// ─── Character counter ───────────────────────────────────────────────────────
+
+function setupCharCounter(textareaId, counterId) {
+  const textarea = document.getElementById(textareaId);
+  const counter = document.getElementById(counterId);
+  if (!textarea || !counter) return;
+  const max = parseInt(textarea.getAttribute('maxlength'), 10);
+  if (!max) return;
+
+  function update() {
+    const len = textarea.value.length;
+    counter.textContent = `${len} / ${max}`;
+    counter.classList.remove('near-limit', 'at-limit');
+    if (len >= max) counter.classList.add('at-limit');
+    else if (len >= max * 0.9) counter.classList.add('near-limit');
+  }
+  textarea.addEventListener('input', update);
+  update();
 }
 
 // ─── Auth ─────────────────────────────────────────────────────────────────────
@@ -121,6 +312,7 @@ document.getElementById('btn-auth-submit').addEventListener('click', async () =>
     updateUserBar();
     showScreen('screen-landing');
     loadGoalList();
+    toast.success('Welcome!', authMode === 'register' ? 'Account created successfully.' : 'Signed in.');
   } catch (e) {
     showError('error-auth', e.message);
   } finally {
@@ -154,6 +346,7 @@ document.getElementById('btn-logout').addEventListener('click', () => {
   localStorage.removeItem('teb_email');
   updateUserBar();
   showScreen('screen-auth');
+  toast.info('Signed out', 'You have been logged out.');
 });
 
 document.getElementById('auth-password').addEventListener('keydown', e => {
@@ -163,25 +356,35 @@ document.getElementById('auth-password').addEventListener('keydown', e => {
 // ─── Landing screen ───────────────────────────────────────────────────────────
 
 async function loadGoalList() {
+  const ul = document.getElementById('goal-list');
+  showSkeleton(ul, 3, 'card');
   try {
     const goals = await api.get('/api/goals');
-    const ul = document.getElementById('goal-list');
     ul.innerHTML = '';
     if (!goals.length) {
-      ul.innerHTML = '<li style="color:var(--muted);font-size:.875rem">No previous goals yet.</li>';
+      ul.innerHTML = `
+        <li class="empty-state">
+          <div class="empty-state-icon">🎯</div>
+          <div class="empty-state-title">No goals yet</div>
+          <div class="empty-state-desc">Enter your first goal above and we'll break it down into actionable tasks.</div>
+        </li>`;
       return;
     }
     goals.forEach(g => {
       const li = document.createElement('li');
       li.className = 'goal-item';
       li.innerHTML = `
-        <span class="goal-item-title">${escHtml(g.title)}</span>
-        <span class="goal-item-status status-${g.status}">${g.status}</span>
+        <div>
+          <span class="goal-item-title">${escHtml(g.title)}</span>
+          <div style="font-size:var(--text-xs);color:var(--muted);margin-top:.15rem">${timeAgo(g.created_at)}</div>
+        </div>
+        <span class="goal-item-status status-${g.status}">${g.status.replace('_', ' ')}</span>
       `;
       li.addEventListener('click', () => openGoal(g.id));
       ul.appendChild(li);
     });
   } catch (e) {
+    ul.innerHTML = '';
     console.warn('Could not load goal list', e);
   }
 }
@@ -220,6 +423,11 @@ document.getElementById('btn-create-goal').addEventListener('click', async () =>
     btn.disabled = false;
     btn.textContent = 'Get my action plan →';
   }
+});
+
+// Enter key on goal title input
+document.getElementById('goal-title').addEventListener('keydown', e => {
+  if (e.key === 'Enter') document.getElementById('btn-create-goal').click();
 });
 
 // ─── Clarify screen ───────────────────────────────────────────────────────────
@@ -403,6 +611,7 @@ document.getElementById('btn-drip-done').addEventListener('click', async () => {
   if (!tid) return;
   try {
     await api.patch(`/api/tasks/${tid}`, { status: 'done' });
+    toast.success('Task completed!', 'Great job — keep it up.');
     await refreshGoalView();
     loadDrip();
   } catch (e) {
@@ -451,6 +660,16 @@ function renderTasks(tasks) {
 
   const container = document.getElementById('task-list');
   container.innerHTML = '';
+
+  if (!topLevel.length) {
+    container.innerHTML = `
+      <div class="empty-state">
+        <div class="empty-state-icon">📋</div>
+        <div class="empty-state-title">No tasks yet</div>
+        <div class="empty-state-desc">Tasks will appear here once your goal is decomposed.</div>
+      </div>`;
+    return;
+  }
 
   topLevel.forEach(task => {
     const subtasks = byParent[task.id] || [];
@@ -564,6 +783,15 @@ function buildSubtaskList(subtasks, byParent, depth) {
 async function toggleTaskDone(task) {
   const newStatus = task.status === 'done' ? 'todo' : 'done';
   await patchTaskStatus(task.id, newStatus);
+  if (newStatus === 'done') {
+    // Check if all tasks are done → celebration
+    const goal = await api.get(`/api/goals/${currentGoalId}`).catch(() => null);
+    if (goal) {
+      const topLevel = (goal.tasks || []).filter(t => t.parent_id === null);
+      const allDone = topLevel.length > 0 && topLevel.every(t => t.status === 'done' || t.status === 'skipped');
+      if (allDone) triggerCelebration();
+    }
+  }
 }
 
 async function patchTaskStatus(taskId, status) {
@@ -581,6 +809,7 @@ async function decomposeTask(taskId) {
   try {
     await api.post(`/api/tasks/${taskId}/decompose`, {});
     await refreshGoalView();
+    toast.info('Broken down', 'Task has been decomposed into sub-tasks.');
   } catch (e) {
     showError('error-tasks', e.message);
   }
@@ -592,6 +821,7 @@ async function deleteTask(taskId) {
   try {
     await api.del(`/api/tasks/${taskId}`);
     await refreshGoalView();
+    toast.info('Deleted', 'Task removed.');
   } catch (e) {
     showError('error-tasks', e.message);
   }
@@ -662,7 +892,10 @@ async function loadProgressDetail() {
 document.getElementById('btn-focus-done').addEventListener('click', async () => {
   const banner = document.getElementById('focus-banner');
   const tid = parseInt(banner.dataset.taskId, 10);
-  if (tid) await patchTaskStatus(tid, 'done');
+  if (tid) {
+    await patchTaskStatus(tid, 'done');
+    toast.success('Done!', 'Task marked as completed.');
+  }
 });
 
 document.getElementById('btn-focus-start').addEventListener('click', async () => {
@@ -720,6 +953,7 @@ document.getElementById('btn-add-task').addEventListener('click', async () => {
       estimated_minutes: 30,
     });
     await refreshGoalView();
+    toast.success('Added', 'New task created.');
   } catch (e) {
     showError('error-tasks', e.message);
   }
@@ -749,6 +983,7 @@ document.getElementById('autopilot-toggle').addEventListener('change', async (e)
       await api.post(`/api/goals/${currentGoalId}/auto-execute`, {});
       autopilotEnabled = true;
       if (status) status.textContent = 'On';
+      toast.info('Autopilot enabled', 'Tasks will be executed automatically.');
       // Check if a budget exists; if not, show the budget prompt
       await checkBudgetPrompt();
     } else {
@@ -792,6 +1027,7 @@ document.getElementById('btn-set-budget').addEventListener('click', async () => 
       autopilot_threshold: daily,
     });
     document.getElementById('budget-prompt').style.display = 'none';
+    toast.success('Budget set', `Daily: $${daily}, Total: $${total}`);
   } catch (e) {
     showError('error-budget', e.message);
   }
@@ -834,6 +1070,7 @@ document.getElementById('btn-orchestrate').addEventListener('click', async () =>
     panel.open = true;
     // Refresh tasks after orchestration
     await refreshGoalView();
+    toast.success('Orchestration complete', `${handoffs.length} agent handoffs.`);
   } catch (e) {
     content.innerHTML = `<p class="error">${escHtml(e.message)}</p>`;
   } finally {
@@ -874,6 +1111,7 @@ document.getElementById('btn-add-all-outcomes').addEventListener('click', async 
     _pendingOutcomeSuggestions = null;
     banner.style.display = 'none';
     loadOutcomeMetrics();
+    toast.success('Metrics added', 'Outcome metrics are now being tracked.');
   } catch (e) {
     showError('error-tasks', e.message);
   }
@@ -897,7 +1135,10 @@ async function loadProactiveSuggestions() {
     if (countEl) countEl.textContent = active.length ? `(${active.length})` : '';
 
     if (!active.length) {
-      container.innerHTML = '<p style="color:var(--muted);font-size:.8rem">No suggestions right now.</p>';
+      container.innerHTML = `
+        <div class="empty-state" style="padding:var(--space-md)">
+          <div class="empty-state-desc">No suggestions right now.</div>
+        </div>`;
       return;
     }
 
@@ -944,7 +1185,11 @@ document.getElementById('btn-discover').addEventListener('click', async () => {
     const res = await api.get(`/api/discover/services${params}`);
     const services = res.services || res || [];
     if (!services.length) {
-      container.innerHTML = '<p style="color:var(--muted);font-size:.8rem">No matching services found.</p>';
+      container.innerHTML = `
+        <div class="empty-state" style="padding:var(--space-md)">
+          <div class="empty-state-icon">🔍</div>
+          <div class="empty-state-desc">No matching services found.</div>
+        </div>`;
     } else {
       container.innerHTML = services.slice(0, 8).map(s => `
         <div class="discovery-item">
@@ -974,6 +1219,21 @@ document.getElementById('btn-close-settings').addEventListener('click', () => {
   document.getElementById('settings-modal').style.display = 'none';
 });
 
+// Settings tabs
+document.querySelectorAll('.settings-tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    document.querySelectorAll('.settings-tab').forEach(t => {
+      t.classList.remove('active');
+      t.setAttribute('aria-selected', 'false');
+    });
+    document.querySelectorAll('.settings-pane').forEach(p => p.classList.remove('active'));
+    tab.classList.add('active');
+    tab.setAttribute('aria-selected', 'true');
+    const pane = document.getElementById('pane-' + tab.dataset.tab);
+    if (pane) pane.classList.add('active');
+  });
+});
+
 document.getElementById('btn-tg-save').addEventListener('click', async () => {
   const token = document.getElementById('tg-bot-token').value.trim();
   const chatId = document.getElementById('tg-chat-id').value.trim();
@@ -990,6 +1250,7 @@ document.getElementById('btn-tg-save').addEventListener('click', async () => {
     });
     showError('error-tg', '');
     loadExistingConfigs();
+    toast.success('Saved', 'Telegram config updated.');
   } catch (e) {
     showError('error-tg', e.message);
   }
@@ -1008,7 +1269,7 @@ document.getElementById('btn-tg-test').addEventListener('click', async () => {
       notify_nudges: true, notify_tasks: true, notify_spending: true, notify_checkins: false,
     });
     await api.post(`/api/messaging/test/${cfg.id}`);
-    showError('error-tg', '✅ Test message sent!');
+    toast.success('Test sent', 'Telegram test message dispatched.');
   } catch (e) {
     showError('error-tg', e.message);
   }
@@ -1029,6 +1290,7 @@ document.getElementById('btn-wh-save').addEventListener('click', async () => {
     });
     showError('error-wh', '');
     loadExistingConfigs();
+    toast.success('Saved', 'Webhook config updated.');
   } catch (e) {
     showError('error-wh', e.message);
   }
@@ -1045,7 +1307,7 @@ document.getElementById('btn-wh-test').addEventListener('click', async () => {
       notify_nudges: true, notify_tasks: true, notify_spending: true, notify_checkins: false,
     });
     await api.post(`/api/messaging/test/${cfg.id}`);
-    showError('error-wh', '✅ Test message sent!');
+    toast.success('Test sent', 'Webhook test message dispatched.');
   } catch (e) {
     showError('error-wh', e.message);
   }
@@ -1056,7 +1318,7 @@ async function loadExistingConfigs() {
     const configs = await api.get('/api/messaging/configs');
     const container = document.getElementById('existing-configs');
     if (!configs.length) {
-      container.innerHTML = '<p style="color:var(--muted);font-size:.8rem">No messaging configs yet.</p>';
+      container.innerHTML = '<p style="color:var(--muted);font-size:var(--text-xs)">No messaging configs yet.</p>';
       return;
     }
     container.innerHTML = '<h3 class="mt">Active Configs</h3>' + configs.map(c => `
@@ -1084,7 +1346,11 @@ async function loadCredentials() {
     const creds = await api.get('/api/credentials');
     const container = document.getElementById('credentials-list');
     if (!creds || !creds.length) {
-      container.innerHTML = '<p style="color:var(--muted);font-size:.8rem">No credentials stored yet.</p>';
+      container.innerHTML = `
+        <div class="empty-state" style="padding:var(--space-md)">
+          <div class="empty-state-icon">🔑</div>
+          <div class="empty-state-desc">No credentials stored yet.</div>
+        </div>`;
       return;
     }
     container.innerHTML = creds.map(c => `
@@ -1101,6 +1367,7 @@ async function loadCredentials() {
         try {
           await api.del(`/api/credentials/${btn.dataset.id}`);
           loadCredentials();
+          toast.info('Removed', 'Credential deleted.');
         } catch (e) {
           showError('error-credential', e.message);
         }
@@ -1128,6 +1395,7 @@ document.getElementById('btn-add-credential').addEventListener('click', async ()
     document.getElementById('cred-auth-value').value = '';
     document.getElementById('cred-desc').value = '';
     loadCredentials();
+    toast.success('Added', 'Credential stored securely.');
   } catch (e) {
     showError('error-credential', e.message);
   }
@@ -1140,17 +1408,57 @@ function escHtml(str) {
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
+
+// ─── Keyboard shortcuts ──────────────────────────────────────────────────────
+
+document.addEventListener('keydown', (e) => {
+  // Escape to close modals
+  if (e.key === 'Escape') {
+    const settingsModal = document.getElementById('settings-modal');
+    const adminModal = document.getElementById('admin-modal');
+    if (settingsModal.style.display !== 'none') {
+      settingsModal.style.display = 'none';
+    } else if (adminModal.style.display !== 'none') {
+      adminModal.style.display = 'none';
+    }
+  }
+});
+
+// Click outside modal to close
+document.getElementById('settings-modal').addEventListener('click', (e) => {
+  if (e.target === e.currentTarget) {
+    e.currentTarget.style.display = 'none';
+  }
+});
+document.getElementById('admin-modal').addEventListener('click', (e) => {
+  if (e.target === e.currentTarget) {
+    e.currentTarget.style.display = 'none';
+  }
+});
 
 // ─── Init ─────────────────────────────────────────────────────────────────────
 
 function init() {
+  initTheme();
+  setupCharCounter('goal-desc', 'goal-desc-counter');
+
+  // Dark mode toggle
+  const themeBtn = document.getElementById('btn-theme-toggle');
+  if (themeBtn) themeBtn.addEventListener('click', toggleTheme);
+
   const token = localStorage.getItem('teb_token');
   updateUserBar();
   if (token) {
     showScreen('screen-landing');
     loadGoalList();
+    // Check if logged-in user is admin and show Admin button accordingly
+    api.get('/api/auth/me').then(me => {
+      const adminBtn = document.getElementById('btn-admin');
+      if (adminBtn) adminBtn.style.display = me && me.role === 'admin' ? '' : 'none';
+    }).catch(() => {});
   } else {
     showScreen('screen-auth');
   }
@@ -1184,6 +1492,7 @@ async function submitCheckin() {
     // Refresh history and nudge
     loadCheckinHistory();
     loadNudge();
+    toast.success('Check-in submitted', 'Keep up the momentum!');
   } catch (e) {
     showError('error-tasks', e.message);
   } finally {
@@ -1197,7 +1506,7 @@ async function loadCheckinHistory() {
     const checkins = await api.get(`/api/goals/${currentGoalId}/checkins?limit=5`);
     const container = document.getElementById('checkin-history');
     if (!checkins.length) {
-      container.innerHTML = '<p style="color:var(--muted);font-size:.8rem">No check-ins yet.</p>';
+      container.innerHTML = '<p style="color:var(--muted);font-size:var(--text-xs)">No check-ins yet.</p>';
       return;
     }
     container.innerHTML = checkins.map(ci => {
@@ -1251,7 +1560,11 @@ async function loadOutcomeMetrics() {
     const metrics = await api.get(`/api/goals/${currentGoalId}/outcomes`);
     const container = document.getElementById('outcome-metrics-list');
     if (!metrics.length) {
-      container.innerHTML = '<p style="color:var(--muted);font-size:.8rem">No outcome metrics yet. Add one to track real results.</p>';
+      container.innerHTML = `
+        <div class="empty-state" style="padding:var(--space-md)">
+          <div class="empty-state-icon">📊</div>
+          <div class="empty-state-desc">No outcome metrics yet. Add one to track real results.</div>
+        </div>`;
       return;
     }
     container.innerHTML = metrics.map(m => `
@@ -1277,6 +1590,7 @@ async function loadOutcomeMetrics() {
         try {
           await api.patch(`/api/outcomes/${metricId}`, { current_value: num });
           loadOutcomeMetrics();
+          toast.success('Updated', 'Metric value saved.');
         } catch (e) {
           showError('error-tasks', e.message);
         }
@@ -1299,6 +1613,7 @@ document.getElementById('btn-suggest-outcomes').addEventListener('click', async 
       });
     }
     loadOutcomeMetrics();
+    toast.success('Added', 'Suggested metrics are now being tracked.');
   } catch (e) {
     showError('error-tasks', e.message);
   }
@@ -1322,3 +1637,475 @@ document.getElementById('btn-add-outcome').addEventListener('click', async () =>
     showError('error-tasks', e.message);
   }
 });
+
+// ─── Admin Panel ──────────────────────────────────────────────────────────────
+
+document.getElementById('btn-admin').addEventListener('click', () => {
+  document.getElementById('admin-modal').style.display = 'flex';
+  loadAdminStats();
+  loadAdminUsers();
+  loadAdminIntegrations();
+});
+
+document.getElementById('btn-close-admin').addEventListener('click', () => {
+  document.getElementById('admin-modal').style.display = 'none';
+});
+
+async function loadAdminStats() {
+  const grid = document.getElementById('admin-stats-grid');
+  showSkeleton(grid, 8, 'stat');
+  try {
+    const stats = await api.get('/api/admin/stats');
+    grid.innerHTML = [
+      { label: 'Total Users', value: stats.total_users },
+      { label: 'Total Goals', value: stats.total_goals },
+      { label: 'Total Tasks', value: stats.total_tasks },
+      { label: 'Total Executions', value: stats.total_executions },
+      { label: 'Active Goals', value: stats.active_goals },
+      { label: 'Completed Goals', value: stats.goals_done },
+      { label: 'Completed Tasks', value: stats.tasks_done },
+      { label: 'Approved Spending', value: stats.spending_approved },
+    ].map(s => `
+      <div class="admin-stat-card">
+        <div class="admin-stat-value" data-target="${s.value}">0</div>
+        <div class="admin-stat-label">${escHtml(s.label)}</div>
+      </div>
+    `).join('');
+    // Animate counters
+    grid.querySelectorAll('.admin-stat-value').forEach(el => {
+      animateCounter(el, parseInt(el.dataset.target, 10) || 0);
+    });
+  } catch (e) {
+    grid.innerHTML = `<p class="error">${escHtml(e.message)}</p>`;
+  }
+}
+
+async function loadAdminUsers() {
+  showError('admin-users-error', '');
+  try {
+    const users = await api.get('/api/admin/users');
+    _adminUsersCache = users;
+    renderAdminUsers(users);
+  } catch (e) {
+    showError('admin-users-error', e.message);
+  }
+}
+
+function renderAdminUsers(users) {
+  const tbody = document.getElementById('admin-users-tbody');
+  if (!users.length) {
+    tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:var(--muted)">No users found.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = users.map(u => {
+    const isLocked = u.locked_until && new Date(u.locked_until) > new Date();
+    const statusLabel = isLocked
+      ? `<span class="status-locked">Locked</span>`
+      : `<span class="status-active">Active</span>`;
+    const roleTarget = u.role === 'admin' ? 'user' : 'admin';
+    const roleLabel = u.role === 'admin' ? 'Make User' : 'Make Admin';
+    const roleBtn = `<button class="btn-secondary btn-xs admin-set-role" data-id="${u.id}" data-role="${roleTarget}">${roleLabel}</button>`;
+    const unlockBtn = isLocked
+      ? `<button class="btn-secondary btn-xs admin-unlock" data-id="${u.id}">Unlock</button>`
+      : '';
+    const deleteBtn = `<button class="btn-danger btn-xs admin-del-user" data-id="${u.id}">Delete</button>`;
+    return `<tr>
+      <td>${u.id}</td>
+      <td>${escHtml(u.email)}</td>
+      <td>${escHtml(u.role)}</td>
+      <td>${u.created_at ? u.created_at.slice(0, 10) : ''}</td>
+      <td>${statusLabel}</td>
+      <td>${u.goals_count}</td>
+      <td>${u.tasks_count}</td>
+      <td class="admin-actions">${roleBtn}${unlockBtn}${deleteBtn}</td>
+    </tr>`;
+  }).join('');
+  tbody.querySelectorAll('.admin-set-role').forEach(btn => {
+    btn.addEventListener('click', () => adminSetRole(Number(btn.dataset.id), btn.dataset.role));
+  });
+  tbody.querySelectorAll('.admin-unlock').forEach(btn => {
+    btn.addEventListener('click', () => adminUnlock(Number(btn.dataset.id)));
+  });
+  tbody.querySelectorAll('.admin-del-user').forEach(btn => {
+    btn.addEventListener('click', () => adminDeleteUser(Number(btn.dataset.id)));
+  });
+}
+
+// Debounced admin user search
+const adminUserSearchInput = document.getElementById('admin-user-search');
+if (adminUserSearchInput) {
+  adminUserSearchInput.addEventListener('input', debounce(() => {
+    const query = adminUserSearchInput.value.trim().toLowerCase();
+    if (!query) {
+      renderAdminUsers(_adminUsersCache);
+      return;
+    }
+    const filtered = _adminUsersCache.filter(u =>
+      u.email.toLowerCase().includes(query) ||
+      String(u.id).includes(query)
+    );
+    renderAdminUsers(filtered);
+  }, 200));
+}
+
+async function adminSetRole(userId, role) {
+  try {
+    await api.patch(`/api/admin/users/${userId}`, { role });
+    loadAdminUsers();
+    toast.success('Role updated', `User ${userId} is now ${role}.`);
+  } catch (e) {
+    showError('admin-users-error', e.message);
+  }
+}
+
+async function adminUnlock(userId) {
+  try {
+    await api.patch(`/api/admin/users/${userId}`, { locked_until: 'null' });
+    loadAdminUsers();
+    toast.success('Unlocked', `User ${userId} has been unlocked.`);
+  } catch (e) {
+    showError('admin-users-error', e.message);
+  }
+}
+
+async function adminDeleteUser(userId) {
+  if (!confirm('Delete this user and all their data? This cannot be undone.')) return;
+  try {
+    await api.del(`/api/admin/users/${userId}`);
+    loadAdminUsers();
+    loadAdminStats();
+    toast.success('Deleted', 'User and all their data removed.');
+  } catch (e) {
+    showError('admin-users-error', e.message);
+  }
+}
+
+async function loadAdminIntegrations() {
+  showError('admin-integrations-error', '');
+  try {
+    const integrations = await api.get('/api/admin/integrations');
+    const tbody = document.getElementById('admin-integrations-tbody');
+    if (!integrations.length) {
+      tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--muted)">No integrations found.</td></tr>';
+      return;
+    }
+    tbody.innerHTML = integrations.map(i => `
+      <tr>
+        <td>${escHtml(i.service_name)}</td>
+        <td>${escHtml(i.category)}</td>
+        <td><span style="font-size:var(--text-xs)">${escHtml(i.base_url)}</span></td>
+        <td>${escHtml(i.auth_type)}</td>
+        <td><button class="btn-danger btn-xs admin-del-integration" data-name="${escHtml(i.service_name)}">Delete</button></td>
+      </tr>
+    `).join('');
+    tbody.querySelectorAll('.admin-del-integration').forEach(btn => {
+      btn.addEventListener('click', () => adminDeleteIntegration(btn.dataset.name));
+    });
+  } catch (e) {
+    showError('admin-integrations-error', e.message);
+  }
+}
+
+async function adminDeleteIntegration(name) {
+  if (!confirm(`Remove integration "${name}"? This cannot be undone.`)) return;
+  try {
+    await api.del(`/api/admin/integrations/${encodeURIComponent(name)}`);
+    loadAdminIntegrations();
+    toast.info('Removed', `Integration "${name}" deleted.`);
+  } catch (e) {
+    showError('admin-integrations-error', e.message);
+  }
+}
+
+document.getElementById('btn-admin-add-integration').addEventListener('click', async () => {
+  const serviceName = document.getElementById('ai-service-name').value.trim();
+  if (!serviceName) { showError('admin-integrations-error', 'Service name is required.'); return; }
+  const category = document.getElementById('ai-category').value.trim();
+  const baseUrl = document.getElementById('ai-base-url').value.trim();
+  const authType = document.getElementById('ai-auth-type').value;
+  const authHeader = document.getElementById('ai-auth-header').value.trim() || 'Authorization';
+  const docsUrl = document.getElementById('ai-docs-url').value.trim();
+  const capsRaw = document.getElementById('ai-capabilities').value.trim();
+  const capabilities = capsRaw ? capsRaw.split(',').map(s => s.trim()).filter(Boolean) : [];
+  let commonEndpoints = [];
+  try {
+    const ep = document.getElementById('ai-endpoints').value.trim();
+    if (ep) commonEndpoints = JSON.parse(ep);
+  } catch (e) {
+    showError('admin-integrations-error', 'Common endpoints must be valid JSON.');
+    return;
+  }
+  try {
+    await api.post('/api/admin/integrations', {
+      service_name: serviceName, category, base_url: baseUrl,
+      auth_type: authType, auth_header: authHeader, docs_url: docsUrl,
+      capabilities, common_endpoints: commonEndpoints,
+    });
+    // Clear form fields
+    ['ai-service-name','ai-category','ai-base-url','ai-auth-header','ai-docs-url',
+     'ai-capabilities','ai-endpoints'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.value = id === 'ai-auth-header' ? 'Authorization' : '';
+    });
+    loadAdminIntegrations();
+    toast.success('Added', `Integration "${serviceName}" created.`);
+  } catch (e) {
+    showError('admin-integrations-error', e.message);
+  }
+});
+
+// ─── Progress ring animation ──────────────────────────────────────────────────
+
+function updateProgressRing() {
+  const fill = document.getElementById('progress-fill');
+  if (!fill) return;
+  const pct = parseInt(fill.style.width, 10) || 0;
+  const label = document.getElementById('progress-label');
+  if (label) {
+    label.style.color = pct >= 100 ? 'var(--success)' : pct >= 50 ? 'var(--primary)' : 'var(--muted)';
+    if (pct >= 100) label.style.fontWeight = '700';
+  }
+}
+
+// Override setProgress to trigger ring animation
+const _origSetProgress = setProgress;
+setProgress = function(pct) {
+  _origSetProgress(pct);
+  updateProgressRing();
+  // Trigger celebration at 100%
+  if (pct >= 100) {
+    const label = document.getElementById('progress-label');
+    if (label && !label.dataset.celebrated) {
+      label.dataset.celebrated = 'true';
+      triggerCelebration();
+    }
+  }
+};
+
+// ─── Smooth input validation ──────────────────────────────────────────────────
+
+function shakeInput(inputId) {
+  const el = document.getElementById(inputId);
+  if (!el) return;
+  el.classList.add('input-error');
+  el.addEventListener('animationend', () => el.classList.remove('input-error'), { once: true });
+}
+
+// ─── Auto-resize textareas ────────────────────────────────────────────────────
+
+function autoResizeTextarea(textarea) {
+  textarea.style.height = 'auto';
+  textarea.style.height = Math.min(textarea.scrollHeight, 200) + 'px';
+}
+
+document.querySelectorAll('textarea').forEach(ta => {
+  ta.addEventListener('input', () => autoResizeTextarea(ta));
+});
+
+// ─── Connection status indicator ──────────────────────────────────────────────
+
+let _lastOnlineState = navigator.onLine;
+
+window.addEventListener('online', () => {
+  if (!_lastOnlineState) {
+    toast.success('Back online', 'Connection restored.');
+    _lastOnlineState = true;
+  }
+});
+
+window.addEventListener('offline', () => {
+  toast.warning('Offline', 'You appear to be disconnected.');
+  _lastOnlineState = false;
+});
+
+// ─── Periodic refresh for active goal ─────────────────────────────────────────
+
+let _refreshInterval = null;
+
+function startPeriodicRefresh() {
+  stopPeriodicRefresh();
+  _refreshInterval = setInterval(async () => {
+    if (!currentGoalId) return;
+    if (document.hidden) return; // Skip if tab not visible
+    try {
+      const goal = await api.get(`/api/goals/${currentGoalId}`);
+      const oldDone = currentTasks.filter(t => t.status === 'done').length;
+      currentTasks = goal.tasks || [];
+      const newDone = currentTasks.filter(t => t.status === 'done').length;
+      if (newDone !== oldDone) {
+        renderTasks(currentTasks);
+        updateProgress(currentTasks);
+        loadProgressDetail();
+        if (newDone > oldDone) {
+          toast.info('Progress', `${newDone - oldDone} task(s) completed by autopilot.`);
+        }
+      }
+    } catch (e) {
+      // Silently ignore refresh failures
+    }
+  }, 30000); // Every 30 seconds
+}
+
+function stopPeriodicRefresh() {
+  if (_refreshInterval) {
+    clearInterval(_refreshInterval);
+    _refreshInterval = null;
+  }
+}
+
+// Start/stop periodic refresh based on autopilot status
+const _autopilotToggleEl = document.getElementById('autopilot-toggle');
+if (_autopilotToggleEl) {
+  _autopilotToggleEl.addEventListener('change', () => {
+    if (_autopilotToggleEl.checked) {
+      startPeriodicRefresh();
+    } else {
+      stopPeriodicRefresh();
+    }
+  });
+}
+
+// ─── Page visibility API — pause/resume ───────────────────────────────────────
+
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden && currentGoalId && autopilotEnabled) {
+    // Refresh on tab return if autopilot is running
+    refreshGoalView().catch(() => {});
+    loadDrip().catch(() => {});
+  }
+});
+
+// ─── Keyboard navigation for task list ────────────────────────────────────────
+
+document.addEventListener('keydown', (e) => {
+  // Ctrl+Enter or Cmd+Enter to submit forms
+  if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+    const activeScreen = document.querySelector('.screen.active');
+    if (!activeScreen) return;
+
+    if (activeScreen.id === 'screen-landing') {
+      document.getElementById('btn-create-goal').click();
+      e.preventDefault();
+    } else if (activeScreen.id === 'screen-clarify') {
+      document.getElementById('btn-clarify-next').click();
+      e.preventDefault();
+    } else if (activeScreen.id === 'screen-tasks') {
+      // Check-in submit if focused in check-in area
+      const active = document.activeElement;
+      if (active && (active.id === 'checkin-done' || active.id === 'checkin-blockers')) {
+        document.getElementById('btn-checkin').click();
+        e.preventDefault();
+      }
+    }
+  }
+});
+
+// ─── Smart date formatting for admin table ────────────────────────────────────
+
+function formatAdminDate(dateStr) {
+  if (!dateStr) return '';
+  const d = new Date(dateStr);
+  const now = new Date();
+  const diffDays = Math.floor((now - d) / 86400000);
+
+  if (diffDays === 0) return 'Today';
+  if (diffDays === 1) return 'Yesterday';
+  if (diffDays < 7) return `${diffDays}d ago`;
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: diffDays > 365 ? 'numeric' : undefined });
+}
+
+// ─── Smooth scroll to section ─────────────────────────────────────────────────
+
+function scrollToElement(el) {
+  if (!el) return;
+  el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+// ─── Tab trap for modals (accessibility) ──────────────────────────────────────
+
+function trapFocusInModal(modalEl) {
+  const focusable = modalEl.querySelectorAll(
+    'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+  );
+  if (!focusable.length) return;
+  const first = focusable[0];
+  const last = focusable[focusable.length - 1];
+
+  modalEl.addEventListener('keydown', (e) => {
+    if (e.key !== 'Tab') return;
+    if (e.shiftKey) {
+      if (document.activeElement === first) {
+        e.preventDefault();
+        last.focus();
+      }
+    } else {
+      if (document.activeElement === last) {
+        e.preventDefault();
+        first.focus();
+      }
+    }
+  });
+}
+
+// Initialize focus traps for modals
+trapFocusInModal(document.getElementById('settings-modal'));
+trapFocusInModal(document.getElementById('admin-modal'));
+
+// ─── Batch API utility for outcome suggestions ───────────────────────────────
+
+async function batchCreateOutcomes(goalId, suggestions) {
+  const results = [];
+  for (const s of suggestions) {
+    try {
+      const result = await api.post(`/api/goals/${goalId}/outcomes`, {
+        label: s.label,
+        target_value: s.target_value,
+        unit: s.unit || '',
+      });
+      results.push(result);
+    } catch (e) {
+      console.warn('Failed to create outcome:', s.label, e);
+    }
+  }
+  return results;
+}
+
+// ─── Session timeout warning ──────────────────────────────────────────────────
+
+let _sessionWarningShown = false;
+
+function checkSessionValidity() {
+  const token = localStorage.getItem('teb_token');
+  if (!token) return;
+
+  try {
+    // Decode JWT payload (base64)
+    const parts = token.split('.');
+    if (parts.length !== 3) return;
+    const payload = JSON.parse(atob(parts[1]));
+    if (payload.exp) {
+      const expiresAt = payload.exp * 1000;
+      const now = Date.now();
+      const remaining = expiresAt - now;
+
+      if (remaining < 0) {
+        // Token expired
+        localStorage.removeItem('teb_token');
+        localStorage.removeItem('teb_email');
+        updateUserBar();
+        showScreen('screen-auth');
+        toast.warning('Session expired', 'Please sign in again.');
+      } else if (remaining < 300000 && !_sessionWarningShown) {
+        // Less than 5 minutes remaining
+        _sessionWarningShown = true;
+        toast.warning('Session expiring', 'Your session will expire soon. Save your work.');
+      }
+    }
+  } catch (e) {
+    // Invalid token format — ignore
+  }
+}
+
+// Check session every 60 seconds
+setInterval(checkSessionValidity, 60000);
+checkSessionValidity();

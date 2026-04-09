@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
 
-from teb import config
+from teb import config, security
 from teb.models import BrowserAction, Integration, Task
 
 
@@ -381,6 +381,11 @@ def _execute_single_step(page: Any, step: BrowserStep) -> BrowserStepResult:
             url = step.target or step.value
             if not url.startswith(("http://", "https://")):
                 url = "https://" + url
+            if not security.is_safe_url(url):
+                return BrowserStepResult(
+                    step=step, success=False,
+                    error=f"Blocked: URL '{url}' targets a private or disallowed address",
+                )
             page.goto(url, timeout=30000)
             return BrowserStepResult(step=step, success=True)
 
@@ -401,7 +406,7 @@ def _execute_single_step(page: Any, step: BrowserStep) -> BrowserStepResult:
             return BrowserStepResult(step=step, success=True, extracted_text=text[:2000])
 
         elif step.action_type == "screenshot":
-            path = step.value or "/tmp/teb_screenshot.png"
+            path = security.safe_screenshot_path(step.value)
             page.screenshot(path=path)
             return BrowserStepResult(step=step, success=True, screenshot_path=path)
 

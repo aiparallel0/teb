@@ -29,6 +29,10 @@ _MAX_FAILED_LOGINS = 10
 _LOCK_DURATION_MINUTES = 30
 _REFRESH_TOKEN_DAYS = 30
 
+# Pre-computed dummy hash used to perform a constant-time bcrypt check when the
+# supplied email address does not exist, preventing timing-based user enumeration.
+_DUMMY_HASH: str = bcrypt.hashpw(b"teb-dummy-password", bcrypt.gensalt(rounds=12)).decode()
+
 
 def hash_password(password: str) -> str:
     """Hash a password using bcrypt."""
@@ -36,8 +40,15 @@ def hash_password(password: str) -> str:
 
 
 def verify_password(password: str, hashed: str) -> bool:
-    """Verify a password against a bcrypt hash."""
-    return bcrypt.checkpw(password.encode(), hashed.encode())
+    """Verify a password against a bcrypt hash.
+
+    Returns False (rather than raising) on any error so that callers always
+    receive a boolean and never expose internal details via exceptions.
+    """
+    try:
+        return bcrypt.checkpw(password.encode(), hashed.encode())
+    except Exception:
+        return False
 
 
 def create_token(user_id: int) -> str:
@@ -103,6 +114,9 @@ def login_user(email: str, password: str) -> dict:
     email = email.strip().lower()
     user = storage.get_user_by_email(email)
     if not user:
+        # Perform a dummy bcrypt check so that invalid-email and invalid-password
+        # responses take the same amount of time, preventing user enumeration.
+        verify_password(password, _DUMMY_HASH)
         raise ValueError("Invalid email or password")
 
     # Check if account is locked

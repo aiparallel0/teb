@@ -21,7 +21,7 @@ from typing import Any, Dict, List, Optional
 
 import httpx
 
-from teb import storage
+from teb import security, storage
 from teb.models import MessagingConfig
 
 logger = logging.getLogger(__name__)
@@ -141,6 +141,10 @@ def _send_webhook(config: Dict[str, Any], event_type: str, message: str, data: D
 
     if not webhook_url:
         logger.warning("Webhook config missing url")
+        return False
+
+    if not security.is_safe_url(webhook_url):
+        logger.warning("Blocked webhook delivery: URL %r targets a private or disallowed address", webhook_url)
         return False
 
     payload = {
