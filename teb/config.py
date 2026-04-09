@@ -36,6 +36,13 @@ CORS_ORIGINS: List[str] = [
 # Logging
 LOG_LEVEL: str = os.getenv("TEB_LOG_LEVEL", "INFO")
 
+# Autonomous execution
+AUTONOMOUS_EXECUTION_ENABLED: bool = os.getenv("TEB_AUTONOMOUS_EXECUTION", "true").lower() == "true"
+AUTONOMOUS_EXECUTION_INTERVAL: int = int(os.getenv("TEB_AUTONOMOUS_EXECUTION_INTERVAL", "30"))
+
+# Autopilot default threshold (max $ auto-approved per transaction)
+AUTOPILOT_DEFAULT_THRESHOLD: float = float(os.getenv("TEB_AUTOPILOT_DEFAULT_THRESHOLD", "50.0"))
+
 
 def get_ai_provider() -> Optional[str]:
     """Resolve which AI provider to use. Returns 'anthropic', 'openai', or None."""
