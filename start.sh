@@ -31,7 +31,7 @@ if [[ -z "$current_jwt" || "$current_jwt" == "$PLACEHOLDER" ]]; then
   new_jwt=$(python3 -c "import secrets; print(secrets.token_urlsafe(64))")
   # Replace or append
   if grep -q "^TEB_JWT_SECRET=" .env; then
-    sed -i "s|^TEB_JWT_SECRET=.*|TEB_JWT_SECRET=${new_jwt}|" .env
+    sed -i'' -e "s|^TEB_JWT_SECRET=.*|TEB_JWT_SECRET=${new_jwt}|" .env
   else
     echo "TEB_JWT_SECRET=${new_jwt}" >> .env
   fi
@@ -44,9 +44,9 @@ if [[ -z "$current_sk" ]]; then
   new_sk=$(python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())" 2>/dev/null || true)
   if [[ -n "$new_sk" ]]; then
     if grep -q "^TEB_SECRET_KEY=" .env; then
-      sed -i "s|^TEB_SECRET_KEY=.*|TEB_SECRET_KEY=${new_sk}|" .env
+      sed -i'' -e "s|^TEB_SECRET_KEY=.*|TEB_SECRET_KEY=${new_sk}|" .env
     elif grep -q "^# TEB_SECRET_KEY=" .env; then
-      sed -i "s|^# TEB_SECRET_KEY=.*|TEB_SECRET_KEY=${new_sk}|" .env
+      sed -i'' -e "s|^# TEB_SECRET_KEY=.*|TEB_SECRET_KEY=${new_sk}|" .env
     else
       echo "TEB_SECRET_KEY=${new_sk}" >> .env
     fi
