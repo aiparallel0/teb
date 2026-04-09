@@ -235,7 +235,9 @@ def provision_service(task: Task) -> Dict[str, Any]:
             "message": "Playwright is not installed. Follow the steps below manually.",
             "plan": plan.to_dict(),
             "manual_steps": [
-                f"Step {i+1}: {s.description} — {s.action_type} on {s.target or s.value}"
+                f"Step {i+1}: {s.description}"
+                + (f" — target: {s.target}" if s.target else "")
+                + (f" — value: {s.value}" if s.value else "")
                 for i, s in enumerate(plan.steps)
             ],
         }

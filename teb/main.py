@@ -80,6 +80,40 @@ import asyncio
 _auto_exec_task: Optional[asyncio.Task] = None
 
 
+def _check_budget_approval(task_id: int, task_title: str, goal_id: int) -> Optional[dict]:
+    """Check if any budget for the goal requires manual approval.
+
+    Returns a dict with spending request info if approval is needed, else None.
+    When autopilot is enabled on a budget, approval is bypassed.
+    """
+    budgets = storage.list_spending_budgets(goal_id)
+    for budget in budgets:
+        storage.maybe_reset_daily_spending(budget)
+        if budget.require_approval and not budget.autopilot_enabled:
+            # Create a spending request and signal pause
+            sr = SpendingRequest(
+                task_id=task_id,
+                budget_id=budget.id or 0,
+                amount=0,
+                description=f"Automated execution of: {task_title}",
+                service="api_execution",
+                status="pending",
+            )
+            sr = storage.create_spending_request(sr)
+            messaging.send_notification("spending_request", {
+                "request_id": sr.id,
+                "amount": 0,
+                "description": sr.description,
+                "service": sr.service,
+                "task_title": task_title,
+            })
+            return {
+                "spending_request_id": sr.id,
+                "budget_category": budget.category,
+            }
+    return None
+
+
 async def _autonomous_execution_loop() -> None:
     """Background loop: every N seconds, pick up pending tasks and execute them.
 
@@ -104,32 +138,8 @@ async def _autonomous_execution_loop() -> None:
                         continue
 
                     # Check budget constraints with autopilot support
-                    budgets = storage.list_spending_budgets(task.goal_id)
-                    should_pause = False
-                    for budget in budgets:
-                        storage.maybe_reset_daily_spending(budget)
-                        if budget.require_approval and not budget.autopilot_enabled:
-                            # Needs manual approval — create spending request and skip
-                            sr = SpendingRequest(
-                                task_id=task.id or 0,
-                                budget_id=budget.id or 0,
-                                amount=0,
-                                description=f"Auto-execution of: {task.title}",
-                                service="api_execution",
-                                status="pending",
-                            )
-                            sr = storage.create_spending_request(sr)
-                            messaging.send_notification("spending_request", {
-                                "request_id": sr.id,
-                                "amount": 0,
-                                "description": sr.description,
-                                "service": sr.service,
-                                "task_title": task.title,
-                            })
-                            should_pause = True
-                            break
-
-                    if should_pause:
+                    approval = _check_budget_approval(task.id or 0, task.title, task.goal_id)
+                    if approval:
                         continue
 
                     # Execute the task
@@ -855,48 +865,26 @@ async def execute_task(task_id: int, request: Request):
         }
 
     # P2.1: Budget validation — check if the goal has a budget and if spending is required
-    budgets = storage.list_spending_budgets(task.goal_id)
-    if budgets:
-        # Check if any budget requires approval (unless autopilot overrides)
-        for budget in budgets:
-            storage.maybe_reset_daily_spending(budget)
-            if budget.require_approval and not budget.autopilot_enabled:
-                # Create a spending request and pause execution
-                from teb.models import SpendingRequest as SpReq
-                sr = SpReq(
-                    task_id=task_id,
-                    budget_id=budget.id,  # type: ignore[arg-type]
-                    amount=0,  # estimated; real amount unknown until execution
-                    description=f"Automated execution of: {task.title}",
-                    service="api_execution",
-                    status="pending",
-                )
-                sr = storage.create_spending_request(sr)
-                messaging.send_notification("spending_request", {
-                    "request_id": sr.id,
-                    "amount": 0,
-                    "description": sr.description,
-                    "service": sr.service,
-                    "task_title": task.title,
-                })
-                # Log pending approval
-                pending_log = ExecutionLog(
-                    task_id=task_id,
-                    credential_id=None,
-                    action="Execution paused — pending budget approval",
-                    request_summary=f"Budget {budget.category} requires approval",
-                    response_summary=f"Spending request #{sr.id} created",
-                    status="success",
-                )
-                storage.create_execution_log(pending_log)
-                return {
-                    "task_id": task_id,
-                    "executed": False,
-                    "reason": "Budget requires approval. A spending request has been created.",
-                    "plan": plan.to_dict(),
-                    "logs": [pending_log.to_dict()],
-                    "spending_request_id": sr.id,
-                }
+    approval = _check_budget_approval(task_id, task.title, task.goal_id)
+    if approval:
+        # Log pending approval
+        pending_log = ExecutionLog(
+            task_id=task_id,
+            credential_id=None,
+            action="Execution paused — pending budget approval",
+            request_summary=f"Budget requires approval",
+            response_summary=f"Spending request #{approval['spending_request_id']} created",
+            status="success",
+        )
+        storage.create_execution_log(pending_log)
+        return {
+            "task_id": task_id,
+            "executed": False,
+            "reason": "Budget requires approval. A spending request has been created.",
+            "plan": plan.to_dict(),
+            "logs": [pending_log.to_dict()],
+            "spending_request_id": approval["spending_request_id"],
+        }
 
     # Mark task as executing
     task.status = "executing"

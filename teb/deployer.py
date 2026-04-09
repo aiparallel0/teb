@@ -335,14 +335,14 @@ def check_health(deploy_url: str, timeout: int = 10) -> Dict[str, Any]:
     try:
         resp = httpx.get(url, timeout=timeout, follow_redirects=True)
         return {
-            "status": "healthy" if 200 <= resp.status_code < 500 else "unhealthy",
+            "status": "healthy" if 200 <= resp.status_code < 300 else "unhealthy",
             "status_code": resp.status_code,
             "response_time_ms": int(resp.elapsed.total_seconds() * 1000),
         }
     except httpx.TimeoutException:
         return {"status": "unhealthy", "error": "Health check timed out"}
-    except httpx.RequestError as exc:
-        return {"status": "down", "error": f"Connection failed: {exc}"}
+    except httpx.RequestError:
+        return {"status": "down", "error": "Connection failed"}
 
 
 def monitor_deployment(deploy_id: int) -> Dict[str, Any]:

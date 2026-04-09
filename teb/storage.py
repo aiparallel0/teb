@@ -2010,6 +2010,8 @@ def update_deployment(deploy_id: int, status: Optional[str] = None,
                       health_status: Optional[str] = None,
                       provider_data: Optional[str] = None) -> Optional[dict]:
     now = datetime.now(timezone.utc).isoformat()
+    _ALLOWED_COLUMNS = {"status", "deploy_url", "health_status", "last_health_check",
+                        "provider_data", "updated_at"}
     updates: list[str] = ["updated_at = ?"]
     params: list = [now]
     if status is not None:
@@ -2026,10 +2028,16 @@ def update_deployment(deploy_id: int, status: Optional[str] = None,
     if provider_data is not None:
         updates.append("provider_data = ?")
         params.append(provider_data)
+    # Validate all column names are in the allowed set
+    for clause in updates:
+        col_name = clause.split(" = ")[0].strip()
+        if col_name not in _ALLOWED_COLUMNS:
+            raise ValueError(f"Invalid column: {col_name}")
     params.append(deploy_id)
+    set_clause = ", ".join(updates)
     with _conn() as con:
         con.execute(
-            f"UPDATE deployments SET {', '.join(updates)} WHERE id = ?", params,
+            f"UPDATE deployments SET {set_clause} WHERE id = ?", params,  # noqa: S608
         )
         row = con.execute("SELECT * FROM deployments WHERE id = ?", (deploy_id,)).fetchone()
     if not row:

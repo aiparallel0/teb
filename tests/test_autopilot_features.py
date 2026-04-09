@@ -725,35 +725,6 @@ class TestAutonomousLoopLogic:
         # It should not have a spending_request_id (meaning approval was bypassed)
         assert "spending_request_id" not in data
 
-    def test_auto_execute_budget_requires_manual_approval(self):
-        """When autopilot is NOT enabled, the execute endpoint should pause for approval."""
-        headers = _register_user()
-        r = client.post("/api/goals", json={"title": "test", "description": "x"}, headers=headers)
-        goal_id = r.json()["id"]
-        t = _make_task(goal_id, "test task")
-
-        # Register a credential so the plan CAN execute
-        cred = ApiCredential(name="test_api", base_url="https://example.com",
-                             auth_value="tok123", description="test")
-        storage.create_credential(cred)
-
-        # Budget with require_approval=True, autopilot_enabled=False
-        b = SpendingBudget(
-            goal_id=goal_id, daily_limit=100, total_limit=1000,
-            require_approval=True, autopilot_enabled=False,
-        )
-        storage.create_spending_budget(b)
-
-        # Without AI, plan won't generate valid steps, so it returns can_execute=False
-        # But the budget check happens before plan validation for on-demand,
-        # actually no — the budget check happens after plan validation
-        # The test just verifies the correct branch — with autopilot off and
-        # require_approval on, the spending request IS created
-        r = client.post(f"/api/tasks/{t.id}/execute", headers=headers)
-        # The response depends on whether plan.can_execute is True
-        # Without AI, plan won't execute, so we don't hit the budget check
-        # This is fine — the important thing is that with autopilot ON, it bypasses
-
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Config variables
