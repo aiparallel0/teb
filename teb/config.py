@@ -1,4 +1,6 @@
+import logging
 import os
+import secrets
 from typing import List, Optional
 
 OPENAI_API_KEY: Optional[str] = os.getenv("OPENAI_API_KEY")
@@ -19,19 +21,38 @@ EXECUTOR_TIMEOUT: int = int(os.getenv("TEB_EXECUTOR_TIMEOUT", "30"))  # HTTP tim
 EXECUTOR_MAX_RETRIES: int = int(os.getenv("TEB_EXECUTOR_MAX_RETRIES", "2"))
 
 # JWT / auth settings
-JWT_SECRET: str = os.getenv("TEB_JWT_SECRET", "change-me-in-production-not-safe")
+# If TEB_JWT_SECRET is not set, generate a cryptographically random secret for
+# this process.  Tokens will not survive a restart — set TEB_JWT_SECRET in
+# production so that sessions persist across deployments.
+_JWT_SECRET_ENV: Optional[str] = os.getenv("TEB_JWT_SECRET")
+if not _JWT_SECRET_ENV:
+    JWT_SECRET: str = secrets.token_hex(32)
+    logging.getLogger(__name__).warning(
+        "TEB_JWT_SECRET is not set. A random JWT secret has been generated "
+        "for this process; all tokens will be invalidated on restart. "
+        "Set TEB_JWT_SECRET to a strong random value in production."
+    )
+else:
+    JWT_SECRET = _JWT_SECRET_ENV
+
 JWT_ALGORITHM: str = "HS256"
 JWT_EXPIRE_HOURS: int = int(os.getenv("TEB_JWT_EXPIRE_HOURS", "168"))  # 7 days
 
 # Credential encryption key (Fernet, base64-encoded 32 bytes)
 SECRET_KEY: Optional[str] = os.getenv("TEB_SECRET_KEY")
 
-# CORS — comma-separated origins, or "*" (default: allow all for dev)
+# CORS — comma-separated origins, or "*" to allow all (dev default).
+# Restrict to your actual domain(s) in production via TEB_CORS_ORIGINS.
 CORS_ORIGINS: List[str] = [
     o.strip()
     for o in os.getenv("TEB_CORS_ORIGINS", "*").split(",")
     if o.strip()
 ]
+if CORS_ORIGINS == ["*"]:
+    logging.getLogger(__name__).warning(
+        "TEB_CORS_ORIGINS is set to '*' (allow all origins). "
+        "Set TEB_CORS_ORIGINS to your domain(s) in production."
+    )
 
 # Logging
 LOG_LEVEL: str = os.getenv("TEB_LOG_LEVEL", "INFO")

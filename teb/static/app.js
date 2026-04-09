@@ -1380,13 +1380,13 @@ async function loadAdminUsers() {
       const statusLabel = isLocked
         ? `<span class="status-locked">Locked</span>`
         : `<span class="status-active">Active</span>`;
-      const roleBtn = u.role === 'admin'
-        ? `<button class="btn-secondary btn-xs" onclick="adminSetRole(${u.id},'user')">Make User</button>`
-        : `<button class="btn-secondary btn-xs" onclick="adminSetRole(${u.id},'admin')">Make Admin</button>`;
+      const roleTarget = u.role === 'admin' ? 'user' : 'admin';
+      const roleLabel = u.role === 'admin' ? 'Make User' : 'Make Admin';
+      const roleBtn = `<button class="btn-secondary btn-xs admin-set-role" data-id="${u.id}" data-role="${roleTarget}">${roleLabel}</button>`;
       const unlockBtn = isLocked
-        ? `<button class="btn-secondary btn-xs" onclick="adminUnlock(${u.id})">Unlock</button>`
+        ? `<button class="btn-secondary btn-xs admin-unlock" data-id="${u.id}">Unlock</button>`
         : '';
-      const deleteBtn = `<button class="btn-danger btn-xs" onclick="adminDeleteUser(${u.id})">Delete</button>`;
+      const deleteBtn = `<button class="btn-danger btn-xs admin-del-user" data-id="${u.id}">Delete</button>`;
       return `<tr>
         <td>${u.id}</td>
         <td>${escHtml(u.email)}</td>
@@ -1398,6 +1398,15 @@ async function loadAdminUsers() {
         <td class="admin-actions">${roleBtn}${unlockBtn}${deleteBtn}</td>
       </tr>`;
     }).join('');
+    tbody.querySelectorAll('.admin-set-role').forEach(btn => {
+      btn.addEventListener('click', () => adminSetRole(Number(btn.dataset.id), btn.dataset.role));
+    });
+    tbody.querySelectorAll('.admin-unlock').forEach(btn => {
+      btn.addEventListener('click', () => adminUnlock(Number(btn.dataset.id)));
+    });
+    tbody.querySelectorAll('.admin-del-user').forEach(btn => {
+      btn.addEventListener('click', () => adminDeleteUser(Number(btn.dataset.id)));
+    });
   } catch (e) {
     showError('admin-users-error', e.message);
   }
@@ -1447,9 +1456,12 @@ async function loadAdminIntegrations() {
         <td>${escHtml(i.category)}</td>
         <td><span style="font-size:.75rem">${escHtml(i.base_url)}</span></td>
         <td>${escHtml(i.auth_type)}</td>
-        <td><button class="btn-danger btn-xs" onclick="adminDeleteIntegration('${escHtml(i.service_name)}')">Delete</button></td>
+        <td><button class="btn-danger btn-xs admin-del-integration" data-name="${escHtml(i.service_name)}">Delete</button></td>
       </tr>
     `).join('');
+    tbody.querySelectorAll('.admin-del-integration').forEach(btn => {
+      btn.addEventListener('click', () => adminDeleteIntegration(btn.dataset.name));
+    });
   } catch (e) {
     showError('admin-integrations-error', e.message);
   }

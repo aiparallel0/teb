@@ -2583,6 +2583,16 @@ async def admin_create_integration(request: Request):
     from teb.models import Integration as _Integration
     caps = body.get("capabilities", [])
     endpoints = body.get("common_endpoints", [])
+    if isinstance(caps, list):
+        caps_json = _json.dumps(caps)
+    elif caps:
+        caps_json = _json.dumps([c.strip() for c in caps.split(",")])
+    else:
+        caps_json = "[]"
+    if isinstance(endpoints, (list, dict)):
+        endpoints_json = _json.dumps(endpoints)
+    else:
+        endpoints_json = endpoints or "[]"
     integ = _Integration(
         service_name=service_name,
         category=body.get("category", "general"),
@@ -2590,8 +2600,8 @@ async def admin_create_integration(request: Request):
         auth_type=body.get("auth_type", "api_key"),
         auth_header=body.get("auth_header", "Authorization"),
         docs_url=body.get("docs_url", ""),
-        capabilities=_json.dumps(caps if isinstance(caps, list) else caps.split(",")) if caps else "[]",
-        common_endpoints=_json.dumps(endpoints) if isinstance(endpoints, (list, dict)) else endpoints or "[]",
+        capabilities=caps_json,
+        common_endpoints=endpoints_json,
     )
     created = storage.create_integration(integ)
     return created.to_dict()

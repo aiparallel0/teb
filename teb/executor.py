@@ -26,7 +26,7 @@ from urllib.parse import urlparse
 
 import httpx
 
-from teb import config
+from teb import config, security
 from teb.models import ApiCredential, ExecutionLog, Task
 
 logger = logging.getLogger(__name__)
@@ -326,6 +326,12 @@ def execute_step(
         )
 
     url = cred.base_url.rstrip("/") + step.path
+
+    if not security.is_safe_url(url):
+        return StepResult(
+            step=step, status_code=None, response_body="",
+            success=False, error=f"Blocked: URL '{cred.base_url}' targets a private or disallowed address",
+        )
 
     # Build headers: add auth, merge step-specific headers
     headers = dict(step.headers)

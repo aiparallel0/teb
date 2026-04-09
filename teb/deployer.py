@@ -18,7 +18,7 @@ from typing import Any, Dict, List, Optional
 
 import httpx
 
-from teb import config, storage
+from teb import config, security, storage
 from teb.models import ApiCredential, Task
 
 logger = logging.getLogger(__name__)
@@ -331,6 +331,9 @@ def check_health(deploy_url: str, timeout: int = 10) -> Dict[str, Any]:
         return {"status": "unknown", "error": "No deployment URL"}
 
     url = deploy_url if deploy_url.startswith("http") else f"https://{deploy_url}"
+
+    if not security.is_safe_url(url):
+        return {"status": "unknown", "error": "Deployment URL targets a private or disallowed address"}
 
     try:
         resp = httpx.get(url, timeout=timeout, follow_redirects=True)
