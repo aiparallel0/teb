@@ -1686,7 +1686,7 @@ button:focus-visible {
   animation: shimmer 4s linear infinite;
 }
 #screen-auth .hero h1 {
-  font-size: 3.5rem;
+  font-size: var(--text-4xl);
   margin-bottom: var(--space-xs);
 }
 #screen-auth #btn-auth-submit {

@@ -1954,11 +1954,10 @@ function stopPeriodicRefresh() {
 }
 
 // Start/stop periodic refresh based on autopilot status
-const _origAutopilotToggle = document.getElementById('autopilot-toggle');
-if (_origAutopilotToggle) {
-  const origHandler = _origAutopilotToggle.onchange;
-  _origAutopilotToggle.addEventListener('change', () => {
-    if (_origAutopilotToggle.checked) {
+const _autopilotToggleEl = document.getElementById('autopilot-toggle');
+if (_autopilotToggleEl) {
+  _autopilotToggleEl.addEventListener('change', () => {
+    if (_autopilotToggleEl.checked) {
       startPeriodicRefresh();
     } else {
       stopPeriodicRefresh();
@@ -1975,17 +1974,6 @@ document.addEventListener('visibilitychange', () => {
     loadDrip().catch(() => {});
   }
 });
-
-// ─── Drag to reorder tasks (visual hint only) ────────────────────────────────
-
-function addDragHint() {
-  const taskList = document.getElementById('task-list');
-  if (!taskList) return;
-  taskList.querySelectorAll('.task-card').forEach(card => {
-    card.setAttribute('draggable', 'false');
-    card.style.cursor = 'default';
-  });
-}
 
 // ─── Keyboard navigation for task list ────────────────────────────────────────
 
