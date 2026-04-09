@@ -180,6 +180,11 @@ async def _autonomous_execution_loop() -> None:
                     logger.error("Auto-execution failed for task %s: %s", task.id, e)
                     task.status = "failed"
                     storage.update_task(task)
+                    messaging.send_notification("task_done", {
+                        "task_id": task.id,
+                        "task_title": task.title,
+                        "error": str(e),
+                    })
 
             await asyncio.sleep(interval)
 

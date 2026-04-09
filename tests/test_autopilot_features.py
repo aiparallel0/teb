@@ -306,9 +306,8 @@ class TestSpendingBudgetAutopilot:
         # Execute — should NOT pause for approval
         r = client.post(f"/api/tasks/{t.id}/execute", headers=headers)
         data = r.json()
-        # Without AI, plan won't execute (no credentials), but it shouldn't
-        # return spending_request_id (which means it didn't pause for approval)
-        assert "spending_request_id" not in data or data.get("executed") is True
+        # Autopilot is enabled, so the spending_request_id should NOT be in the response
+        assert "spending_request_id" not in data
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

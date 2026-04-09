@@ -21,6 +21,11 @@ from teb.models import Task
 
 logger = logging.getLogger(__name__)
 
+# Minimum length for extracted text to be considered a credential (e.g. API key)
+_MIN_CREDENTIAL_LENGTH = 10
+# Maximum length to store for an extracted credential value
+_MAX_CREDENTIAL_LENGTH = 200
+
 
 # ─── Known service provisioning templates ────────────────────────────────────
 
@@ -310,8 +315,8 @@ def _execute_provisioning(plan: ProvisioningPlan, task: Task) -> Dict[str, Any]:
                     elements = page.query_selector_all(selector)
                     for el in elements:
                         text = el.text_content()
-                        if text and len(text.strip()) >= 10:
-                            extracted[f"extracted_{selector[:20]}"] = text.strip()[:200]
+                        if text and len(text.strip()) >= _MIN_CREDENTIAL_LENGTH:
+                            extracted[f"extracted_{selector[:20]}"] = text.strip()[:_MAX_CREDENTIAL_LENGTH]
                 except Exception:
                     pass
 
