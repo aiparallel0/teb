@@ -62,8 +62,22 @@ def init_db() -> None:
                 id            INTEGER PRIMARY KEY AUTOINCREMENT,
                 email         TEXT    NOT NULL UNIQUE,
                 password_hash TEXT    NOT NULL,
+                role          TEXT    NOT NULL DEFAULT 'user',
+                email_verified INTEGER NOT NULL DEFAULT 0,
+                failed_login_attempts INTEGER NOT NULL DEFAULT 0,
+                locked_until  TEXT    DEFAULT NULL,
                 created_at    TEXT    NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS refresh_tokens (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                token_hash  TEXT    NOT NULL UNIQUE,
+                expires_at  TEXT    NOT NULL,
+                revoked     INTEGER NOT NULL DEFAULT 0,
+                created_at  TEXT    NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_refresh_tokens_user ON refresh_tokens(user_id);
 
             CREATE TABLE IF NOT EXISTS goals (
                 id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -378,6 +392,35 @@ def _run_migrations(con: sqlite3.Connection) -> None:
         con.execute("ALTER TABLE messaging_configs ADD COLUMN user_id INTEGER REFERENCES users(id) ON DELETE CASCADE")
         con.execute("CREATE INDEX IF NOT EXISTS idx_messaging_configs_user ON messaging_configs(user_id)")
 
+    # users.role (RBAC)
+    if not _has_column("users", "role"):
+        con.execute("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'user'")
+
+    # users.email_verified
+    if not _has_column("users", "email_verified"):
+        con.execute("ALTER TABLE users ADD COLUMN email_verified INTEGER NOT NULL DEFAULT 0")
+
+    # users.failed_login_attempts
+    if not _has_column("users", "failed_login_attempts"):
+        con.execute("ALTER TABLE users ADD COLUMN failed_login_attempts INTEGER NOT NULL DEFAULT 0")
+
+    # users.locked_until
+    if not _has_column("users", "locked_until"):
+        con.execute("ALTER TABLE users ADD COLUMN locked_until TEXT DEFAULT NULL")
+
+    # refresh_tokens table
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS refresh_tokens (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            token_hash  TEXT    NOT NULL UNIQUE,
+            expires_at  TEXT    NOT NULL,
+            revoked     INTEGER NOT NULL DEFAULT 0,
+            created_at  TEXT    NOT NULL
+        )
+    """)
+    con.execute("CREATE INDEX IF NOT EXISTS idx_refresh_tokens_user ON refresh_tokens(user_id)")
+
 
 # ─── Credential Encryption ───────────────────────────────────────────────────
 
@@ -421,6 +464,14 @@ def _row_to_user(row: sqlite3.Row) -> User:
         id=row["id"],
         email=row["email"],
         password_hash=row["password_hash"],
+        role=row["role"] if "role" in row.keys() else "user",
+        email_verified=bool(row["email_verified"]) if "email_verified" in row.keys() else False,
+        failed_login_attempts=row["failed_login_attempts"] if "failed_login_attempts" in row.keys() else 0,
+        locked_until=(
+            datetime.fromisoformat(row["locked_until"])
+            if "locked_until" in row.keys() and row["locked_until"]
+            else None
+        ),
         created_at=datetime.fromisoformat(row["created_at"]),
     )
 
@@ -429,8 +480,8 @@ def create_user(user: User) -> User:
     now = datetime.now(timezone.utc).isoformat()
     with _conn() as con:
         cur = con.execute(
-            "INSERT INTO users (email, password_hash, created_at) VALUES (?, ?, ?)",
-            (user.email, user.password_hash, now),
+            "INSERT INTO users (email, password_hash, role, email_verified, created_at) VALUES (?, ?, ?, ?, ?)",
+            (user.email, user.password_hash, user.role, int(user.email_verified), now),
         )
         user.id = cur.lastrowid
         user.created_at = datetime.fromisoformat(now)
@@ -447,6 +498,92 @@ def get_user(user_id: int) -> Optional[User]:
     with _conn() as con:
         row = con.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
     return _row_to_user(row) if row else None
+
+
+def update_user(user: User) -> User:
+    """Update user fields (role, email_verified, login attempts, lock)."""
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        con.execute(
+            """UPDATE users SET role = ?, email_verified = ?, failed_login_attempts = ?,
+               locked_until = ? WHERE id = ?""",
+            (user.role, int(user.email_verified), user.failed_login_attempts,
+             user.locked_until.isoformat() if user.locked_until else None, user.id),
+        )
+    return user
+
+
+def record_failed_login(user_id: int) -> int:
+    """Increment failed login attempts. Returns new count."""
+    with _conn() as con:
+        con.execute(
+            "UPDATE users SET failed_login_attempts = failed_login_attempts + 1 WHERE id = ?",
+            (user_id,),
+        )
+        row = con.execute("SELECT failed_login_attempts FROM users WHERE id = ?", (user_id,)).fetchone()
+    return row["failed_login_attempts"] if row else 0
+
+
+def reset_failed_logins(user_id: int) -> None:
+    """Reset failed login attempts after successful login."""
+    with _conn() as con:
+        con.execute(
+            "UPDATE users SET failed_login_attempts = 0, locked_until = NULL WHERE id = ?",
+            (user_id,),
+        )
+
+
+def lock_user(user_id: int, until: datetime) -> None:
+    """Lock user account until a given time."""
+    with _conn() as con:
+        con.execute(
+            "UPDATE users SET locked_until = ? WHERE id = ?",
+            (until.isoformat(), user_id),
+        )
+
+
+# ─── Refresh Tokens ──────────────────────────────────────────────────────────
+
+def create_refresh_token(user_id: int, token_hash: str, expires_at: datetime) -> int:
+    """Store a refresh token. Returns the token row id."""
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        cur = con.execute(
+            """INSERT INTO refresh_tokens (user_id, token_hash, expires_at, revoked, created_at)
+               VALUES (?, ?, ?, 0, ?)""",
+            (user_id, token_hash, expires_at.isoformat(), now),
+        )
+    return cur.lastrowid  # type: ignore[return-value]
+
+
+def get_refresh_token(token_hash: str) -> Optional[dict]:
+    """Lookup a refresh token by hash."""
+    with _conn() as con:
+        row = con.execute(
+            "SELECT * FROM refresh_tokens WHERE token_hash = ? AND revoked = 0", (token_hash,)
+        ).fetchone()
+    if not row:
+        return None
+    return {
+        "id": row["id"],
+        "user_id": row["user_id"],
+        "token_hash": row["token_hash"],
+        "expires_at": row["expires_at"],
+        "revoked": bool(row["revoked"]),
+        "created_at": row["created_at"],
+    }
+
+
+def revoke_refresh_token(token_hash: str) -> None:
+    """Revoke a refresh token."""
+    with _conn() as con:
+        con.execute("UPDATE refresh_tokens SET revoked = 1 WHERE token_hash = ?", (token_hash,))
+
+
+def revoke_all_refresh_tokens(user_id: int) -> None:
+    """Revoke all refresh tokens for a user (logout everywhere)."""
+    with _conn() as con:
+        con.execute("UPDATE refresh_tokens SET revoked = 1 WHERE user_id = ?", (user_id,))
 
 
 # ─── Goals ────────────────────────────────────────────────────────────────────

@@ -603,10 +603,74 @@ def get_clarifying_questions(goal: Goal) -> List[ClarifyingQuestion]:
 
 
 def get_next_question(goal: Goal) -> Optional[ClarifyingQuestion]:
-    """Return the first unanswered clarifying question, or None if all answered."""
-    for q in get_clarifying_questions(goal):
+    """Return the first unanswered clarifying question, or None if all answered.
+
+    After the first 2 template questions are answered, generates dynamic
+    AI-powered follow-up questions based on the user's answers so far (5.1).
+    """
+    template_questions = get_clarifying_questions(goal)
+
+    # Count how many template questions have been answered
+    answered_count = sum(1 for q in template_questions if q.key in goal.answers)
+
+    # Return next unanswered template question if fewer than 2 answered
+    if answered_count < 2:
+        for q in template_questions:
+            if q.key not in goal.answers:
+                return q
+        return None
+
+    # Check if there are still unanswered template questions
+    for q in template_questions:
         if q.key not in goal.answers:
             return q
+
+    # 5.1: After all template questions answered, try generating a dynamic one
+    if config.has_ai() and len(goal.answers) >= 2:
+        dynamic = _generate_dynamic_question(goal)
+        if dynamic:
+            return dynamic
+
+    return None
+
+
+def _generate_dynamic_question(goal: Goal) -> Optional[ClarifyingQuestion]:
+    """Generate an AI-powered follow-up question based on the user's answers so far."""
+    try:
+        from teb.ai_client import ai_chat_json  # noqa: PLC0415
+
+        # Only generate if we haven't already asked a dynamic question
+        dynamic_key = f"dynamic_{len(goal.answers)}"
+        if dynamic_key in goal.answers:
+            return None
+
+        answers_text = "\n".join(f"- {k}: {v}" for k, v in goal.answers.items())
+
+        result = ai_chat_json(
+            system=(
+                "You are a goal-clarification assistant. Based on the user's goal and "
+                "their answers so far, generate ONE specific follow-up question that would help "
+                "create a better, more personalized action plan. The question should dig deeper "
+                "into something the user mentioned or clarify a gap in their answers. "
+                "Return JSON: {\"key\": \"unique_key\", \"text\": \"question text\", \"hint\": \"example answer\"}"
+            ),
+            user=(
+                f"Goal: {goal.title}\n"
+                f"Description: {goal.description}\n\n"
+                f"Answers so far:\n{answers_text}\n\n"
+                f"Generate one follow-up question."
+            ),
+            temperature=0.3,
+        )
+
+        if result.get("text"):
+            return ClarifyingQuestion(
+                key=result.get("key", dynamic_key),
+                text=str(result["text"]),
+                hint=str(result.get("hint", "")),
+            )
+    except Exception:
+        pass
     return None
 
 
@@ -677,17 +741,37 @@ class _UserProfile:
     raw_answers: Dict[str, str] = field(default_factory=dict)
 
 
+def _fuzzy_match(text: str, keywords: List[str], threshold: float = 0.7) -> bool:
+    """Check if text contains a fuzzy match to any keyword using difflib."""
+    import difflib
+    text_lower = text.lower()
+    words = text_lower.split()
+    for kw in keywords:
+        kw_lower = kw.lower()
+        # Direct substring match first (faster)
+        if kw_lower in text_lower:
+            return True
+        # Fuzzy match each word against the keyword
+        matches = difflib.get_close_matches(kw_lower, words, n=1, cutoff=threshold)
+        if matches:
+            return True
+    return False
+
+
 def _build_user_profile(answers: Dict[str, str]) -> _UserProfile:
-    """Parse clarifying answers into a structured user profile."""
+    """Parse clarifying answers into a structured user profile.
+
+    Uses fuzzy matching (5.3) to handle typos and varied phrasing.
+    """
     profile = _UserProfile(raw_answers=dict(answers))
 
     # ─── Skill level ───────────────────────────────────────────────────
     skill = answers.get("skill_level", "").lower()
-    if any(w in skill for w in ("beginner", "none", "zero", "no experience", "never", "starting")):
+    if _fuzzy_match(skill, ["beginner", "none", "zero", "no experience", "never", "starting"]):
         profile.skill_level = "beginner"
-    elif any(w in skill for w in ("intermediate", "some", "a bit", "familiar", "decent")):
+    elif _fuzzy_match(skill, ["intermediate", "some", "a bit", "familiar", "decent"]):
         profile.skill_level = "intermediate"
-    elif any(w in skill for w in ("advanced", "expert", "professional", "years", "senior")):
+    elif _fuzzy_match(skill, ["advanced", "expert", "professional", "years", "senior"]):
         profile.skill_level = "advanced"
 
     # ─── Time per day ──────────────────────────────────────────────────
@@ -698,24 +782,24 @@ def _build_user_profile(answers: Dict[str, str]) -> _UserProfile:
 
     # ─── Timeline ──────────────────────────────────────────────────────
     tl = answers.get("timeline", "").lower()
-    if any(w in tl for w in ("week", "days", "asap", "urgent", "quick", "immediately")):
+    if _fuzzy_match(tl, ["week", "days", "asap", "urgent", "quick", "immediately"]):
         profile.timeline = "short"
-    elif any(w in tl for w in ("month", "1-3", "a few months", "quarter")):
+    elif _fuzzy_match(tl, ["month", "1-3", "a few months", "quarter"]):
         profile.timeline = "medium"
-    elif any(w in tl for w in ("year", "no rush", "long", "6 month", "no hurry")):
+    elif _fuzzy_match(tl, ["year", "no rush", "long", "6 month", "no hurry"]):
         profile.timeline = "long"
 
     # ─── Technical skills ──────────────────────────────────────────────
     tech = answers.get("technical_skills", "").lower()
-    if any(w in tech for w in ("code", "python", "javascript", "design", "html", "program", "react",
-                                "developer", "engineer", "writing", "marketing")):
+    if _fuzzy_match(tech, ["code", "python", "javascript", "design", "html", "program", "react",
+                            "developer", "engineer", "writing", "marketing"]):
         profile.has_technical_skills = True
-    elif any(w in tech for w in ("none", "no", "zero", "nothing")):
+    elif _fuzzy_match(tech, ["none", "no", "zero", "nothing"]):
         profile.has_technical_skills = False
 
     # ─── Income urgency ────────────────────────────────────────────────
     urgency = answers.get("income_urgency", "").lower()
-    if any(w in urgency for w in ("this month", "30 day", "asap", "urgent", "need money now", "immediately")):
+    if _fuzzy_match(urgency, ["this month", "30 day", "asap", "urgent", "need money now", "immediately"]):
         profile.income_urgent = True
 
     return profile
@@ -886,10 +970,133 @@ def _parse_ai_tasks(
 
 
 def decompose(goal: Goal) -> List[Task]:
-    """Entry point: choose AI or template mode based on config."""
+    """Entry point: choose AI or template mode based on config.
+
+    Before generating tasks, consults:
+    - Success paths from similar goals (1.3) to reorder/modify tasks
+    - User behavior patterns (1.2) to skip tasks the user avoids
+    """
     if config.OPENAI_API_KEY:
-        return decompose_ai(goal)
-    return decompose_template(goal)
+        tasks = decompose_ai(goal)
+    else:
+        tasks = decompose_template(goal)
+
+    # 1.3: Apply success path insights to reorder/modify tasks
+    tasks = _apply_success_path_insights(goal, tasks)
+
+    # 1.2: Apply user behavior patterns to filter/adapt tasks
+    tasks = _apply_user_behavior(goal, tasks)
+
+    return tasks
+
+
+def _apply_success_path_insights(goal: Goal, tasks: List[Task]) -> List[Task]:
+    """Apply insights from success paths of similar completed goals.
+
+    Includes:
+    - 1.3: Annotate commonly-skipped tasks
+    - 2.3: Apply time scaling from past completions
+    - 2.4: Surface commonly-added tasks as suggestions in descriptions
+    """
+    try:
+        from teb import storage as _storage  # noqa: PLC0415
+        template_name = _detect_template(goal)
+        paths = _storage.list_success_paths(goal_type=template_name)
+        if not paths or len(paths) < 2:
+            return tasks
+
+        insights = apply_success_paths(goal, paths)
+        if not insights:
+            return tasks
+
+        # Collect commonly-skipped task titles from insights
+        commonly_skipped: Set[str] = set()
+        commonly_added: List[str] = []
+        avg_time_factor = 1.0
+
+        for insight in insights:
+            if insight.get("type") == "commonly_skipped":
+                for item in insight.get("items", []):
+                    if isinstance(item, str):
+                        commonly_skipped.add(item.lower())
+            # 2.4: Collect commonly-added tasks
+            if insight.get("type") == "commonly_added":
+                for item in insight.get("items", []):
+                    if isinstance(item, str):
+                        commonly_added.append(item)
+            # 2.3: Collect time scaling data
+            if insight.get("type") == "average_tasks":
+                avg_count = insight.get("value", 0)
+                template_count = len(tasks)
+                if avg_count > 0 and template_count > 0:
+                    avg_time_factor = avg_count / template_count
+
+        # Mark commonly-skipped tasks with a note rather than removing them
+        for t in tasks:
+            if t.title.lower() in commonly_skipped:
+                t.description = (
+                    t.description + " [Note: Many users skip this step. "
+                    "Consider whether it applies to your situation.]"
+                )
+
+        # 2.3: Apply time scaling from past paths if significantly different.
+        # Bounds [0.6, 1.5] ensure we don't over-compress or over-inflate estimates;
+        # deviations outside this range likely indicate template mismatch, not real scaling.
+        if 0.6 <= avg_time_factor <= 1.5 and avg_time_factor != 1.0:
+            for t in tasks:
+                t.estimated_minutes = max(5, round(t.estimated_minutes * avg_time_factor))
+
+        # 2.4: Add note about commonly-added tasks to the last task
+        if commonly_added and tasks:
+            added_note = " [Tip from successful users: Consider also adding: " + ", ".join(commonly_added[:3]) + "]"
+            tasks[-1].description = tasks[-1].description + added_note
+
+        return tasks
+    except Exception:
+        return tasks
+
+
+def _apply_user_behavior(goal: Goal, tasks: List[Task]) -> List[Task]:
+    """Apply user behavior patterns to adapt tasks for the user."""
+    if not goal.user_id:
+        return tasks
+    try:
+        from teb import storage as _storage  # noqa: PLC0415
+        behaviors = _storage.list_user_behaviors(goal.user_id)
+        if not behaviors:
+            return tasks
+
+        avoids: Set[str] = set()
+        is_chronic_staller = False
+        for b in behaviors:
+            if b["behavior_type"] == "avoids":
+                avoids.add(b["pattern_key"].lower())
+            if b["behavior_type"] == "stalled" and b.get("occurrences", 0) >= 3:
+                is_chronic_staller = True
+
+        # For users who avoid certain task types, add alternative guidance
+        for t in tasks:
+            title_lower = t.title.lower()
+            for avoid_word in avoids:
+                if avoid_word in title_lower:
+                    t.description = (
+                        t.description + f" [Tip: You've struggled with similar tasks before. "
+                        f"Consider using a no-code alternative or asking for help.]"
+                    )
+                    break
+
+        # For chronic stallers, reduce task scope
+        if is_chronic_staller:
+            for t in tasks:
+                t.estimated_minutes = max(5, int(t.estimated_minutes * 0.7))
+                if not t.description.endswith("]"):
+                    t.description = (
+                        t.description + " [Simplified: Focus on the minimum viable version.]"
+                    )
+
+        return tasks
+    except Exception:
+        return tasks
 
 
 # ─── Task-level decomposition ─────────────────────────────────────────────────

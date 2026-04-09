@@ -1,23 +1,76 @@
 from __future__ import annotations
 
+import collections
 import json
+import logging
+import logging.config
 import os
+import time
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
 from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from teb import agents, auth, browser, decomposer, executor, integrations, messaging, storage
+from teb import agents, auth, browser, config, decomposer, executor, integrations, messaging, storage
 from teb.models import (
     ApiCredential, BrowserAction, CheckIn, ExecutionLog,
     Goal, MessagingConfig, NudgeEvent, OutcomeMetric,
     SpendingBudget, SpendingRequest, Task,
 )
+
+# ─── Logging ──────────────────────────────────────────────────────────────────
+logging.config.dictConfig({
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": {
+        "standard": {
+            "format": "%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        },
+    },
+    "handlers": {
+        "console": {
+            "class": "logging.StreamHandler",
+            "formatter": "standard",
+        },
+    },
+    "root": {
+        "level": config.LOG_LEVEL,
+        "handlers": ["console"],
+    },
+})
+logger = logging.getLogger(__name__)
+
+
+# ─── Rate limiting (in-memory, per IP) ────────────────────────────────────────
+
+_RATE_WINDOW = 60   # seconds
+_RATE_LIMIT = 20    # max auth requests per window per IP
+# bucket: IP -> deque of timestamps
+_rate_buckets: dict[str, collections.deque] = {}
+
+
+def _check_rate_limit(request: Request) -> None:
+    """Raise 429 if caller exceeds the per-IP rate limit."""
+    ip = request.client.host if request.client else "unknown"
+    now = time.monotonic()
+    bucket = _rate_buckets.setdefault(ip, collections.deque())
+    # Purge timestamps outside the window
+    while bucket and bucket[0] <= now - _RATE_WINDOW:
+        bucket.popleft()
+    if len(bucket) >= _RATE_LIMIT:
+        raise HTTPException(status_code=429, detail="Too many requests")
+    bucket.append(now)
+
+
+def reset_rate_limits() -> None:
+    """Clear all rate-limit buckets. Called on startup and available for tests."""
+    _rate_buckets.clear()
 
 
 # ─── Startup / lifespan ───────────────────────────────────────────────────────
@@ -28,10 +81,27 @@ async def lifespan(app: FastAPI):
     integrations.seed_integrations()
     # Reset stale daily spending counters from previous day(s)
     storage.reset_all_daily_spending()
+    # Clear rate-limit buckets on each fresh start (also ensures clean test runs)
+    _rate_buckets.clear()
+    # Warn if JWT secret is the insecure default
+    if config.JWT_SECRET == "change-me-in-production-not-safe":
+        logger.warning(
+            "TEB_JWT_SECRET is set to the default insecure value. "
+            "Set a strong secret via environment variable before deploying."
+        )
     yield
 
 
 app = FastAPI(title="teb — Task Execution Bridge", lifespan=lifespan)
+
+# ─── CORS ─────────────────────────────────────────────────────────────────────
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=config.CORS_ORIGINS,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # Static files
 _STATIC_DIR = Path(__file__).parent / "static"
@@ -157,6 +227,14 @@ class AuthLogin(BaseModel):
     password: str
 
 
+class AuthRefresh(BaseModel):
+    refresh_token: str
+
+
+class AuthLogout(BaseModel):
+    refresh_token: Optional[str] = None
+
+
 class TelegramUpdate(BaseModel):
     """Minimal Telegram webhook update structure."""
     message: Optional[dict] = None
@@ -185,6 +263,15 @@ def _require_user(request: Request) -> int:
     return uid
 
 
+def _require_admin(request: Request) -> int:
+    """Extract user_id and verify admin role, or raise 401/403."""
+    uid = _require_user(request)
+    user = storage.get_user(uid)
+    if not user or user.role != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+    return uid
+
+
 def _get_goal_for_user(goal_id: int, user_id: int) -> Goal:
     """Fetch a goal and verify the requesting user owns it (or it has no owner)."""
     goal = storage.get_goal(goal_id)
@@ -207,11 +294,32 @@ def _get_task_for_user(task_id: int, user_id: int) -> Task:
     return task
 
 
+# ─── Health check ─────────────────────────────────────────────────────────────
+
+@app.get("/health")
+async def health_check():
+    """Health check — returns DB status for monitoring."""
+    try:
+        # Lightweight DB connectivity check via a trivial query
+        with storage._conn() as con:
+            con.execute("SELECT 1")
+        db_ok = True
+    except Exception:
+        db_ok = False
+    status = "healthy" if db_ok else "degraded"
+    code = 200 if db_ok else 503
+    return JSONResponse(
+        status_code=code,
+        content={"status": status, "database": "ok" if db_ok else "error"},
+    )
+
+
 # ─── Auth ─────────────────────────────────────────────────────────────────────
 
 @app.post("/api/auth/register", status_code=201)
-async def register(body: AuthRegister):
+async def register(body: AuthRegister, request: Request):
     """Register a new user and return a JWT token."""
+    _check_rate_limit(request)
     try:
         result = auth.register_user(body.email, body.password)
     except ValueError as exc:
@@ -220,8 +328,9 @@ async def register(body: AuthRegister):
 
 
 @app.post("/api/auth/login")
-async def login(body: AuthLogin):
+async def login(body: AuthLogin, request: Request):
     """Log in and return a JWT token."""
+    _check_rate_limit(request)
     try:
         result = auth.login_user(body.email, body.password)
     except ValueError as exc:
@@ -237,6 +346,24 @@ async def auth_me(request: Request):
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
     return user.to_dict()
+
+
+@app.post("/api/auth/refresh")
+async def auth_refresh(body: AuthRefresh):
+    """Exchange a refresh token for a new access token + refresh token."""
+    try:
+        result = auth.refresh_access_token(body.refresh_token)
+    except ValueError as exc:
+        raise HTTPException(status_code=401, detail=str(exc))
+    return result
+
+
+@app.post("/api/auth/logout")
+async def auth_logout(request: Request, body: AuthLogout):
+    """Revoke refresh tokens. Revokes all tokens if no specific token provided."""
+    uid = _require_user(request)
+    auth.logout_user(uid, body.refresh_token)
+    return {"message": "Logged out"}
 
 
 # ─── Frontend ─────────────────────────────────────────────────────────────────
@@ -379,7 +506,16 @@ async def get_focus(goal_id: int, request: Request):
     focus = decomposer.get_focus_task(tasks)
     if focus is None:
         return {"focus_task": None, "message": "All tasks completed — well done!"}
-    return {"focus_task": focus.to_dict()}
+
+    result: dict = {"focus_task": focus.to_dict()}
+
+    # 2.1: Surface stall detection in focus endpoint
+    stall_info = decomposer._detect_task_stall(focus)
+    if stall_info:
+        result["stall_detected"] = True
+        result["stall_message"] = stall_info["message"]
+        result["sub_task_suggestion"] = stall_info.get("sub_task")
+    return result
 
 
 # ─── Progress summary ─────────────────────────────────────────────────────────
@@ -392,6 +528,16 @@ async def get_progress(goal_id: int, request: Request):
     summary = decomposer.get_progress_summary(tasks)
     summary["goal_id"] = goal_id
     summary["goal_status"] = goal.status
+
+    # 2.1: Surface stall detection in progress endpoint
+    focus = decomposer.get_focus_task(tasks)
+    if focus:
+        stall_info = decomposer._detect_task_stall(focus)
+        if stall_info:
+            summary["stall_detected"] = True
+            summary["stall_message"] = stall_info["message"]
+            summary["sub_task_suggestion"] = stall_info.get("sub_task")
+
     return summary
 
 
@@ -876,6 +1022,27 @@ async def act_on_suggestion(suggestion_id: int, body: SuggestionAction, request:
 async def list_agent_types():
     """List all available agent types and their capabilities."""
     return [a.to_dict() for a in agents.list_agents()]
+
+
+@app.post("/api/agents/register", status_code=201)
+async def register_agent_endpoint(request: Request):
+    """Register a new agent type dynamically (admin only)."""
+    _require_admin(request)
+    body = await request.json()
+    agent_type = body.get("agent_type", "")
+    if not agent_type or not body.get("name"):
+        raise HTTPException(status_code=422, detail="agent_type and name are required")
+
+    spec = agents.AgentSpec(
+        agent_type=agent_type,
+        name=body.get("name", ""),
+        description=body.get("description", ""),
+        expertise=body.get("expertise", []),
+        system_prompt=body.get("system_prompt", "You are a helpful agent."),
+        can_delegate_to=body.get("can_delegate_to", []),
+    )
+    agents.register_agent(spec)
+    return spec.to_dict()
 
 
 @app.post("/api/goals/{goal_id}/orchestrate")
@@ -1557,8 +1724,11 @@ async def telegram_webhook(body: TelegramUpdate, request: Request):
             decomposer.decompose(goal)
             goal.status = "decomposed"
             storage.update_goal(goal)
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.error("Telegram goal decomposition failed for goal %s: %s", goal.id, exc)
+            goal.status = "drafting"
+            storage.update_goal(goal)
+            _reply(f"⚠️ Goal created but auto-planning failed. Use /next to try again or answer questions to refine.")
         # Start question flow: get first drip question
         q = decomposer.get_next_drip_question(goal)
         if q:

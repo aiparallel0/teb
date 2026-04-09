@@ -275,8 +275,8 @@ def discover_for_goal(goal_title: str, goal_description: str = "",
                     "score": overlap + ds.get("relevance_score", 0),
                     "source": "previously_discovered",
                 })
-    except Exception:
-        pass  # DB might not have the table yet
+    except Exception as exc:
+        logger.debug("Failed to load discovered services from DB: %s", exc)
 
     # Deduplicate by service_name, keeping highest score
     seen: Dict[str, Dict[str, Any]] = {}
@@ -300,7 +300,8 @@ def discover_for_user(user_id: int) -> List[Dict[str, Any]]:
     """
     try:
         goals = storage.list_goals(user_id=user_id)
-    except Exception:
+    except Exception as exc:
+        logger.debug("Failed to list goals for user %s: %s", user_id, exc)
         return []
 
     # Get user profile for skill level
@@ -310,16 +311,16 @@ def discover_for_user(user_id: int) -> List[Dict[str, Any]]:
         user_profile = next((p for p in profiles if getattr(p, "user_id", None) == user_id), None)
         if user_profile:
             skill_level = user_profile.experience_level or "beginner"
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("Failed to load user profile for %s: %s", user_id, exc)
 
     # Get behavior patterns
     avoids: set[str] = set()
     try:
         behaviors = storage.list_user_behaviors(user_id, behavior_type="avoids")
         avoids = {b["pattern_key"] for b in behaviors}
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.debug("Failed to load user behaviors for %s: %s", user_id, exc)
 
     all_recommendations: List[Dict[str, Any]] = []
     for goal in goals[:5]:  # Limit to 5 most recent goals

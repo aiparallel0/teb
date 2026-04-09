@@ -17,7 +17,9 @@ approach that returns a "manual execution required" result.
 from __future__ import annotations
 
 import json
+import logging
 import re
+import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 from urllib.parse import urlparse
@@ -26,6 +28,8 @@ import httpx
 
 from teb import config
 from teb.models import ApiCredential, ExecutionLog, Task
+
+logger = logging.getLogger(__name__)
 
 
 # ─── Execution plan ──────────────────────────────────────────────────────────
@@ -99,6 +103,8 @@ def generate_plan(
     Ask the AI to produce an execution plan for a task given available APIs.
 
     Falls back to a "cannot execute" plan when no API key is configured.
+
+    1.4: Also consults discovered services to enrich the plan context.
     """
     if not config.OPENAI_API_KEY:
         return _generate_plan_template(task, credentials)
@@ -153,6 +159,7 @@ def _generate_plan_ai(
 
         # Include budget context if available so the AI can factor in cost constraints
         budget_context = ""
+        discovery_context = ""
         if task.goal_id:
             try:
                 from teb import storage as _storage  # noqa: PLC0415
@@ -163,6 +170,19 @@ def _generate_plan_ai(
                         for b in budgets
                     ]
                     budget_context = "\nSpending budgets for this goal:\n" + "\n".join(lines)
+            except Exception:
+                pass
+
+            # 1.4: Consult discovered services for additional API context
+            try:
+                from teb.discovery import discover_for_goal  # noqa: PLC0415
+                discovered = discover_for_goal(task.title, task.description)
+                if discovered:
+                    disc_lines = [
+                        f"  - {d['service_name']}: {d.get('description', '')} ({d.get('url', '')})"
+                        for d in discovered[:5]
+                    ]
+                    discovery_context = "\nRelevant services discovered:\n" + "\n".join(disc_lines)
             except Exception:
                 pass
 
@@ -198,7 +218,8 @@ def _generate_plan_ai(
             f"Task: {task.title}\n"
             f"Description: {task.description}\n\n"
             f"Available APIs:\n{cred_descriptions}"
-            f"{budget_context}\n\n"
+            f"{budget_context}"
+            f"{discovery_context}\n\n"
             f"Can this task be executed via the available APIs? If so, produce the plan."
         )
 
@@ -279,11 +300,24 @@ def _mask_secret(value: str) -> str:
     return value[:4] + "****" + value[-4:]
 
 
+def _is_retryable(result: StepResult) -> bool:
+    """Determine if a failed step result is transient and worth retrying."""
+    if result.success:
+        return False
+    # Timeouts and connection errors are retryable
+    if result.error and ("timed out" in result.error.lower() or "request failed" in result.error.lower()):
+        return True
+    # 5xx server errors and 429 rate limits are retryable
+    if result.status_code is not None and (result.status_code >= 500 or result.status_code == 429):
+        return True
+    return False
+
+
 def execute_step(
     step: ExecutionStep,
     credentials_by_id: Dict[int, ApiCredential],
 ) -> StepResult:
-    """Execute a single API call and return the result."""
+    """Execute a single API call with retry logic for transient failures."""
     cred = credentials_by_id.get(step.credential_id)
     if not cred:
         return StepResult(
@@ -298,32 +332,48 @@ def execute_step(
     if cred.auth_value:
         headers[cred.auth_header] = cred.auth_value
 
-    try:
-        with httpx.Client(timeout=config.EXECUTOR_TIMEOUT) as client:
-            response = client.request(
-                method=step.method,
-                url=url,
-                headers=headers,
-                json=step.body if step.body else None,
+    max_retries = config.EXECUTOR_MAX_RETRIES
+    last_result: Optional[StepResult] = None
+
+    for attempt in range(1 + max_retries):
+        try:
+            with httpx.Client(timeout=config.EXECUTOR_TIMEOUT) as client:
+                response = client.request(
+                    method=step.method,
+                    url=url,
+                    headers=headers,
+                    json=step.body if step.body else None,
+                )
+            body_text = response.text[:_MAX_RESPONSE_LOG_SIZE]  # cap log size
+            success = 200 <= response.status_code < 400
+            last_result = StepResult(
+                step=step,
+                status_code=response.status_code,
+                response_body=body_text,
+                success=success,
             )
-        body_text = response.text[:_MAX_RESPONSE_LOG_SIZE]  # cap log size
-        success = 200 <= response.status_code < 400
-        return StepResult(
-            step=step,
-            status_code=response.status_code,
-            response_body=body_text,
-            success=success,
-        )
-    except httpx.TimeoutException:
-        return StepResult(
-            step=step, status_code=None, response_body="",
-            success=False, error="Request timed out",
-        )
-    except httpx.RequestError as exc:
-        return StepResult(
-            step=step, status_code=None, response_body="",
-            success=False, error=f"Request failed: {exc}",
-        )
+        except httpx.TimeoutException:
+            last_result = StepResult(
+                step=step, status_code=None, response_body="",
+                success=False, error="Request timed out",
+            )
+        except httpx.RequestError as exc:
+            last_result = StepResult(
+                step=step, status_code=None, response_body="",
+                success=False, error=f"Request failed: {exc}",
+            )
+
+        if last_result.success or not _is_retryable(last_result):
+            return last_result
+
+        # Exponential backoff before retry
+        if attempt < max_retries:
+            delay = 2 ** attempt  # 1s, 2s, 4s ...
+            logger.info("Retrying step %s (attempt %d/%d) after %ds",
+                        step.description, attempt + 1, max_retries, delay)
+            time.sleep(delay)
+
+    return last_result  # type: ignore[return-value]
 
 
 # ─── Full execution ─────────────────────────────────────────────────────────
@@ -332,7 +382,7 @@ def execute_plan(
     plan: ExecutionPlan,
     credentials_by_id: Dict[int, ApiCredential],
 ) -> List[StepResult]:
-    """Execute all steps in a plan sequentially. Stop on first failure."""
+    """Execute all steps in a plan sequentially. Stop on first non-retryable failure."""
     results: List[StepResult] = []
     for step in plan.steps:
         result = execute_step(step, credentials_by_id)

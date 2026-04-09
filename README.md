@@ -35,7 +35,16 @@ Then tracks whether you actually earned any money.
 
 ```bash
 pip install -r requirements.txt
+cp .env.example .env          # edit .env — set TEB_JWT_SECRET at minimum
 uvicorn teb.main:app --reload
+# Open http://localhost:8000
+```
+
+### Docker (one-command deployment)
+
+```bash
+cp .env.example .env  # edit TEB_JWT_SECRET and any API keys
+docker compose up --build
 # Open http://localhost:8000
 ```
 
@@ -47,6 +56,7 @@ uvicorn teb.main:app --reload
 git clone <repo>
 cd teb
 pip install -r requirements.txt
+cp .env.example .env  # review and edit
 ```
 
 ---
@@ -690,13 +700,16 @@ pytest tests/ -v
 6. ✅ Proactive suggestion engine (discovers actions user didn't think of)
 7. ✅ Knowledge base foundation (success path recording and reuse)
 8. ✅ Task execution engine (API orchestration)
-9. 🔲 Financial autonomy layer (sandbox → approval → auto-spend)
-10. 🔲 Multi-agent architecture (Researcher → Planner → Executor → Coach → Finance)
-11. 🔲 Real-time micro-nudges (push notifications, Telegram, SMS)
-12. 🔲 Success path learning (auto-record + recommend proven paths)
-13. 🔲 Agent-to-agent communication protocol
-14. 🔲 Persistent project cache across sessions
-15. 🔲 Financial API integrations (Privacy.com, Stripe, Plaid)
+9. ✅ Financial autonomy layer (budget management, per-transaction approval, daily limits)
+10. ✅ Multi-agent architecture (coordinator, marketing, web_dev, outreach, research, finance with delegation)
+11. ✅ Real-time notifications (Telegram bot + webhooks)
+12. ✅ Success path learning (auto-record + recommend proven paths via insights)
+13. ✅ Agent-to-agent communication protocol (message passing + shared context)
+14. ✅ Persistent user cache across sessions (user_profiles + user_behavior)
+15. ✅ Financial API integrations (Stripe + Mercury banking)
+16. 🔲 Additional payment providers (Privacy.com virtual cards, Plaid banking)
+17. 🔲 SMS notifications
+18. 🔲 Payment sandbox/simulation mode
 
 ---
 

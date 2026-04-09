@@ -80,6 +80,19 @@ def list_agents() -> List[AgentSpec]:
     return list(_AGENTS.values())
 
 
+def register_agent(spec: AgentSpec) -> None:
+    """Register a new agent at runtime, allowing dynamic extension of the agent catalog."""
+    _AGENTS[spec.agent_type] = spec
+
+
+def unregister_agent(agent_type: str) -> bool:
+    """Remove a dynamically registered agent. Returns True if removed."""
+    if agent_type in _AGENTS:
+        del _AGENTS[agent_type]
+        return True
+    return False
+
+
 # ─── Built-in agents ─────────────────────────────────────────────────────────
 
 _register(AgentSpec(
@@ -289,13 +302,32 @@ def _run_agent_ai(
     instruction: str,
     context: str,
 ) -> AgentOutput:
-    """Run agent using AI."""
+    """Run agent using AI, enriched with persistent agent memories."""
     try:
         from teb.ai_client import ai_chat_json  # noqa: PLC0415
+        from teb.decomposer import _detect_template  # noqa: PLC0415
+
+        # Determine goal type for memory lookup
+        goal_type = _detect_template(goal)
+
+        # 1.1: Load persistent agent memories (lessons learned from past runs)
+        memory_context = ""
+        memories = storage.list_agent_memories(spec.agent_type, goal_type)
+        if memories:
+            memory_lines = [
+                f"- {m['memory_key']}: {m['memory_value']} (confidence: {m['confidence']:.1f}, used {m['times_used']}x)"
+                for m in memories[:10]
+            ]
+            memory_context = "\nLessons learned from past runs:\n" + "\n".join(memory_lines) + "\n"
+            # Increment usage counters for referenced memories
+            for m in memories[:10]:
+                storage.increment_agent_memory_usage(m["id"])
 
         user_prompt = f"Goal: {goal.title}\nDescription: {goal.description}\n"
         if goal.answers:
             user_prompt += f"User context: {json.dumps(goal.answers)}\n"
+        if memory_context:
+            user_prompt += memory_context
         if instruction:
             user_prompt += f"\nSpecific instruction: {instruction}\n"
         if context:
@@ -352,6 +384,16 @@ def _run_agent_ai(
                 })
 
         summary = str(data.get("summary", data.get("strategy_summary", "")))
+
+        # 1.1: Persist key decision as agent memory for future runs
+        if summary and goal_type:
+            storage.create_agent_memory(
+                agent_type=spec.agent_type,
+                goal_type=goal_type,
+                memory_key=f"strategy_{goal.title[:50]}",
+                memory_value=summary[:500],
+                confidence=0.8,
+            )
 
         return AgentOutput(
             tasks=valid_tasks,

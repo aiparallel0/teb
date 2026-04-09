@@ -4,10 +4,18 @@ Authentication module.
 Provides JWT-based authentication for the teb API.
 Users register with email/password, log in to get a JWT token,
 and include it as a Bearer token or cookie on subsequent requests.
+
+Security features:
+- Short-lived access tokens (configurable via JWT_EXPIRE_HOURS)
+- Refresh tokens for session continuity
+- Login attempt tracking and account locking
+- Role-based access control (user / admin)
 """
 
 from __future__ import annotations
 
+import hashlib
+import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -16,6 +24,10 @@ import jwt
 
 from teb import config, storage
 from teb.models import User
+
+_MAX_FAILED_LOGINS = 10
+_LOCK_DURATION_MINUTES = 30
+_REFRESH_TOKEN_DAYS = 30
 
 
 def hash_password(password: str) -> str:
@@ -29,7 +41,7 @@ def verify_password(password: str, hashed: str) -> bool:
 
 
 def create_token(user_id: int) -> str:
-    """Create a JWT token for a user."""
+    """Create a JWT access token for a user."""
     payload = {
         "sub": str(user_id),
         "exp": datetime.now(timezone.utc) + timedelta(hours=config.JWT_EXPIRE_HOURS),
@@ -47,8 +59,24 @@ def decode_token(token: str) -> Optional[int]:
         return None
 
 
+def _create_refresh_token(user_id: int) -> str:
+    """Create and store a refresh token. Returns the raw token."""
+    raw_token = secrets.token_urlsafe(48)
+    token_hash = hashlib.sha256(raw_token.encode()).hexdigest()
+    expires = datetime.now(timezone.utc) + timedelta(days=_REFRESH_TOKEN_DAYS)
+    storage.create_refresh_token(user_id, token_hash, expires)
+    return raw_token
+
+
+def _check_account_locked(user: User) -> None:
+    """Raise ValueError if account is locked."""
+    if user.locked_until and user.locked_until > datetime.now(timezone.utc):
+        remaining = int((user.locked_until - datetime.now(timezone.utc)).total_seconds() / 60)
+        raise ValueError(f"Account locked. Try again in {remaining} minutes.")
+
+
 def register_user(email: str, password: str) -> dict:
-    """Register a new user. Returns {"user": ..., "token": ...} or raises ValueError."""
+    """Register a new user. Returns {"user": ..., "token": ..., "refresh_token": ...} or raises ValueError."""
     email = email.strip().lower()
     if not email or "@" not in email:
         raise ValueError("Invalid email address")
@@ -66,15 +94,68 @@ def register_user(email: str, password: str) -> dict:
     storage.get_or_create_profile(user_id=user.id)
 
     token = create_token(user.id)  # type: ignore[arg-type]
-    return {"user": user.to_dict(), "token": token}
+    refresh_token = _create_refresh_token(user.id)  # type: ignore[arg-type]
+    return {"user": user.to_dict(), "token": token, "refresh_token": refresh_token}
 
 
 def login_user(email: str, password: str) -> dict:
-    """Authenticate a user. Returns {"user": ..., "token": ...} or raises ValueError."""
+    """Authenticate a user. Returns {"user": ..., "token": ..., "refresh_token": ...} or raises ValueError."""
     email = email.strip().lower()
     user = storage.get_user_by_email(email)
-    if not user or not verify_password(password, user.password_hash):
+    if not user:
         raise ValueError("Invalid email or password")
 
+    # Check if account is locked
+    _check_account_locked(user)
+
+    if not verify_password(password, user.password_hash):
+        # Track failed login attempts
+        attempts = storage.record_failed_login(user.id)  # type: ignore[arg-type]
+        if attempts >= _MAX_FAILED_LOGINS:
+            lock_until = datetime.now(timezone.utc) + timedelta(minutes=_LOCK_DURATION_MINUTES)
+            storage.lock_user(user.id, lock_until)  # type: ignore[arg-type]
+            raise ValueError(f"Too many failed attempts. Account locked for {_LOCK_DURATION_MINUTES} minutes.")
+        raise ValueError("Invalid email or password")
+
+    # Successful login — reset failed attempts
+    storage.reset_failed_logins(user.id)  # type: ignore[arg-type]
+
     token = create_token(user.id)  # type: ignore[arg-type]
-    return {"user": user.to_dict(), "token": token}
+    refresh_token = _create_refresh_token(user.id)  # type: ignore[arg-type]
+    return {"user": user.to_dict(), "token": token, "refresh_token": refresh_token}
+
+
+def refresh_access_token(raw_refresh_token: str) -> dict:
+    """Exchange a valid refresh token for a new access token.
+
+    Returns {"token": ..., "refresh_token": ...} or raises ValueError.
+    """
+    token_hash = hashlib.sha256(raw_refresh_token.encode()).hexdigest()
+    stored = storage.get_refresh_token(token_hash)
+    if not stored:
+        raise ValueError("Invalid refresh token")
+
+    # Check expiry
+    expires_at = datetime.fromisoformat(stored["expires_at"])
+    if expires_at < datetime.now(timezone.utc):
+        storage.revoke_refresh_token(token_hash)
+        raise ValueError("Refresh token expired")
+
+    user_id = stored["user_id"]
+
+    # Revoke the old refresh token (rotation)
+    storage.revoke_refresh_token(token_hash)
+
+    # Issue new tokens
+    new_access = create_token(user_id)
+    new_refresh = _create_refresh_token(user_id)
+    return {"token": new_access, "refresh_token": new_refresh, "user_id": user_id}
+
+
+def logout_user(user_id: int, raw_refresh_token: Optional[str] = None) -> None:
+    """Revoke a specific refresh token or all tokens for the user."""
+    if raw_refresh_token:
+        token_hash = hashlib.sha256(raw_refresh_token.encode()).hexdigest()
+        storage.revoke_refresh_token(token_hash)
+    else:
+        storage.revoke_all_refresh_tokens(user_id)

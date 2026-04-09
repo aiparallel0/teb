@@ -613,6 +613,18 @@ async function loadProgressDetail() {
       parts.push(`~${timeStr} left`);
     }
     el.textContent = parts.join(' · ');
+
+    // 7.1: Surface stall detection in progress view
+    const stallBanner = document.getElementById('stall-banner');
+    if (stallBanner && p.stall_detected) {
+      stallBanner.textContent = `⚠️ ${p.stall_message || 'A task appears stalled.'}`;
+      if (p.sub_task_suggestion) {
+        stallBanner.textContent += ` Try: "${p.sub_task_suggestion.title}"`;
+      }
+      stallBanner.style.display = 'block';
+    } else if (stallBanner) {
+      stallBanner.style.display = 'none';
+    }
   } catch (e) {
     el.textContent = '';
   }
