@@ -1,3 +1,21 @@
+# teb — systemd unit file
+#
+# Installation:
+#   sudo cp deploy/systemd/teb.service /etc/systemd/system/teb.service
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now teb
+#
+# Prerequisites:
+#   - App deployed to /opt/teb (git clone or docker-less deploy)
+#   - Python venv at /opt/teb/venv with dependencies installed
+#   - Environment file at /opt/teb/.env (copy from .env.example and fill in secrets)
+#   - Non-root user 'appuser' exists:
+#       sudo useradd -r -s /usr/sbin/nologin appuser
+#       sudo chown -R appuser:appuser /opt/teb
+#
+# To run behind nginx at /teb, set TEB_BASE_PATH=/teb in /opt/teb/.env
+# and copy nginx/teb.conf as a snippet into the portearchive.com server block.
+
 [Unit]
 Description=teb — Task Execution Bridge
 After=network.target
