@@ -565,6 +565,56 @@ def update_user(user: User) -> User:
     return user
 
 
+def list_all_users() -> List[User]:
+    """Admin: return all users ordered by created_at DESC."""
+    with _conn() as con:
+        rows = con.execute("SELECT * FROM users ORDER BY created_at DESC").fetchall()
+    return [_row_to_user(r) for r in rows]
+
+
+def delete_user(user_id: int) -> None:
+    """Admin: delete user and all their data (goals, tasks, credentials, etc.)."""
+    with _conn() as con:
+        # Delete unscoped credentials that belong to this user
+        con.execute("DELETE FROM api_credentials WHERE user_id = ?", (user_id,))
+        con.execute("DELETE FROM messaging_configs WHERE user_id = ?", (user_id,))
+        # goals → tasks/check_ins/etc. cascade automatically (FK ON DELETE CASCADE)
+        con.execute("DELETE FROM goals WHERE user_id = ?", (user_id,))
+        # user_profiles, user_behavior, refresh_tokens, payment_accounts cascade
+        con.execute("DELETE FROM users WHERE id = ?", (user_id,))
+
+
+def get_system_stats() -> dict:
+    """Admin: return aggregate platform statistics."""
+    with _conn() as con:
+        total_users = con.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+        total_goals = con.execute("SELECT COUNT(*) FROM goals").fetchone()[0]
+        active_goals = con.execute(
+            "SELECT COUNT(*) FROM goals WHERE status='in_progress'"
+        ).fetchone()[0]
+        goals_done = con.execute(
+            "SELECT COUNT(*) FROM goals WHERE status='done'"
+        ).fetchone()[0]
+        total_tasks = con.execute("SELECT COUNT(*) FROM tasks").fetchone()[0]
+        tasks_done = con.execute(
+            "SELECT COUNT(*) FROM tasks WHERE status='done'"
+        ).fetchone()[0]
+        total_executions = con.execute("SELECT COUNT(*) FROM execution_logs").fetchone()[0]
+        spending_approved = con.execute(
+            "SELECT COUNT(*) FROM spending_requests WHERE status='approved'"
+        ).fetchone()[0]
+    return {
+        "total_users": total_users,
+        "total_goals": total_goals,
+        "active_goals": active_goals,
+        "goals_done": goals_done,
+        "total_tasks": total_tasks,
+        "tasks_done": tasks_done,
+        "total_executions": total_executions,
+        "spending_approved": spending_approved,
+    }
+
+
 def record_failed_login(user_id: int) -> int:
     """Increment failed login attempts. Returns new count."""
     with _conn() as con:

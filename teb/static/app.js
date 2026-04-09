@@ -1151,6 +1151,11 @@ function init() {
   if (token) {
     showScreen('screen-landing');
     loadGoalList();
+    // Check if logged-in user is admin and show Admin button accordingly
+    api.get('/api/auth/me').then(me => {
+      const adminBtn = document.getElementById('btn-admin');
+      if (adminBtn) adminBtn.style.display = me && me.role === 'admin' ? '' : 'none';
+    }).catch(() => {});
   } else {
     showScreen('screen-auth');
   }
@@ -1320,5 +1325,178 @@ document.getElementById('btn-add-outcome').addEventListener('click', async () =>
     loadOutcomeMetrics();
   } catch (e) {
     showError('error-tasks', e.message);
+  }
+});
+
+// ─── Admin Panel ──────────────────────────────────────────────────────────────
+
+document.getElementById('btn-admin').addEventListener('click', () => {
+  document.getElementById('admin-modal').style.display = 'flex';
+  loadAdminStats();
+  loadAdminUsers();
+  loadAdminIntegrations();
+});
+
+document.getElementById('btn-close-admin').addEventListener('click', () => {
+  document.getElementById('admin-modal').style.display = 'none';
+});
+
+async function loadAdminStats() {
+  try {
+    const stats = await api.get('/api/admin/stats');
+    const grid = document.getElementById('admin-stats-grid');
+    grid.innerHTML = [
+      { label: 'Total Users', value: stats.total_users },
+      { label: 'Total Goals', value: stats.total_goals },
+      { label: 'Total Tasks', value: stats.total_tasks },
+      { label: 'Total Executions', value: stats.total_executions },
+      { label: 'Active Goals', value: stats.active_goals },
+      { label: 'Completed Goals', value: stats.goals_done },
+      { label: 'Completed Tasks', value: stats.tasks_done },
+      { label: 'Approved Spending', value: stats.spending_approved },
+    ].map(s => `
+      <div class="admin-stat-card">
+        <div class="admin-stat-value">${s.value}</div>
+        <div class="admin-stat-label">${escHtml(s.label)}</div>
+      </div>
+    `).join('');
+  } catch (e) {
+    document.getElementById('admin-stats-grid').innerHTML =
+      `<p class="error">${escHtml(e.message)}</p>`;
+  }
+}
+
+async function loadAdminUsers() {
+  showError('admin-users-error', '');
+  try {
+    const users = await api.get('/api/admin/users');
+    const tbody = document.getElementById('admin-users-tbody');
+    if (!users.length) {
+      tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:var(--muted)">No users found.</td></tr>';
+      return;
+    }
+    tbody.innerHTML = users.map(u => {
+      const isLocked = u.locked_until && new Date(u.locked_until) > new Date();
+      const statusLabel = isLocked
+        ? `<span class="status-locked">Locked</span>`
+        : `<span class="status-active">Active</span>`;
+      const roleBtn = u.role === 'admin'
+        ? `<button class="btn-secondary btn-xs" onclick="adminSetRole(${u.id},'user')">Make User</button>`
+        : `<button class="btn-secondary btn-xs" onclick="adminSetRole(${u.id},'admin')">Make Admin</button>`;
+      const unlockBtn = isLocked
+        ? `<button class="btn-secondary btn-xs" onclick="adminUnlock(${u.id})">Unlock</button>`
+        : '';
+      const deleteBtn = `<button class="btn-danger btn-xs" onclick="adminDeleteUser(${u.id})">Delete</button>`;
+      return `<tr>
+        <td>${u.id}</td>
+        <td>${escHtml(u.email)}</td>
+        <td>${escHtml(u.role)}</td>
+        <td>${u.created_at ? u.created_at.slice(0, 10) : ''}</td>
+        <td>${statusLabel}</td>
+        <td>${u.goals_count}</td>
+        <td>${u.tasks_count}</td>
+        <td class="admin-actions">${roleBtn}${unlockBtn}${deleteBtn}</td>
+      </tr>`;
+    }).join('');
+  } catch (e) {
+    showError('admin-users-error', e.message);
+  }
+}
+
+async function adminSetRole(userId, role) {
+  try {
+    await api.patch(`/api/admin/users/${userId}`, { role });
+    loadAdminUsers();
+  } catch (e) {
+    showError('admin-users-error', e.message);
+  }
+}
+
+async function adminUnlock(userId) {
+  try {
+    await api.patch(`/api/admin/users/${userId}`, { locked_until: 'null' });
+    loadAdminUsers();
+  } catch (e) {
+    showError('admin-users-error', e.message);
+  }
+}
+
+async function adminDeleteUser(userId) {
+  if (!confirm('Delete this user and all their data? This cannot be undone.')) return;
+  try {
+    await api.del(`/api/admin/users/${userId}`);
+    loadAdminUsers();
+    loadAdminStats();
+  } catch (e) {
+    showError('admin-users-error', e.message);
+  }
+}
+
+async function loadAdminIntegrations() {
+  showError('admin-integrations-error', '');
+  try {
+    const integrations = await api.get('/api/admin/integrations');
+    const tbody = document.getElementById('admin-integrations-tbody');
+    if (!integrations.length) {
+      tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--muted)">No integrations found.</td></tr>';
+      return;
+    }
+    tbody.innerHTML = integrations.map(i => `
+      <tr>
+        <td>${escHtml(i.service_name)}</td>
+        <td>${escHtml(i.category)}</td>
+        <td><span style="font-size:.75rem">${escHtml(i.base_url)}</span></td>
+        <td>${escHtml(i.auth_type)}</td>
+        <td><button class="btn-danger btn-xs" onclick="adminDeleteIntegration('${escHtml(i.service_name)}')">Delete</button></td>
+      </tr>
+    `).join('');
+  } catch (e) {
+    showError('admin-integrations-error', e.message);
+  }
+}
+
+async function adminDeleteIntegration(name) {
+  if (!confirm(`Remove integration "${name}"? This cannot be undone.`)) return;
+  try {
+    await api.del(`/api/admin/integrations/${encodeURIComponent(name)}`);
+    loadAdminIntegrations();
+  } catch (e) {
+    showError('admin-integrations-error', e.message);
+  }
+}
+
+document.getElementById('btn-admin-add-integration').addEventListener('click', async () => {
+  const serviceName = document.getElementById('ai-service-name').value.trim();
+  if (!serviceName) { showError('admin-integrations-error', 'Service name is required.'); return; }
+  const category = document.getElementById('ai-category').value.trim();
+  const baseUrl = document.getElementById('ai-base-url').value.trim();
+  const authType = document.getElementById('ai-auth-type').value;
+  const authHeader = document.getElementById('ai-auth-header').value.trim() || 'Authorization';
+  const docsUrl = document.getElementById('ai-docs-url').value.trim();
+  const capsRaw = document.getElementById('ai-capabilities').value.trim();
+  const capabilities = capsRaw ? capsRaw.split(',').map(s => s.trim()).filter(Boolean) : [];
+  let commonEndpoints = [];
+  try {
+    const ep = document.getElementById('ai-endpoints').value.trim();
+    if (ep) commonEndpoints = JSON.parse(ep);
+  } catch (e) {
+    showError('admin-integrations-error', 'Common endpoints must be valid JSON.');
+    return;
+  }
+  try {
+    await api.post('/api/admin/integrations', {
+      service_name: serviceName, category, base_url: baseUrl,
+      auth_type: authType, auth_header: authHeader, docs_url: docsUrl,
+      capabilities, common_endpoints: commonEndpoints,
+    });
+    // Clear form fields
+    ['ai-service-name','ai-category','ai-base-url','ai-auth-header','ai-docs-url',
+     'ai-capabilities','ai-endpoints'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.value = id === 'ai-auth-header' ? 'Authorization' : '';
+    });
+    loadAdminIntegrations();
+  } catch (e) {
+    showError('admin-integrations-error', e.message);
   }
 });

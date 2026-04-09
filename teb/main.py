@@ -380,6 +380,12 @@ class TelegramUpdate(BaseModel):
     message: Optional[dict] = None
 
 
+class AdminUserUpdate(BaseModel):
+    role: Optional[str] = None           # "user" | "admin"
+    locked_until: Optional[str] = None   # ISO datetime string, or "null"/"" to unlock
+    email_verified: Optional[bool] = None
+
+
 # ─── Auth helper ──────────────────────────────────────────────────────────────
 
 def _get_user_id(request: Request) -> Optional[int]:
@@ -2470,6 +2476,136 @@ async def recommend_path(goal_type: str, request: Request):
         },
         "total_paths": len(paths),
     }
+
+
+# ─── Admin API ────────────────────────────────────────────────────────────────
+
+@app.get("/api/admin/users")
+async def admin_list_users(request: Request):
+    """Admin: list all users with goal and task counts."""
+    _require_admin(request)
+    users = storage.list_all_users()
+    result = []
+    for u in users:
+        goals = storage.list_goals(user_id=u.id)
+        task_count = sum(len(storage.list_tasks(goal_id=g.id)) for g in goals)
+        d = u.to_dict()
+        d["failed_login_attempts"] = u.failed_login_attempts
+        d["locked_until"] = u.locked_until.isoformat() if u.locked_until else None
+        d["goals_count"] = len(goals)
+        d["tasks_count"] = task_count
+        result.append(d)
+    return result
+
+
+@app.get("/api/admin/users/{user_id}")
+async def admin_get_user(user_id: int, request: Request):
+    """Admin: get a single user's detail plus their goals."""
+    _require_admin(request)
+    user = storage.get_user(user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    goals = storage.list_goals(user_id=user_id)
+    d = user.to_dict()
+    d["failed_login_attempts"] = user.failed_login_attempts
+    d["locked_until"] = user.locked_until.isoformat() if user.locked_until else None
+    d["goals"] = [g.to_dict() for g in goals]
+    return d
+
+
+@app.patch("/api/admin/users/{user_id}")
+async def admin_update_user(user_id: int, body: AdminUserUpdate, request: Request):
+    """Admin: update user role, lock status, or email_verified."""
+    _require_admin(request)
+    user = storage.get_user(user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    if body.role is not None:
+        if body.role not in ("user", "admin"):
+            raise HTTPException(status_code=422, detail="role must be 'user' or 'admin'")
+        user.role = body.role
+    if body.email_verified is not None:
+        user.email_verified = body.email_verified
+    if body.locked_until is not None:
+        if body.locked_until in ("null", ""):
+            user.locked_until = None
+        else:
+            try:
+                user.locked_until = datetime.fromisoformat(body.locked_until)
+            except ValueError:
+                raise HTTPException(status_code=422, detail="locked_until must be a valid ISO datetime or 'null'")
+    storage.update_user(user)
+    d = user.to_dict()
+    d["locked_until"] = user.locked_until.isoformat() if user.locked_until else None
+    return d
+
+
+@app.delete("/api/admin/users/{user_id}")
+async def admin_delete_user(user_id: int, request: Request):
+    """Admin: delete a user account and all their data."""
+    admin_id = _require_admin(request)
+    if user_id == admin_id:
+        raise HTTPException(status_code=400, detail="Cannot delete your own account")
+    user = storage.get_user(user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    storage.delete_user(user_id)
+    return {"deleted": user_id}
+
+
+@app.get("/api/admin/stats")
+async def admin_get_stats(request: Request):
+    """Admin: return aggregate platform statistics."""
+    _require_admin(request)
+    return storage.get_system_stats()
+
+
+@app.get("/api/admin/integrations")
+async def admin_list_integrations(request: Request):
+    """Admin: list all integrations in the DB with full detail."""
+    _require_admin(request)
+    integrations_list = storage.list_integrations()
+    return [i.to_dict() for i in integrations_list]
+
+
+@app.post("/api/admin/integrations", status_code=201)
+async def admin_create_integration(request: Request):
+    """Admin: add a new integration entry to the DB catalog."""
+    _require_admin(request)
+    import json as _json
+    body = await request.json()
+    service_name = body.get("service_name", "").strip()
+    if not service_name:
+        raise HTTPException(status_code=422, detail="service_name is required")
+    existing = storage.get_integration(service_name)
+    if existing:
+        raise HTTPException(status_code=409, detail="Integration already exists")
+    from teb.models import Integration as _Integration
+    caps = body.get("capabilities", [])
+    endpoints = body.get("common_endpoints", [])
+    integ = _Integration(
+        service_name=service_name,
+        category=body.get("category", "general"),
+        base_url=body.get("base_url", ""),
+        auth_type=body.get("auth_type", "api_key"),
+        auth_header=body.get("auth_header", "Authorization"),
+        docs_url=body.get("docs_url", ""),
+        capabilities=_json.dumps(caps if isinstance(caps, list) else caps.split(",")) if caps else "[]",
+        common_endpoints=_json.dumps(endpoints) if isinstance(endpoints, (list, dict)) else endpoints or "[]",
+    )
+    created = storage.create_integration(integ)
+    return created.to_dict()
+
+
+@app.delete("/api/admin/integrations/{name}")
+async def admin_delete_integration(name: str, request: Request):
+    """Admin: remove an integration from the DB by service_name."""
+    _require_admin(request)
+    existing = storage.get_integration(name)
+    if not existing:
+        raise HTTPException(status_code=404, detail="Integration not found")
+    storage.delete_integration(existing.id)
+    return {"deleted": name}
 
 
 # ─── ASGI app for deployment ──────────────────────────────────────────────────
