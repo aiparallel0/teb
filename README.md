@@ -768,7 +768,7 @@ teb is fully functional in **template mode** — no AI keys needed:
 Before deploying to production:
 
 - [ ] Set `TEB_JWT_SECRET` to a strong random value
-- [ ] Set `TEB_SECRET_KEY` for credential encryption (Fernet key)
+- [ ] Set `TEB_SECRET_KEY` for credential encryption — ⚠️ **without this, API credentials are stored UNENCRYPTED**
 - [ ] Set `TEB_CORS_ORIGINS` to your specific domain (not `*`)
 - [ ] Review `TEB_AUTOPILOT_DEFAULT_THRESHOLD` (default: $50 per auto-approved transaction)
 - [ ] Set up a reverse proxy (nginx/Caddy) with HTTPS
