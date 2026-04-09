@@ -860,7 +860,7 @@ Without an AI key, teb operates in **template mode** — fully offline, instant.
 teb/
 ├── main.py            FastAPI app + 90 REST endpoints
 ├── models.py          20 dataclass models (Goal, Task, User, etc.)
-├── storage.py         SQLite data access layer (26 tables)
+├── storage.py         SQLite data access layer (27 tables)
 ├── decomposer.py      Template-based + AI decomposition, coaching, drip mode, success paths
 ├── executor.py        AI-powered task execution engine (API calls via httpx)
 ├── browser.py         Browser automation engine (AI plan generation + Playwright)
@@ -892,9 +892,19 @@ tests/
 ├── test_mvp_features.py         Tests for payments, discovery, behavior, agent memory
 ├── test_autopilot_features.py   Tests for autonomous execution, deployer, provisioning
 └── test_security_fixes.py       Tests for credential scoping, ownership, payment config
+deploy/
+├── backup.sh                    Database backup script (SQLite .backup)
+├── docker-entrypoint.sh         Docker entrypoint (auto-generates TEB_SECRET_KEY)
+└── systemd/
+    ├── teb.service              Systemd unit file
+    ├── teb-backup.service       Backup service (triggered by timer)
+    └── teb-backup.timer         Daily backup timer
+migrations/
+├── migrate.py                   SQL migration runner
+└── versions/                    Numbered .sql migration files
 ```
 
-### Database (26 tables)
+### Database (27 tables)
 
 | Table | Purpose |
 |---|---|
@@ -924,6 +934,7 @@ tests/
 | `discovered_services` | AI-discovered service records |
 | `deployments` | Application deployment records (Vercel/Railway/Render) |
 | `provisioning_logs` | Service provisioning attempt log |
+| `telegram_sessions` | Telegram bot session state |
 
 ### Execution Flow
 
@@ -1096,7 +1107,7 @@ pip install -r requirements.txt
 pytest tests/ -v
 ```
 
-578 tests across 12 test files. Tests use an in-memory SQLite database and mock all external services.
+578 tests across 11 test files. Tests use an in-memory SQLite database and mock all external services.
 
 ---
 
@@ -1261,9 +1272,15 @@ ENABLE_BROWSER=true bash start.sh
 20. ✅ Deployment engine (Vercel, Railway, Render — deploy + health monitoring)
 21. ✅ Service provisioning (automated signup via browser automation)
 22. ✅ Credential scoping (per-user API credential isolation)
-23. 🔲 Additional payment providers (Privacy.com virtual cards, Plaid banking)
-24. 🔲 SMS notifications
-25. 🔲 Payment sandbox/simulation mode
+23. ✅ PyPI package (`pip install teb`)
+24. ✅ Docker Hub image (`docker pull aiparallel0/teb`)
+25. ✅ CI/CD pipeline (test → publish → deploy)
+26. ✅ Database backup system (script + systemd timer)
+27. ✅ Database migration system (SQL-based)
+28. ✅ HTTPS/TLS documentation
+29. 🔲 Additional payment providers (Privacy.com virtual cards, Plaid banking)
+30. 🔲 SMS notifications
+31. 🔲 Payment sandbox/simulation mode
 
 ---
 

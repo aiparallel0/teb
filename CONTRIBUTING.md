@@ -5,13 +5,15 @@ Thank you for your interest in contributing to teb! This guide will help you get
 ## Development Setup
 
 ```bash
-git clone <repo-url>
+git clone https://github.com/aiparallel0/teb.git
 cd teb
 python -m venv .venv
 source .venv/bin/activate   # Linux/macOS
 pip install -r requirements.txt
 cp .env.example .env        # Edit with your settings
 ```
+
+Or use the one-liner: `bash start.sh`
 
 ### Running the Application
 
@@ -25,7 +27,7 @@ uvicorn teb.main:app --reload
 pytest tests/ -v
 ```
 
-All 481 tests should pass. Tests use an in-memory SQLite database and mock all external services.
+All 578 tests should pass. Tests use an in-memory SQLite database and mock all external services.
 
 ## How to Contribute
 
@@ -70,7 +72,7 @@ All 481 tests should pass. Tests use an in-memory SQLite database and mock all e
 |---|---|
 | `main.py` | FastAPI endpoints and request handling |
 | `models.py` | Dataclass definitions for all domain objects |
-| `storage.py` | SQLite data access layer (24 tables) |
+| `storage.py` | SQLite data access layer (27 tables) |
 | `decomposer.py` | Goal → task decomposition (10 templates + AI) |
 | `executor.py` | API-based task execution |
 | `browser.py` | Browser automation (Playwright) |
@@ -78,6 +80,8 @@ All 481 tests should pass. Tests use an in-memory SQLite database and mock all e
 | `integrations.py` | Pre-built service catalog |
 | `payments.py` | Payment provider integration (Mercury + Stripe) |
 | `discovery.py` | Tool/service discovery engine |
+| `deployer.py` | Deployment engine (Vercel, Railway, Render) |
+| `provisioning.py` | Service auto-signup via browser automation |
 | `messaging.py` | Telegram + webhook notifications |
 | `ai_client.py` | Unified AI client (Anthropic + OpenAI) |
 | `auth.py` | JWT authentication + RBAC |
