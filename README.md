@@ -71,7 +71,7 @@ git clone https://github.com/aiparallel0/teb.git && cd teb && bash start.sh
 
 ```bash
 pip install teb
-cp .env.example .env   # set TEB_JWT_SECRET at minimum
+cp .env.example .env   # set TEB_JWT_SECRET (TEB_SECRET_KEY is auto-generated)
 teb                     # starts the server at http://localhost:8000
 ```
 

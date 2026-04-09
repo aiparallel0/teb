@@ -20,6 +20,7 @@ jobs:
           username: ${{ secrets.DEPLOY_USER }}
           key: ${{ secrets.DEPLOY_SSH_KEY }}
           script: |
+            set -e
             cd /opt/teb
             git pull origin main
             sudo cp nginx/teb.conf /etc/nginx/snippets/teb.conf
