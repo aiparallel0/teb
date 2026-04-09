@@ -22,6 +22,7 @@ jobs:
           script: |
             cd /opt/teb
             git pull origin main
-            docker compose up -d --build
             sudo cp nginx/teb.conf /etc/nginx/snippets/teb.conf
-            sudo nginx -t && sudo systemctl reload nginx
+            sudo nginx -t
+            docker compose up -d --build
+            sudo systemctl reload nginx

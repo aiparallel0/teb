@@ -89,7 +89,7 @@ def create_migration(name: str) -> Path:
     """Create a new empty migration file and return its path."""
     VERSIONS_DIR.mkdir(parents=True, exist_ok=True)
     existing = _migration_files()
-    next_num = int(existing[-1][0]) + 1 if existing else 1
+    next_num = max(int(v[0]) for v in existing) + 1 if existing else 1
     slug = re.sub(r"[^a-z0-9]+", "_", name.lower()).strip("_")
     filename = f"{next_num:04d}_{slug}.sql"
     path = VERSIONS_DIR / filename

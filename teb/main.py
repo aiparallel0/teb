@@ -5,6 +5,7 @@ import json
 import logging
 import logging.config
 import os
+import sys
 import time
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
@@ -2514,9 +2515,15 @@ def cli() -> None:
     """Entry point for ``pip install teb`` → ``teb`` command."""
     import uvicorn
 
+    try:
+        port = int(os.getenv("PORT", "8000"))
+    except ValueError:
+        print("Error: PORT must be a number", file=sys.stderr)
+        sys.exit(1)
+
     uvicorn.run(
         "teb.main:asgi_app",
         host="0.0.0.0",
-        port=int(os.getenv("PORT", "8000")),
+        port=port,
         reload=False,
     )

@@ -8,7 +8,10 @@ set -euo pipefail
 if [[ -z "${TEB_SECRET_KEY:-}" ]]; then
   echo "[entrypoint] TEB_SECRET_KEY not set — generating Fernet key …"
   export TEB_SECRET_KEY
-  TEB_SECRET_KEY="$(python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())')"
+  TEB_SECRET_KEY="$(python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())')" || {
+    echo "[entrypoint] ERROR: Failed to generate TEB_SECRET_KEY. Is the 'cryptography' package installed?"
+    exit 1
+  }
 fi
 
 exec "$@"
