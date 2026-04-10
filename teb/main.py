@@ -12,13 +12,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import FastAPI, Form, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from teb import agents, auth, browser, config, decomposer, deployer, executor, integrations, messaging, provisioning, storage
+from teb import agents, auth, browser, config, decomposer, deployer, executor, integrations, messaging, provisioning, storage, transcribe
 from teb.models import (
     ApiCredential, BrowserAction, CheckIn, ExecutionLog,
     Goal, MessagingConfig, NudgeEvent, OutcomeMetric,
@@ -1046,6 +1046,52 @@ async def create_checkin(goal_id: int, body: CheckInCreate, request: Request):
     ci = storage.create_checkin(ci)
 
     return {"checkin": ci.to_dict(), "coaching": coaching}
+
+
+@app.post("/api/goals/{goal_id}/checkin/voice", status_code=201)
+async def create_voice_checkin(
+    goal_id: int,
+    request: Request,
+    audio: UploadFile,
+    blockers: str = Form(""),
+    mood: Optional[str] = Form(None),
+):
+    _check_api_rate_limit(request)
+    uid = _require_user(request)
+    _get_goal_for_user(goal_id, uid)
+
+    audio_bytes = await audio.read()
+    filename = audio.filename or "audio.wav"
+
+    try:
+        done_summary = transcribe.transcribe_audio(audio_bytes, filename)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+    if not done_summary and not blockers.strip():
+        raise HTTPException(
+            status_code=422,
+            detail="Transcription returned empty text and no blockers provided",
+        )
+
+    coaching = decomposer.analyze_checkin(done_summary, blockers)
+    stripped_mood = mood.strip() if mood else ""
+    detected_mood = stripped_mood if stripped_mood else coaching["mood_detected"]
+
+    ci = CheckIn(
+        goal_id=goal_id,
+        done_summary=done_summary,
+        blockers=blockers.strip(),
+        mood=detected_mood,
+        feedback=coaching["feedback"],
+    )
+    ci = storage.create_checkin(ci)
+
+    return {
+        "checkin": ci.to_dict(),
+        "coaching": coaching,
+        "transcription": done_summary,
+    }
 
 
 @app.get("/api/goals/{goal_id}/checkins")
