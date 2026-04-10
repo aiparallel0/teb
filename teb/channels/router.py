@@ -27,9 +27,9 @@ logger = logging.getLogger(__name__)
 
 # Pre-compiled patterns for command parsing
 _RE_APPROVE = re.compile(r"^/approve\s+(\d+)$")
-_RE_DENY = re.compile(r"^/deny\s+(\d+)(?:\s+(.+))?$")
+_RE_DENY = re.compile(r"^/deny\s+(\d+)(?:\s(.+))?$")
 _RE_DONE = re.compile(r"^/done\s+(\d+)$")
-_RE_CHECKIN = re.compile(r"^/checkin\s+(\d+)\s+(.+)$", re.DOTALL)
+_RE_CHECKIN = re.compile(r"^/checkin\s+(\d+)\s(.+)$", re.DOTALL)
 _RE_STATUS_GOAL = re.compile(r"^/status\s+(\d+)$")
 _RE_STATUS = re.compile(r"^/status$")
 

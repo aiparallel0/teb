@@ -1796,7 +1796,8 @@ async def create_messaging_config(body: MessagingConfigCreate, request: Request)
         if "webhook_url" not in body.config:
             raise HTTPException(status_code=422, detail="Discord config requires 'webhook_url'")
     elif body.channel == "whatsapp":
-        if "access_token" not in body.config or "phone_number_id" not in body.config or "recipient" not in body.config:
+        _wa_required = {"access_token", "phone_number_id", "recipient"}
+        if not _wa_required.issubset(body.config):
             raise HTTPException(
                 status_code=422,
                 detail="WhatsApp config requires 'access_token', 'phone_number_id', and 'recipient'",
@@ -2212,7 +2213,8 @@ async def whatsapp_channel_webhook_verify(
     wa = _WhatsAppChannel()
     challenge = wa.verify_webhook(hub_mode, hub_token, hub_challenge)
     if challenge is not None:
-        return HTMLResponse(content=challenge)
+        from fastapi.responses import PlainTextResponse
+        return PlainTextResponse(content=challenge)
     raise HTTPException(status_code=403, detail="Verification failed")
 
 

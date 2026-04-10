@@ -132,8 +132,6 @@ class DiscordChannel(Channel):
             return True
 
         try:
-            from hashlib import sha512  # noqa: F401 — just for import check
-
             # Ed25519 verify: message = timestamp + body
             message = timestamp.encode() + body
 
