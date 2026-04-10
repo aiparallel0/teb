@@ -51,7 +51,8 @@ Then tracks whether you actually earned any money.
 - **Proactive suggestions** — rule-based and AI-powered engine surfaces opportunities, optimizations, and risks
 - **Persistent user profile** — skills, pace, style, and track record accumulate across goals
 - **Knowledge base** — success paths auto-captured and recommended to new users
-- **Pre-built integration catalog** — 10 popular services (Stripe, Namecheap, Vercel, SendGrid, GitHub, Cloudflare, Twitter, LinkedIn, Plausible, OpenAI) with API endpoint metadata
+- **Pre-built integration catalog** — 25 popular services (Stripe, Namecheap, Vercel, SendGrid, GitHub, Cloudflare, Twitter, LinkedIn, Plausible, OpenAI, DigitalOcean, AWS S3, Twilio, HubSpot, Airtable, Notion, Slack, Discord, Shopify, Mailgun, Resend, Supabase, Anthropic, Google Maps, Zapier) with API endpoint metadata
+- **Admin panel** — web UI and REST API for user management, account unlocking, platform stats, and integration management (role-gated to admin users)
 - **External messaging** — Telegram bot and webhook notifications for nudges, completions, spending approvals
 - **Credential vault** — Fernet-encrypted storage for API keys
 
@@ -330,6 +331,19 @@ All endpoints require `Authorization: Bearer <token>` unless marked *(no auth)*.
 |---|---|---|
 | `GET` | `/api/users/me/behaviors` | Get user behavior patterns |
 | `GET` | `/api/users/me/abandonment` | Get abandonment risk analysis |
+
+### Admin Panel *(admin role required)*
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/api/admin/users` | List all users with goal and task counts |
+| `GET` | `/api/admin/users/{id}` | Get user detail plus their goals |
+| `PATCH` | `/api/admin/users/{id}` | Update user role or unlock account |
+| `DELETE` | `/api/admin/users/{id}` | Delete a user and all their data |
+| `GET` | `/api/admin/stats` | Aggregate platform statistics |
+| `GET` | `/api/admin/integrations` | List all integrations with full detail |
+| `POST` | `/api/admin/integrations` | Create a new integration entry |
+| `DELETE` | `/api/admin/integrations/{name}` | Delete an integration by name |
 
 ---
 
@@ -769,7 +783,7 @@ teb is fully functional in **template mode** — no AI keys needed:
 - ✅ Budget management and spending approval
 - ✅ User profiles and knowledge base
 - ✅ Service discovery (50+ curated services)
-- ✅ Integration catalog (10 services)
+- ✅ Integration catalog (25 services)
 - ✅ Multi-agent delegation (template mode)
 - ✅ Proactive suggestions (rule-based)
 - ✅ Drip mode micro-tasking
@@ -858,14 +872,14 @@ Without an AI key, teb operates in **template mode** — fully offline, instant.
 
 ```
 teb/
-├── main.py            FastAPI app + 90 REST endpoints
+├── main.py            FastAPI app + 97 REST endpoints
 ├── models.py          20 dataclass models (Goal, Task, User, etc.)
 ├── storage.py         SQLite data access layer (27 tables)
 ├── decomposer.py      Template-based + AI decomposition, coaching, drip mode, success paths
 ├── executor.py        AI-powered task execution engine (API calls via httpx)
 ├── browser.py         Browser automation engine (AI plan generation + Playwright)
 ├── agents.py          Multi-agent delegation system with inter-agent messaging
-├── integrations.py    Pre-built integration catalog (10 services) + matching engine
+├── integrations.py    Pre-built integration catalog (25 services) + matching engine
 ├── payments.py        Real payment integration (Mercury banking + Stripe processing)
 ├── discovery.py       Tool/service discovery engine (50+ curated services + AI discovery)
 ├── deployer.py        Deployment engine (Vercel, Railway, Render) + health monitoring
@@ -873,6 +887,7 @@ teb/
 ├── messaging.py       External messaging (Telegram bots + webhooks)
 ├── ai_client.py       Unified AI client (Anthropic Claude + OpenAI, retry + fallback)
 ├── auth.py            JWT authentication, bcrypt hashing, RBAC, account locking
+├── security.py        SSRF-safe URL validation for outbound HTTP calls
 ├── config.py          Environment variable configuration (17 variables)
 ├── templates/
 │   └── index.html     Single-page frontend
