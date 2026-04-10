@@ -6,17 +6,23 @@ from typing import Generator, List, Optional, Set
 
 from teb.config import get_db_path
 from teb.models import (
+    AgentGoalMemory,
     AgentHandoff,
     AgentMessage,
     ApiCredential,
+    AuditEvent,
     BrowserAction,
     CheckIn,
+    ExecutionContext,
     ExecutionLog,
     Goal,
+    GoalTemplate,
     Integration,
     MessagingConfig,
+    Milestone,
     NudgeEvent,
     OutcomeMetric,
+    PluginManifest,
     ProactiveSuggestion,
     SpendingBudget,
     SpendingRequest,
@@ -510,6 +516,115 @@ def _run_migrations(con: sqlite3.Connection) -> None:
         con.execute("ALTER TABLE payment_transactions ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0")
         con.execute("CREATE INDEX IF NOT EXISTS idx_payment_tx_status ON payment_transactions(status)")
 
+    # ─── Bridging Plan tables (Steps 1-8) ─────────────────────────────────
+
+    # goals.parent_goal_id (Step 3: Goal Hierarchy)
+    if not _has_column("goals", "parent_goal_id"):
+        con.execute("ALTER TABLE goals ADD COLUMN parent_goal_id INTEGER REFERENCES goals(id) ON DELETE CASCADE")
+        con.execute("CREATE INDEX IF NOT EXISTS idx_goals_parent ON goals(parent_goal_id)")
+
+    # milestones table (Step 3: Goal Hierarchy)
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS milestones (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            goal_id         INTEGER NOT NULL REFERENCES goals(id) ON DELETE CASCADE,
+            title           TEXT    NOT NULL,
+            target_metric   TEXT    NOT NULL DEFAULT '',
+            target_value    REAL    NOT NULL DEFAULT 0,
+            current_value   REAL    NOT NULL DEFAULT 0,
+            deadline        TEXT    NOT NULL DEFAULT '',
+            status          TEXT    NOT NULL DEFAULT 'pending',
+            created_at      TEXT    NOT NULL,
+            updated_at      TEXT    NOT NULL
+        )
+    """)
+    con.execute("CREATE INDEX IF NOT EXISTS idx_milestones_goal ON milestones(goal_id)")
+
+    # agent_goal_memory table (Step 2: Persistent Agent Memory)
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS agent_goal_memory (
+            id               INTEGER PRIMARY KEY AUTOINCREMENT,
+            agent_type       TEXT    NOT NULL,
+            goal_id          INTEGER NOT NULL REFERENCES goals(id) ON DELETE CASCADE,
+            context_json     TEXT    NOT NULL DEFAULT '{}',
+            summary          TEXT    NOT NULL DEFAULT '',
+            invocation_count INTEGER NOT NULL DEFAULT 0,
+            created_at       TEXT    NOT NULL,
+            updated_at       TEXT    NOT NULL
+        )
+    """)
+    con.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_goal_memory_unique ON agent_goal_memory(agent_type, goal_id)")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_agent_goal_memory_goal ON agent_goal_memory(goal_id)")
+
+    # audit_events table (Step 6: Structured Audit Trail)
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS audit_events (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            goal_id         INTEGER REFERENCES goals(id) ON DELETE CASCADE,
+            event_type      TEXT    NOT NULL,
+            actor_type      TEXT    NOT NULL DEFAULT 'system',
+            actor_id        TEXT    NOT NULL DEFAULT '',
+            context_json    TEXT    NOT NULL DEFAULT '{}',
+            created_at      TEXT    NOT NULL
+        )
+    """)
+    con.execute("CREATE INDEX IF NOT EXISTS idx_audit_events_goal ON audit_events(goal_id, created_at ASC)")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_audit_events_type ON audit_events(event_type)")
+
+    # goal_templates table (Step 5: Goal Template Marketplace)
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS goal_templates (
+            id                INTEGER PRIMARY KEY AUTOINCREMENT,
+            title             TEXT    NOT NULL,
+            description       TEXT    NOT NULL DEFAULT '',
+            goal_type         TEXT    NOT NULL DEFAULT 'generic',
+            category          TEXT    NOT NULL DEFAULT 'general',
+            skill_level       TEXT    NOT NULL DEFAULT 'any',
+            tasks_json        TEXT    NOT NULL DEFAULT '[]',
+            milestones_json   TEXT    NOT NULL DEFAULT '[]',
+            services_json     TEXT    NOT NULL DEFAULT '[]',
+            outcome_type      TEXT    NOT NULL DEFAULT '',
+            estimated_days    INTEGER NOT NULL DEFAULT 0,
+            rating_sum        REAL    NOT NULL DEFAULT 0,
+            rating_count      INTEGER NOT NULL DEFAULT 0,
+            times_used        INTEGER NOT NULL DEFAULT 0,
+            source_goal_id    INTEGER REFERENCES goals(id) ON DELETE SET NULL,
+            author_id         INTEGER REFERENCES users(id) ON DELETE SET NULL,
+            created_at        TEXT    NOT NULL
+        )
+    """)
+    con.execute("CREATE INDEX IF NOT EXISTS idx_goal_templates_type ON goal_templates(goal_type, category)")
+
+    # execution_contexts table (Step 8: Execution Sandbox Isolation)
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS execution_contexts (
+            id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+            goal_id             INTEGER NOT NULL REFERENCES goals(id) ON DELETE CASCADE,
+            browser_profile_dir TEXT    NOT NULL DEFAULT '',
+            temp_dir            TEXT    NOT NULL DEFAULT '',
+            credential_scope    TEXT    NOT NULL DEFAULT '[]',
+            status              TEXT    NOT NULL DEFAULT 'active',
+            created_at          TEXT    NOT NULL,
+            updated_at          TEXT    NOT NULL
+        )
+    """)
+    con.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_execution_contexts_goal ON execution_contexts(goal_id)")
+
+    # plugins table (Step 1: Execution Plugin System)
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS plugins (
+            id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+            name                 TEXT    NOT NULL UNIQUE,
+            version              TEXT    NOT NULL DEFAULT '0.1.0',
+            description          TEXT    NOT NULL DEFAULT '',
+            task_types           TEXT    NOT NULL DEFAULT '[]',
+            required_credentials TEXT    NOT NULL DEFAULT '[]',
+            module_path          TEXT    NOT NULL DEFAULT '',
+            enabled              INTEGER NOT NULL DEFAULT 1,
+            created_at           TEXT    NOT NULL
+        )
+    """)
+
 
 # ─── Credential Encryption ───────────────────────────────────────────────────
 
@@ -736,6 +851,7 @@ def _row_to_goal(row: sqlite3.Row) -> Goal:
         answers=json.loads(row["answers"]),
     )
     g.user_id = row["user_id"] if "user_id" in row.keys() else None
+    g.parent_goal_id = row["parent_goal_id"] if "parent_goal_id" in row.keys() else None
     g.auto_execute = bool(row["auto_execute"]) if "auto_execute" in row.keys() else False
     g.created_at = datetime.fromisoformat(row["created_at"])
     g.updated_at = datetime.fromisoformat(row["updated_at"])
@@ -746,9 +862,9 @@ def create_goal(goal: Goal) -> Goal:
     now = datetime.now(timezone.utc).isoformat()
     with _conn() as con:
         cur = con.execute(
-            "INSERT INTO goals (user_id, title, description, status, answers, auto_execute, created_at, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (goal.user_id, goal.title, goal.description, goal.status,
+            "INSERT INTO goals (user_id, parent_goal_id, title, description, status, answers, auto_execute, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (goal.user_id, goal.parent_goal_id, goal.title, goal.description, goal.status,
              json.dumps(goal.answers), int(goal.auto_execute), now, now),
         )
         goal.id = cur.lastrowid
@@ -2563,3 +2679,428 @@ def _detect_goal_type(title: str, description: str) -> str:
     if any(w in combined for w in ("write", "book", " blog ", "content", "article")):
         return "write_book"
     return "generic"
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Bridging Plan — New Storage Functions (Steps 1-8)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+# ─── Step 2: Persistent Agent Goal Memory ────────────────────────────────────
+
+def get_or_create_agent_goal_memory(agent_type: str, goal_id: int) -> AgentGoalMemory:
+    """Get existing per-goal memory for an agent, or create a fresh one."""
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        row = con.execute(
+            "SELECT * FROM agent_goal_memory WHERE agent_type = ? AND goal_id = ?",
+            (agent_type, goal_id),
+        ).fetchone()
+        if row:
+            return AgentGoalMemory(
+                id=row["id"], agent_type=row["agent_type"], goal_id=row["goal_id"],
+                context_json=row["context_json"], summary=row["summary"],
+                invocation_count=row["invocation_count"],
+                created_at=datetime.fromisoformat(row["created_at"]),
+                updated_at=datetime.fromisoformat(row["updated_at"]),
+            )
+        cur = con.execute(
+            """INSERT INTO agent_goal_memory (agent_type, goal_id, context_json, summary, invocation_count, created_at, updated_at)
+               VALUES (?, ?, '{}', '', 0, ?, ?)""",
+            (agent_type, goal_id, now, now),
+        )
+        return AgentGoalMemory(
+            id=cur.lastrowid, agent_type=agent_type, goal_id=goal_id,
+            context_json="{}", summary="", invocation_count=0,
+            created_at=datetime.fromisoformat(now),
+            updated_at=datetime.fromisoformat(now),
+        )
+
+
+def update_agent_goal_memory(mem: AgentGoalMemory) -> AgentGoalMemory:
+    """Update agent goal memory context and increment invocation count."""
+    now = datetime.now(timezone.utc).isoformat()
+    mem.updated_at = datetime.fromisoformat(now)
+    with _conn() as con:
+        con.execute(
+            """UPDATE agent_goal_memory SET context_json = ?, summary = ?,
+               invocation_count = invocation_count + 1, updated_at = ?
+               WHERE id = ?""",
+            (mem.context_json, mem.summary, now, mem.id),
+        )
+    mem.invocation_count += 1
+    return mem
+
+
+def list_agent_goal_memories(goal_id: int) -> list[AgentGoalMemory]:
+    """List all agent memories for a given goal."""
+    with _conn() as con:
+        rows = con.execute(
+            "SELECT * FROM agent_goal_memory WHERE goal_id = ? ORDER BY updated_at DESC",
+            (goal_id,),
+        ).fetchall()
+    return [
+        AgentGoalMemory(
+            id=r["id"], agent_type=r["agent_type"], goal_id=r["goal_id"],
+            context_json=r["context_json"], summary=r["summary"],
+            invocation_count=r["invocation_count"],
+            created_at=datetime.fromisoformat(r["created_at"]),
+            updated_at=datetime.fromisoformat(r["updated_at"]),
+        )
+        for r in rows
+    ]
+
+
+def prune_agent_goal_memory(goal_id: int, max_context_length: int = 8000) -> None:
+    """Prune overly long context_json for a goal's agent memories."""
+    with _conn() as con:
+        rows = con.execute(
+            "SELECT id, context_json FROM agent_goal_memory WHERE goal_id = ? AND LENGTH(context_json) > ?",
+            (goal_id, max_context_length),
+        ).fetchall()
+        now = datetime.now(timezone.utc).isoformat()
+        for r in rows:
+            # Keep only the last portion of the context
+            truncated = r["context_json"][-max_context_length:]
+            con.execute(
+                "UPDATE agent_goal_memory SET context_json = ?, updated_at = ? WHERE id = ?",
+                (truncated, now, r["id"]),
+            )
+
+
+# ─── Step 3: Goal Hierarchy — Milestones ─────────────────────────────────────
+
+def create_milestone(ms: Milestone) -> Milestone:
+    now = datetime.now(timezone.utc).isoformat()
+    ms.created_at = datetime.fromisoformat(now)
+    ms.updated_at = datetime.fromisoformat(now)
+    with _conn() as con:
+        cur = con.execute(
+            """INSERT INTO milestones (goal_id, title, target_metric, target_value, current_value, deadline, status, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (ms.goal_id, ms.title, ms.target_metric, ms.target_value,
+             ms.current_value, ms.deadline, ms.status, now, now),
+        )
+        ms.id = cur.lastrowid
+    return ms
+
+
+def get_milestone(milestone_id: int) -> Optional[Milestone]:
+    with _conn() as con:
+        row = con.execute("SELECT * FROM milestones WHERE id = ?", (milestone_id,)).fetchone()
+    if not row:
+        return None
+    return Milestone(
+        id=row["id"], goal_id=row["goal_id"], title=row["title"],
+        target_metric=row["target_metric"], target_value=row["target_value"],
+        current_value=row["current_value"], deadline=row["deadline"],
+        status=row["status"],
+        created_at=datetime.fromisoformat(row["created_at"]),
+        updated_at=datetime.fromisoformat(row["updated_at"]),
+    )
+
+
+def list_milestones(goal_id: int) -> list[Milestone]:
+    with _conn() as con:
+        rows = con.execute(
+            "SELECT * FROM milestones WHERE goal_id = ? ORDER BY created_at ASC",
+            (goal_id,),
+        ).fetchall()
+    return [
+        Milestone(
+            id=r["id"], goal_id=r["goal_id"], title=r["title"],
+            target_metric=r["target_metric"], target_value=r["target_value"],
+            current_value=r["current_value"], deadline=r["deadline"],
+            status=r["status"],
+            created_at=datetime.fromisoformat(r["created_at"]),
+            updated_at=datetime.fromisoformat(r["updated_at"]),
+        )
+        for r in rows
+    ]
+
+
+def update_milestone(ms: Milestone) -> Milestone:
+    now = datetime.now(timezone.utc).isoformat()
+    ms.updated_at = datetime.fromisoformat(now)
+    with _conn() as con:
+        con.execute(
+            """UPDATE milestones SET title = ?, target_metric = ?, target_value = ?,
+               current_value = ?, deadline = ?, status = ?, updated_at = ? WHERE id = ?""",
+            (ms.title, ms.target_metric, ms.target_value, ms.current_value,
+             ms.deadline, ms.status, now, ms.id),
+        )
+    return ms
+
+
+def list_sub_goals(parent_goal_id: int) -> list[Goal]:
+    """List sub-goals of a parent goal."""
+    with _conn() as con:
+        rows = con.execute(
+            "SELECT * FROM goals WHERE parent_goal_id = ? ORDER BY created_at ASC",
+            (parent_goal_id,),
+        ).fetchall()
+    return [_row_to_goal(r) for r in rows]
+
+
+# ─── Step 6: Structured Audit Trail ──────────────────────────────────────────
+
+def create_audit_event(event: AuditEvent) -> AuditEvent:
+    """Create an immutable audit event. Append-only — no updates or deletes."""
+    now = datetime.now(timezone.utc).isoformat()
+    event.created_at = datetime.fromisoformat(now)
+    with _conn() as con:
+        cur = con.execute(
+            """INSERT INTO audit_events (goal_id, event_type, actor_type, actor_id, context_json, created_at)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (event.goal_id, event.event_type, event.actor_type,
+             event.actor_id, event.context_json, now),
+        )
+        event.id = cur.lastrowid
+    return event
+
+
+def list_audit_events(goal_id: Optional[int] = None, event_type: Optional[str] = None,
+                      limit: int = 100) -> list[AuditEvent]:
+    """List audit events filtered by goal and/or event type."""
+    clauses: list[str] = []
+    params: list = []
+    if goal_id is not None:
+        clauses.append("goal_id = ?")
+        params.append(goal_id)
+    if event_type:
+        clauses.append("event_type = ?")
+        params.append(event_type)
+    where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+    with _conn() as con:
+        rows = con.execute(
+            f"SELECT * FROM audit_events {where} ORDER BY created_at ASC LIMIT ?",
+            params + [limit],
+        ).fetchall()
+    return [
+        AuditEvent(
+            id=r["id"], goal_id=r["goal_id"], event_type=r["event_type"],
+            actor_type=r["actor_type"], actor_id=r["actor_id"],
+            context_json=r["context_json"],
+            created_at=datetime.fromisoformat(r["created_at"]),
+        )
+        for r in rows
+    ]
+
+
+# ─── Step 5: Goal Template Marketplace ───────────────────────────────────────
+
+def create_goal_template(tpl: GoalTemplate) -> GoalTemplate:
+    now = datetime.now(timezone.utc).isoformat()
+    tpl.created_at = datetime.fromisoformat(now)
+    with _conn() as con:
+        cur = con.execute(
+            """INSERT INTO goal_templates
+               (title, description, goal_type, category, skill_level,
+                tasks_json, milestones_json, services_json, outcome_type,
+                estimated_days, rating_sum, rating_count, times_used,
+                source_goal_id, author_id, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (tpl.title, tpl.description, tpl.goal_type, tpl.category, tpl.skill_level,
+             tpl.tasks_json, tpl.milestones_json, tpl.services_json, tpl.outcome_type,
+             tpl.estimated_days, tpl.rating_sum, tpl.rating_count, tpl.times_used,
+             tpl.source_goal_id, tpl.author_id, now),
+        )
+        tpl.id = cur.lastrowid
+    return tpl
+
+
+def get_goal_template(template_id: int) -> Optional[GoalTemplate]:
+    with _conn() as con:
+        row = con.execute("SELECT * FROM goal_templates WHERE id = ?", (template_id,)).fetchone()
+    if not row:
+        return None
+    return _row_to_goal_template(row)
+
+
+def list_goal_templates(goal_type: Optional[str] = None, category: Optional[str] = None,
+                        skill_level: Optional[str] = None, limit: int = 50) -> list[GoalTemplate]:
+    clauses: list[str] = []
+    params: list = []
+    if goal_type:
+        clauses.append("goal_type = ?")
+        params.append(goal_type)
+    if category:
+        clauses.append("category = ?")
+        params.append(category)
+    if skill_level and skill_level != "any":
+        clauses.append("(skill_level = ? OR skill_level = 'any')")
+        params.append(skill_level)
+    where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+    with _conn() as con:
+        rows = con.execute(
+            f"SELECT * FROM goal_templates {where} ORDER BY times_used DESC, rating_sum DESC LIMIT ?",
+            params + [limit],
+        ).fetchall()
+    return [_row_to_goal_template(r) for r in rows]
+
+
+def rate_goal_template(template_id: int, rating: float) -> Optional[GoalTemplate]:
+    """Add a rating (1-5) to a template."""
+    rating = max(1.0, min(5.0, rating))
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        con.execute(
+            "UPDATE goal_templates SET rating_sum = rating_sum + ?, rating_count = rating_count + 1 WHERE id = ?",
+            (rating, template_id),
+        )
+        row = con.execute("SELECT * FROM goal_templates WHERE id = ?", (template_id,)).fetchone()
+    if not row:
+        return None
+    return _row_to_goal_template(row)
+
+
+def increment_template_usage(template_id: int) -> None:
+    with _conn() as con:
+        con.execute("UPDATE goal_templates SET times_used = times_used + 1 WHERE id = ?", (template_id,))
+
+
+def _row_to_goal_template(row) -> GoalTemplate:
+    return GoalTemplate(
+        id=row["id"], title=row["title"], description=row["description"],
+        goal_type=row["goal_type"], category=row["category"],
+        skill_level=row["skill_level"], tasks_json=row["tasks_json"],
+        milestones_json=row["milestones_json"], services_json=row["services_json"],
+        outcome_type=row["outcome_type"], estimated_days=row["estimated_days"],
+        rating_sum=row["rating_sum"], rating_count=row["rating_count"],
+        times_used=row["times_used"], source_goal_id=row["source_goal_id"],
+        author_id=row["author_id"],
+        created_at=datetime.fromisoformat(row["created_at"]),
+    )
+
+
+# ─── Step 8: Execution Sandbox / Context ─────────────────────────────────────
+
+def get_or_create_execution_context(goal_id: int) -> ExecutionContext:
+    """Get or create an isolated execution context for a goal."""
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        row = con.execute(
+            "SELECT * FROM execution_contexts WHERE goal_id = ?", (goal_id,),
+        ).fetchone()
+        if row:
+            return ExecutionContext(
+                id=row["id"], goal_id=row["goal_id"],
+                browser_profile_dir=row["browser_profile_dir"],
+                temp_dir=row["temp_dir"],
+                credential_scope=row["credential_scope"],
+                status=row["status"],
+                created_at=datetime.fromisoformat(row["created_at"]),
+                updated_at=datetime.fromisoformat(row["updated_at"]),
+            )
+        # Create a new context with goal-specific directories
+        import tempfile, os
+        base_dir = os.path.join(tempfile.gettempdir(), "teb_sandbox")
+        os.makedirs(base_dir, exist_ok=True)
+        browser_dir = os.path.join(base_dir, f"browser_{goal_id}")
+        temp_dir = os.path.join(base_dir, f"temp_{goal_id}")
+        os.makedirs(browser_dir, exist_ok=True)
+        os.makedirs(temp_dir, exist_ok=True)
+        cur = con.execute(
+            """INSERT INTO execution_contexts (goal_id, browser_profile_dir, temp_dir, credential_scope, status, created_at, updated_at)
+               VALUES (?, ?, ?, '[]', 'active', ?, ?)""",
+            (goal_id, browser_dir, temp_dir, now, now),
+        )
+        return ExecutionContext(
+            id=cur.lastrowid, goal_id=goal_id,
+            browser_profile_dir=browser_dir, temp_dir=temp_dir,
+            credential_scope="[]", status="active",
+            created_at=datetime.fromisoformat(now),
+            updated_at=datetime.fromisoformat(now),
+        )
+
+
+def update_execution_context(ctx: ExecutionContext) -> ExecutionContext:
+    now = datetime.now(timezone.utc).isoformat()
+    ctx.updated_at = datetime.fromisoformat(now)
+    with _conn() as con:
+        con.execute(
+            """UPDATE execution_contexts SET browser_profile_dir = ?, temp_dir = ?,
+               credential_scope = ?, status = ?, updated_at = ? WHERE id = ?""",
+            (ctx.browser_profile_dir, ctx.temp_dir,
+             ctx.credential_scope, ctx.status, now, ctx.id),
+        )
+    return ctx
+
+
+def cleanup_execution_context(goal_id: int) -> None:
+    """Mark an execution context as cleaned up and remove temp files."""
+    import shutil
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        row = con.execute("SELECT * FROM execution_contexts WHERE goal_id = ?", (goal_id,)).fetchone()
+        if row:
+            for dir_path in (row["browser_profile_dir"], row["temp_dir"]):
+                if dir_path:
+                    try:
+                        shutil.rmtree(dir_path, ignore_errors=True)
+                    except Exception:
+                        pass
+            con.execute(
+                "UPDATE execution_contexts SET status = 'cleaned_up', updated_at = ? WHERE goal_id = ?",
+                (now, goal_id),
+            )
+
+
+# ─── Step 1: Execution Plugin System ─────────────────────────────────────────
+
+def create_plugin(plugin: PluginManifest) -> PluginManifest:
+    now = datetime.now(timezone.utc).isoformat()
+    plugin.created_at = datetime.fromisoformat(now)
+    with _conn() as con:
+        cur = con.execute(
+            """INSERT INTO plugins (name, version, description, task_types, required_credentials, module_path, enabled, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (plugin.name, plugin.version, plugin.description, plugin.task_types,
+             plugin.required_credentials, plugin.module_path, 1 if plugin.enabled else 0, now),
+        )
+        plugin.id = cur.lastrowid
+    return plugin
+
+
+def get_plugin(name: str) -> Optional[PluginManifest]:
+    with _conn() as con:
+        row = con.execute("SELECT * FROM plugins WHERE name = ?", (name,)).fetchone()
+    if not row:
+        return None
+    return _row_to_plugin(row)
+
+
+def list_plugins(enabled_only: bool = False) -> list[PluginManifest]:
+    with _conn() as con:
+        if enabled_only:
+            rows = con.execute("SELECT * FROM plugins WHERE enabled = 1 ORDER BY name").fetchall()
+        else:
+            rows = con.execute("SELECT * FROM plugins ORDER BY name").fetchall()
+    return [_row_to_plugin(r) for r in rows]
+
+
+def update_plugin(plugin: PluginManifest) -> PluginManifest:
+    with _conn() as con:
+        con.execute(
+            """UPDATE plugins SET version = ?, description = ?, task_types = ?,
+               required_credentials = ?, module_path = ?, enabled = ? WHERE id = ?""",
+            (plugin.version, plugin.description, plugin.task_types,
+             plugin.required_credentials, plugin.module_path,
+             1 if plugin.enabled else 0, plugin.id),
+        )
+    return plugin
+
+
+def delete_plugin(name: str) -> None:
+    with _conn() as con:
+        con.execute("DELETE FROM plugins WHERE name = ?", (name,))
+
+
+def _row_to_plugin(row) -> PluginManifest:
+    return PluginManifest(
+        id=row["id"], name=row["name"], version=row["version"],
+        description=row["description"], task_types=row["task_types"],
+        required_credentials=row["required_credentials"],
+        module_path=row["module_path"], enabled=bool(row["enabled"]),
+        created_at=datetime.fromisoformat(row["created_at"]),
+    )

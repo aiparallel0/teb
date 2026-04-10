@@ -14,15 +14,15 @@ from typing import Optional
 
 from fastapi import FastAPI, Form, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from teb import agents, auth, browser, config, decomposer, deployer, executor, integrations, messaging, provisioning, storage, transcribe
 from teb.models import (
-    ApiCredential, BrowserAction, CheckIn, ExecutionLog,
-    Goal, MessagingConfig, NudgeEvent, OutcomeMetric,
-    SpendingBudget, SpendingRequest, Task,
+    AgentGoalMemory, ApiCredential, AuditEvent, BrowserAction, CheckIn,
+    ExecutionLog, Goal, GoalTemplate, MessagingConfig, Milestone, NudgeEvent,
+    OutcomeMetric, PluginManifest, SpendingBudget, SpendingRequest, Task,
 )
 
 # ─── Logging ──────────────────────────────────────────────────────────────────
@@ -2997,6 +2997,533 @@ async def admin_delete_integration(name: str, request: Request):
         raise HTTPException(status_code=404, detail="Integration not found")
     storage.delete_integration(existing.id)
     return {"deleted": name}
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Step 2: Persistent Agent Goal Memory
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+@app.get("/api/goals/{goal_id}/agent-memory")
+async def list_goal_agent_memories(goal_id: int, request: Request):
+    """List all agent working memories for a goal."""
+    uid = _require_user(request)
+    _get_goal_for_user(goal_id, uid)
+    mems = storage.list_agent_goal_memories(goal_id)
+    return {"memories": [m.to_dict() for m in mems]}
+
+
+@app.get("/api/goals/{goal_id}/agent-memory/{agent_type}")
+async def get_goal_agent_memory(goal_id: int, agent_type: str, request: Request):
+    """Get a specific agent's working memory for a goal."""
+    uid = _require_user(request)
+    _get_goal_for_user(goal_id, uid)
+    mem = storage.get_or_create_agent_goal_memory(agent_type, goal_id)
+    return mem.to_dict()
+
+
+@app.post("/api/goals/{goal_id}/agent-memory/prune")
+async def prune_goal_agent_memory(goal_id: int, request: Request):
+    """Prune overly long agent memories for a goal."""
+    uid = _require_user(request)
+    _get_goal_for_user(goal_id, uid)
+    storage.prune_agent_goal_memory(goal_id)
+    return {"pruned": True, "goal_id": goal_id}
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Step 3: Goal Hierarchy (Sub-goals & Milestones)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+@app.post("/api/goals/{goal_id}/sub-goals", status_code=201)
+async def create_sub_goal(goal_id: int, request: Request):
+    """Create a sub-goal under a parent goal."""
+    uid = _require_user(request)
+    _check_api_rate_limit(request)
+    parent = _get_goal_for_user(goal_id, uid)
+    body = await request.json()
+    sub = Goal(
+        title=body.get("title", ""),
+        description=body.get("description", ""),
+        user_id=uid,
+        parent_goal_id=parent.id,
+    )
+    sub = storage.create_goal(sub)
+
+    from teb import events as _events  # noqa: E402
+    _events.emit_goal_updated(uid, goal_id, f"sub_goal_created:{sub.id}")
+
+    storage.create_audit_event(AuditEvent(
+        goal_id=goal_id, event_type="sub_goal_created",
+        actor_type="human", actor_id=str(uid),
+        context_json=json.dumps({"sub_goal_id": sub.id, "title": sub.title}),
+    ))
+    return sub.to_dict()
+
+
+@app.get("/api/goals/{goal_id}/sub-goals")
+async def list_sub_goals(goal_id: int, request: Request):
+    """List sub-goals of a parent goal."""
+    uid = _require_user(request)
+    _get_goal_for_user(goal_id, uid)
+    subs = storage.list_sub_goals(goal_id)
+    return {"sub_goals": [s.to_dict() for s in subs]}
+
+
+@app.get("/api/goals/{goal_id}/hierarchy")
+async def get_goal_hierarchy(goal_id: int, request: Request):
+    """Get the full goal hierarchy: parent, sub-goals, milestones, and task counts."""
+    uid = _require_user(request)
+    goal = _get_goal_for_user(goal_id, uid)
+    sub_goals = storage.list_sub_goals(goal_id)
+    milestones = storage.list_milestones(goal_id)
+    tasks = storage.list_tasks(goal_id=goal_id)
+    done_tasks = sum(1 for t in tasks if t.status == "done")
+
+    sub_goal_data = []
+    for sg in sub_goals:
+        sg_tasks = storage.list_tasks(goal_id=sg.id)
+        sg_done = sum(1 for t in sg_tasks if t.status == "done")
+        sg_milestones = storage.list_milestones(sg.id) if sg.id else []
+        sub_goal_data.append({
+            **sg.to_dict(),
+            "task_count": len(sg_tasks),
+            "tasks_done": sg_done,
+            "milestones": [m.to_dict() for m in sg_milestones],
+        })
+
+    return {
+        "goal": goal.to_dict(),
+        "sub_goals": sub_goal_data,
+        "milestones": [m.to_dict() for m in milestones],
+        "tasks": {"total": len(tasks), "done": done_tasks},
+    }
+
+
+@app.post("/api/goals/{goal_id}/milestones", status_code=201)
+async def create_milestone(goal_id: int, request: Request):
+    """Create a milestone for a goal."""
+    uid = _require_user(request)
+    _check_api_rate_limit(request)
+    _get_goal_for_user(goal_id, uid)
+    body = await request.json()
+    ms = Milestone(
+        goal_id=goal_id,
+        title=body.get("title", ""),
+        target_metric=body.get("target_metric", ""),
+        target_value=body.get("target_value", 0),
+        deadline=body.get("deadline", ""),
+    )
+    ms = storage.create_milestone(ms)
+
+    storage.create_audit_event(AuditEvent(
+        goal_id=goal_id, event_type="milestone_created",
+        actor_type="human", actor_id=str(uid),
+        context_json=json.dumps({"milestone_id": ms.id, "title": ms.title}),
+    ))
+    return ms.to_dict()
+
+
+@app.get("/api/goals/{goal_id}/milestones")
+async def list_milestones(goal_id: int, request: Request):
+    """List milestones for a goal."""
+    uid = _require_user(request)
+    _get_goal_for_user(goal_id, uid)
+    milestones = storage.list_milestones(goal_id)
+    return {"milestones": [m.to_dict() for m in milestones]}
+
+
+@app.patch("/api/milestones/{milestone_id}")
+async def update_milestone(milestone_id: int, request: Request):
+    """Update a milestone (progress, status, etc.)."""
+    uid = _require_user(request)
+    ms = storage.get_milestone(milestone_id)
+    if not ms:
+        raise HTTPException(status_code=404, detail="Milestone not found")
+    _get_goal_for_user(ms.goal_id, uid)
+
+    body = await request.json()
+    if "title" in body:
+        ms.title = body["title"]
+    if "current_value" in body:
+        ms.current_value = body["current_value"]
+    if "target_value" in body:
+        ms.target_value = body["target_value"]
+    if "status" in body:
+        ms.status = body["status"]
+    if "deadline" in body:
+        ms.deadline = body["deadline"]
+
+    # Auto-detect achievement
+    if ms.target_value > 0 and ms.current_value >= ms.target_value and ms.status == "pending":
+        ms.status = "achieved"
+        from teb import events as _events  # noqa: E402
+        _events.emit_goal_milestone(uid, ms.goal_id, ms.title, "achieved")
+        storage.create_audit_event(AuditEvent(
+            goal_id=ms.goal_id, event_type="milestone_achieved",
+            actor_type="system", actor_id="milestone_tracker",
+            context_json=json.dumps({"milestone_id": ms.id, "title": ms.title}),
+        ))
+
+    ms = storage.update_milestone(ms)
+    return ms.to_dict()
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Step 4: Real-time Event Streaming (SSE)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+@app.get("/api/events/stream")
+async def sse_stream(request: Request,
+                     last_event_id: Optional[str] = Query(default=None, alias="Last-Event-ID")):
+    """Server-Sent Events stream for real-time updates.
+
+    Clients should use EventSource to connect. Supports Last-Event-ID for reconnection.
+    """
+    uid = _require_user(request)
+
+    # Also check the standard SSE header
+    if not last_event_id:
+        last_event_id = request.headers.get("Last-Event-ID")
+
+    from teb import events as _events  # noqa: E402
+    return StreamingResponse(
+        _events.stream_events(uid, last_event_id),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@app.get("/api/events/status")
+async def sse_status(request: Request):
+    """Get SSE event bus status."""
+    _require_user(request)
+    from teb import events as _events  # noqa: E402
+    return {
+        "subscribers": _events.event_bus.subscriber_count,
+        "backlog_size": len(_events.event_bus._backlog),
+    }
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Step 5: Goal Template Marketplace
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+@app.post("/api/templates/export/{goal_id}", status_code=201)
+async def export_goal_template(goal_id: int, request: Request):
+    """Export a completed goal as a reusable template (sanitized of personal data)."""
+    uid = _require_user(request)
+    _check_api_rate_limit(request)
+    goal = _get_goal_for_user(goal_id, uid)
+
+    tasks = storage.list_tasks(goal_id=goal_id)
+    milestones = storage.list_milestones(goal_id)
+    metrics = storage.list_outcome_metrics(goal_id)
+
+    # Sanitize tasks — keep structure, remove personal details
+    task_templates = [
+        {"title": t.title, "description": t.description,
+         "estimated_minutes": t.estimated_minutes, "order_index": t.order_index}
+        for t in tasks
+    ]
+    milestone_templates = [
+        {"title": m.title, "target_metric": m.target_metric,
+         "target_value": m.target_value}
+        for m in milestones
+    ]
+    services = []  # Could be enriched from execution logs in future
+
+    body = await request.json() if request.headers.get("content-type", "").startswith("application/json") else {}
+
+    tpl = GoalTemplate(
+        title=body.get("title", goal.title),
+        description=body.get("description", goal.description),
+        goal_type=storage._detect_goal_type(goal.title, goal.description),
+        category=body.get("category", "general"),
+        skill_level=body.get("skill_level", "any"),
+        tasks_json=json.dumps(task_templates),
+        milestones_json=json.dumps(milestone_templates),
+        services_json=json.dumps(services),
+        outcome_type=metrics[0].unit if metrics else "",
+        estimated_days=body.get("estimated_days", 0),
+        source_goal_id=goal_id,
+        author_id=uid,
+    )
+    tpl = storage.create_goal_template(tpl)
+
+    storage.create_audit_event(AuditEvent(
+        goal_id=goal_id, event_type="template_exported",
+        actor_type="human", actor_id=str(uid),
+        context_json=json.dumps({"template_id": tpl.id}),
+    ))
+    return tpl.to_dict()
+
+
+@app.post("/api/templates/import/{template_id}", status_code=201)
+async def import_goal_template(template_id: int, request: Request):
+    """Import a template to create a new goal pre-populated with tasks and milestones."""
+    uid = _require_user(request)
+    _check_api_rate_limit(request)
+
+    tpl = storage.get_goal_template(template_id)
+    if not tpl:
+        raise HTTPException(status_code=404, detail="Template not found")
+
+    # Create the goal
+    goal = Goal(
+        title=tpl.title,
+        description=tpl.description,
+        user_id=uid,
+        status="decomposed",
+    )
+    goal = storage.create_goal(goal)
+
+    # Create tasks from template
+    try:
+        task_templates = json.loads(tpl.tasks_json)
+    except (json.JSONDecodeError, TypeError):
+        task_templates = []
+    for i, tt in enumerate(task_templates):
+        storage.create_task(Task(
+            goal_id=goal.id or 0,
+            title=tt.get("title", ""),
+            description=tt.get("description", ""),
+            estimated_minutes=tt.get("estimated_minutes", 30),
+            order_index=tt.get("order_index", i),
+        ))
+
+    # Create milestones from template
+    try:
+        ms_templates = json.loads(tpl.milestones_json)
+    except (json.JSONDecodeError, TypeError):
+        ms_templates = []
+    for mt in ms_templates:
+        storage.create_milestone(Milestone(
+            goal_id=goal.id or 0,
+            title=mt.get("title", ""),
+            target_metric=mt.get("target_metric", ""),
+            target_value=mt.get("target_value", 0),
+        ))
+
+    storage.increment_template_usage(template_id)
+
+    storage.create_audit_event(AuditEvent(
+        goal_id=goal.id, event_type="template_imported",
+        actor_type="human", actor_id=str(uid),
+        context_json=json.dumps({"template_id": template_id}),
+    ))
+    return {"goal": goal.to_dict(), "template_id": template_id}
+
+
+@app.get("/api/templates")
+async def list_templates(request: Request,
+                         goal_type: Optional[str] = Query(default=None),
+                         category: Optional[str] = Query(default=None),
+                         skill_level: Optional[str] = Query(default=None)):
+    """Browse the goal template marketplace."""
+    _require_user(request)
+    templates = storage.list_goal_templates(goal_type=goal_type, category=category,
+                                            skill_level=skill_level)
+    return {"templates": [t.to_dict() for t in templates], "total": len(templates)}
+
+
+@app.get("/api/templates/{template_id}")
+async def get_template(template_id: int, request: Request):
+    """Get details of a specific template."""
+    _require_user(request)
+    tpl = storage.get_goal_template(template_id)
+    if not tpl:
+        raise HTTPException(status_code=404, detail="Template not found")
+    return tpl.to_dict()
+
+
+@app.post("/api/templates/{template_id}/rate")
+async def rate_template(template_id: int, request: Request):
+    """Rate a template (1-5 stars)."""
+    _require_user(request)
+    body = await request.json()
+    rating = body.get("rating", 0)
+    if not (1 <= rating <= 5):
+        raise HTTPException(status_code=400, detail="Rating must be between 1 and 5")
+    updated = storage.rate_goal_template(template_id, rating)
+    if not updated:
+        raise HTTPException(status_code=404, detail="Template not found")
+    return updated.to_dict()
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Step 6: Structured Execution Audit Trail
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+@app.get("/api/goals/{goal_id}/audit")
+async def get_goal_audit_trail(goal_id: int, request: Request,
+                               event_type: Optional[str] = Query(default=None),
+                               limit: int = Query(default=100)):
+    """Get the full audit trail for a goal — immutable lifecycle events."""
+    uid = _require_user(request)
+    _get_goal_for_user(goal_id, uid)
+    events = storage.list_audit_events(goal_id=goal_id, event_type=event_type, limit=limit)
+    return {"events": [e.to_dict() for e in events], "total": len(events)}
+
+
+@app.get("/api/audit/events")
+async def list_all_audit_events(request: Request,
+                                event_type: Optional[str] = Query(default=None),
+                                limit: int = Query(default=100)):
+    """List audit events across all goals (admin view)."""
+    _require_admin(request)
+    events = storage.list_audit_events(event_type=event_type, limit=limit)
+    return {"events": [e.to_dict() for e in events], "total": len(events)}
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Step 7: MCP Server Exposure
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+@app.get("/api/mcp/info")
+async def mcp_server_info(request: Request):
+    """MCP server metadata — tool definitions for AI coding assistants."""
+    _require_user(request)
+    from teb import mcp_server  # noqa: E402
+    return mcp_server.get_server_info()
+
+
+@app.post("/api/mcp/tools/call")
+async def mcp_tool_call(request: Request):
+    """Execute an MCP tool call."""
+    uid = _require_user(request)
+    body = await request.json()
+    tool_name = body.get("name", "")
+    arguments = body.get("arguments", {})
+    from teb import mcp_server  # noqa: E402
+    result = mcp_server.handle_tool_call(tool_name, arguments, user_id=uid)
+    return result
+
+
+@app.get("/api/mcp/tools")
+async def mcp_list_tools(request: Request):
+    """List available MCP tools."""
+    _require_user(request)
+    from teb import mcp_server  # noqa: E402
+    return {"tools": mcp_server.MCP_TOOLS}
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Step 8: Execution Sandbox Isolation
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+@app.get("/api/goals/{goal_id}/sandbox")
+async def get_execution_sandbox(goal_id: int, request: Request):
+    """Get or create the isolated execution context for a goal."""
+    uid = _require_user(request)
+    _get_goal_for_user(goal_id, uid)
+    ctx = storage.get_or_create_execution_context(goal_id)
+    return ctx.to_dict()
+
+
+@app.patch("/api/goals/{goal_id}/sandbox")
+async def update_execution_sandbox(goal_id: int, request: Request):
+    """Update sandbox configuration (credential scope, etc.)."""
+    uid = _require_user(request)
+    _get_goal_for_user(goal_id, uid)
+    ctx = storage.get_or_create_execution_context(goal_id)
+    body = await request.json()
+    if "credential_scope" in body:
+        ctx.credential_scope = json.dumps(body["credential_scope"]) if isinstance(body["credential_scope"], list) else body["credential_scope"]
+    ctx = storage.update_execution_context(ctx)
+    return ctx.to_dict()
+
+
+@app.post("/api/goals/{goal_id}/sandbox/cleanup")
+async def cleanup_execution_sandbox(goal_id: int, request: Request):
+    """Clean up the execution sandbox for a completed goal."""
+    uid = _require_user(request)
+    _get_goal_for_user(goal_id, uid)
+    storage.cleanup_execution_context(goal_id)
+    return {"cleaned_up": True, "goal_id": goal_id}
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Step 1: Execution Plugin System
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+@app.get("/api/plugins")
+async def list_plugins(request: Request,
+                       enabled_only: bool = Query(default=False)):
+    """List registered execution plugins."""
+    _require_user(request)
+    plugins = storage.list_plugins(enabled_only=enabled_only)
+    return {"plugins": [p.to_dict() for p in plugins]}
+
+
+@app.post("/api/plugins", status_code=201)
+async def register_plugin(request: Request):
+    """Register a new execution plugin."""
+    _require_admin(request)
+    body = await request.json()
+    plugin = PluginManifest(
+        name=body.get("name", ""),
+        version=body.get("version", "0.1.0"),
+        description=body.get("description", ""),
+        task_types=json.dumps(body.get("task_types", [])),
+        required_credentials=json.dumps(body.get("required_credentials", [])),
+        module_path=body.get("module_path", ""),
+    )
+    if not plugin.name:
+        raise HTTPException(status_code=400, detail="Plugin name is required")
+    existing = storage.get_plugin(plugin.name)
+    if existing:
+        raise HTTPException(status_code=409, detail="Plugin already exists")
+    plugin = storage.create_plugin(plugin)
+    return plugin.to_dict()
+
+
+@app.delete("/api/plugins/{name}")
+async def delete_plugin(name: str, request: Request):
+    """Delete a plugin by name."""
+    _require_admin(request)
+    existing = storage.get_plugin(name)
+    if not existing:
+        raise HTTPException(status_code=404, detail="Plugin not found")
+    storage.delete_plugin(name)
+    from teb import plugins as _plugins  # noqa: E402
+    _plugins.unregister_executor(name)
+    return {"deleted": name}
+
+
+@app.post("/api/plugins/{name}/execute")
+async def execute_plugin(name: str, request: Request):
+    """Execute a plugin with given task context and credentials."""
+    uid = _require_user(request)
+    body = await request.json()
+    from teb import plugins as _plugins  # noqa: E402
+    result = _plugins.execute_plugin(
+        name,
+        task_context=body.get("task_context", {}),
+        credentials=body.get("credentials", {}),
+    )
+    return result.to_dict()
+
+
+@app.get("/api/plugins/match")
+async def match_plugins_for_task(request: Request,
+                                  task_type: str = Query()):
+    """Find plugins that can handle a given task type."""
+    _require_user(request)
+    from teb import plugins as _plugins  # noqa: E402
+    matches = _plugins.find_plugins_for_task(task_type)
+    return {"plugins": [p.to_dict() for p in matches]}
 
 
 # ─── ASGI app for deployment ──────────────────────────────────────────────────
