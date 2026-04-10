@@ -778,3 +778,130 @@ class WebhookConfig:
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
         }
+
+
+# ─── Execution Checkpoints ──────────────────────────────────────────────────
+
+@dataclass
+class ExecutionCheckpoint:
+    """Persistent checkpoint for resumable goal execution."""
+    goal_id: int
+    task_id: int
+    step_index: int = 0
+    state_json: str = "{}"
+    status: str = "active"             # active | completed | failed | resumed
+    id: Optional[int] = None
+    created_at: Optional[datetime] = None
+
+    def to_dict(self) -> dict:
+        import json as _json
+        return {
+            "id": self.id,
+            "goal_id": self.goal_id,
+            "task_id": self.task_id,
+            "step_index": self.step_index,
+            "state": _json.loads(self.state_json) if self.state_json else {},
+            "status": self.status,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+# ─── Gamification (WP-04) ───────────────────────────────────────────────────
+
+@dataclass
+class UserXP:
+    """User experience points, level, and streak tracking."""
+    user_id: int
+    total_xp: int = 0
+    level: int = 1
+    current_streak: int = 0
+    longest_streak: int = 0
+    last_activity_date: str = ""
+    id: Optional[int] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+    @property
+    def xp_to_next_level(self) -> int:
+        return (self.level * 100) - (self.total_xp % (self.level * 100))
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "user_id": self.user_id,
+            "total_xp": self.total_xp,
+            "level": self.level,
+            "current_streak": self.current_streak,
+            "longest_streak": self.longest_streak,
+            "last_activity_date": self.last_activity_date or None,
+            "xp_to_next_level": self.xp_to_next_level,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+@dataclass
+class Achievement:
+    """User achievement / badge."""
+    user_id: int
+    achievement_type: str
+    title: str = ""
+    description: str = ""
+    id: Optional[int] = None
+    earned_at: Optional[datetime] = None
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "user_id": self.user_id,
+            "achievement_type": self.achievement_type,
+            "title": self.title,
+            "description": self.description,
+            "earned_at": self.earned_at.isoformat() if self.earned_at else None,
+        }
+
+
+# ─── Agent Scheduling & Flows (WP-02) ───────────────────────────────────────
+
+@dataclass
+class AgentSchedule:
+    """Configurable heartbeat schedule for an agent on a specific goal."""
+    agent_type: str
+    goal_id: int
+    interval_hours: int = 8
+    next_run_at: str = ""
+    paused: bool = False
+    id: Optional[int] = None
+    created_at: Optional[datetime] = None
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "agent_type": self.agent_type,
+            "goal_id": self.goal_id,
+            "interval_hours": self.interval_hours,
+            "next_run_at": self.next_run_at if self.next_run_at else None,
+            "paused": self.paused,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+@dataclass
+class AgentFlow:
+    """Event-driven agent pipeline: when one agent completes, trigger the next."""
+    goal_id: int
+    steps_json: str = "[]"
+    current_step: int = 0
+    status: str = "pending"            # pending | running | completed | failed
+    id: Optional[int] = None
+    created_at: Optional[datetime] = None
+
+    def to_dict(self) -> dict:
+        import json as _json
+        return {
+            "id": self.id,
+            "goal_id": self.goal_id,
+            "steps": _json.loads(self.steps_json) if self.steps_json else [],
+            "current_step": self.current_step,
+            "status": self.status,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }

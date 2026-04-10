@@ -4048,6 +4048,188 @@ async def export_to_asana_format(request: Request):
     }
 
 
+# ─── Execution State Machine (WP-01) ─────────────────────────────────────────
+from teb import state_machine  # noqa: E402
+
+
+@app.post("/api/goals/{goal_id}/resume")
+async def resume_goal_execution(goal_id: int, request: Request):
+    """Resume goal execution from the last checkpoint."""
+    user = auth.get_current_user(request)
+    if not user or not user.id:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    _check_api_rate_limit(request)
+    goal = storage.get_goal(goal_id)
+    if not goal or goal.user_id != user.id:
+        raise HTTPException(status_code=404, detail="Goal not found")
+    state = state_machine.resume_execution(goal_id)
+    if not state:
+        raise HTTPException(status_code=404, detail="No active checkpoint to resume from")
+    return {"resumed": True, "state": state.to_dict()}
+
+
+@app.get("/api/goals/{goal_id}/checkpoints")
+async def list_goal_checkpoints(goal_id: int, request: Request):
+    """List execution checkpoints for a goal."""
+    user = auth.get_current_user(request)
+    if not user or not user.id:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    goal = storage.get_goal(goal_id)
+    if not goal or goal.user_id != user.id:
+        raise HTTPException(status_code=404, detail="Goal not found")
+    return state_machine.get_execution_summary(goal_id)
+
+
+# ─── Agent Flows & Schedules (WP-02) ─────────────────────────────────────────
+from teb.models import AgentFlow, AgentSchedule  # noqa: E402
+
+
+@app.post("/api/goals/{goal_id}/flows")
+async def create_agent_flow_endpoint(goal_id: int, request: Request):
+    """Create an event-driven agent flow for a goal."""
+    user = auth.get_current_user(request)
+    if not user or not user.id:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    _check_api_rate_limit(request)
+    goal = storage.get_goal(goal_id)
+    if not goal or goal.user_id != user.id:
+        raise HTTPException(status_code=404, detail="Goal not found")
+    body = await request.json()
+    steps = body.get("steps", [])
+    if not steps:
+        raise HTTPException(status_code=400, detail="Steps are required")
+    flow = AgentFlow(goal_id=goal_id, steps_json=json.dumps(steps), status="pending")
+    flow = storage.create_agent_flow(flow)
+    return flow.to_dict()
+
+
+@app.get("/api/goals/{goal_id}/flows")
+async def list_agent_flows_endpoint(goal_id: int, request: Request):
+    """List agent flows for a goal."""
+    user = auth.get_current_user(request)
+    if not user or not user.id:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    goal = storage.get_goal(goal_id)
+    if not goal or goal.user_id != user.id:
+        raise HTTPException(status_code=404, detail="Goal not found")
+    flows = storage.list_agent_flows(goal_id)
+    return [f.to_dict() for f in flows]
+
+
+@app.post("/api/agents/{agent_type}/schedule")
+async def configure_agent_schedule(agent_type: str, request: Request):
+    """Configure heartbeat schedule for an agent on a goal."""
+    user = auth.get_current_user(request)
+    if not user or not user.id:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    _check_api_rate_limit(request)
+    body = await request.json()
+    goal_id = body.get("goal_id")
+    if not goal_id:
+        raise HTTPException(status_code=400, detail="goal_id is required")
+    goal = storage.get_goal(goal_id)
+    if not goal or goal.user_id != user.id:
+        raise HTTPException(status_code=404, detail="Goal not found")
+    schedule = AgentSchedule(agent_type=agent_type, goal_id=goal_id,
+                             interval_hours=body.get("interval_hours", 8))
+    schedule = storage.create_agent_schedule(schedule)
+    return schedule.to_dict()
+
+
+# ─── Gamification (WP-04) ────────────────────────────────────────────────────
+from teb import gamification  # noqa: E402
+
+
+@app.get("/api/users/me/xp")
+async def get_user_xp(request: Request):
+    """Get current user's XP, level, and streak."""
+    user = auth.get_current_user(request)
+    if not user or not user.id:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    uxp = storage.get_or_create_user_xp(user.id)
+    return uxp.to_dict()
+
+
+@app.get("/api/users/me/achievements")
+async def get_user_achievements(request: Request):
+    """Get current user's achievements."""
+    user = auth.get_current_user(request)
+    if not user or not user.id:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    return [a.to_dict() for a in storage.list_achievements(user.id)]
+
+
+# ─── Semantic Search (WP-05) ─────────────────────────────────────────────────
+from teb import search as teb_search  # noqa: E402
+
+
+@app.get("/api/search")
+async def search_all(request: Request, q: str = "", limit: int = 50):
+    """Search across all entities."""
+    user = auth.get_current_user(request)
+    if not user or not user.id:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    if not q:
+        raise HTTPException(status_code=400, detail="Query parameter 'q' is required")
+    results = teb_search.quick_search(q, user_id=user.id, limit=min(limit, 100))
+    return {"query": q, "count": len(results), "results": results}
+
+
+@app.post("/api/search/reindex")
+async def reindex_search(request: Request):
+    """Rebuild the search index."""
+    user = auth.get_current_user(request)
+    if not user or not user.id:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    teb_search.init_search_index()
+    counts = teb_search.reindex_all(user_id=user.id)
+    return {"status": "reindexed", "counts": counts}
+
+
+# ─── Natural Language Task Input (WP-06) ─────────────────────────────────────
+from teb import nlp_input  # noqa: E402
+
+
+@app.post("/api/tasks/parse")
+async def parse_task_text_endpoint(request: Request):
+    """Parse natural language text into structured task fields."""
+    user = auth.get_current_user(request)
+    if not user or not user.id:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    body = await request.json()
+    text = body.get("text", "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="Text is required")
+    return {"parsed": nlp_input.parse_task_text(text), "original": text}
+
+
+@app.post("/api/goals/{goal_id}/quick-add")
+async def quick_add_task(goal_id: int, request: Request):
+    """Parse natural language and create a task in one step."""
+    user = auth.get_current_user(request)
+    if not user or not user.id:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    _check_api_rate_limit(request)
+    goal = storage.get_goal(goal_id)
+    if not goal or goal.user_id != user.id:
+        raise HTTPException(status_code=404, detail="Goal not found")
+    body = await request.json()
+    text = body.get("text", "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="Text is required")
+    parsed = nlp_input.parse_task_text(text)
+    task = Task(
+        goal_id=goal_id, title=parsed.get("title", text),
+        description=body.get("description", ""),
+        estimated_minutes=parsed.get("estimated_minutes", 30),
+        due_date=parsed.get("due_date", ""),
+        depends_on=json.dumps(parsed.get("depends_on", [])),
+        tags=",".join(parsed.get("tags", [])),
+    )
+    task = storage.create_task(task)
+    return {"task": task.to_dict(), "parsed_from": parsed}
+
+
 # ─── ASGI app for deployment ──────────────────────────────────────────────────
 # When BASE_PATH is set (e.g., "/teb"), wrap the app so it handles requests
 # routed through a reverse proxy at that sub-path.
