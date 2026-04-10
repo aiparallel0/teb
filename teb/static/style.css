@@ -2578,3 +2578,55 @@ html {
   .roi-summary-cards { grid-template-columns: repeat(2, 1fr); }
   .roi-bar-label { min-width: 60px; }
 }
+
+/* ─── View Switcher (WP-03) ──────────────────────────────────────────────── */
+.view-switcher { display: flex; gap: 4px; margin-bottom: 16px; }
+.view-switcher button { padding: 6px 14px; border: 1px solid #d1d5db; border-radius: 6px; background: #fff; cursor: pointer; font-size: 13px; transition: all 0.15s; }
+.view-switcher button.active { background: #2563eb; color: #fff; border-color: #2563eb; }
+.view-switcher button:hover:not(.active) { background: #f3f4f6; }
+
+/* ─── Kanban Board ──────────────────────────────────────────────────────── */
+.kanban-board { display: flex; gap: 12px; overflow-x: auto; padding-bottom: 8px; min-height: 300px; }
+.kanban-column { flex: 1; min-width: 200px; max-width: 300px; background: #f9fafb; border-radius: 8px; padding: 8px; }
+.kanban-column-header { display: flex; justify-content: space-between; align-items: center; padding: 8px; margin-bottom: 8px; border-radius: 4px; background: #fff; }
+.kanban-column-title { font-weight: 600; font-size: 13px; }
+.kanban-column-count { background: #e5e7eb; border-radius: 10px; padding: 2px 8px; font-size: 12px; }
+.kanban-card { background: #fff; border: 1px solid #e5e7eb; border-radius: 6px; padding: 10px; margin-bottom: 8px; cursor: pointer; transition: box-shadow 0.15s; }
+.kanban-card:hover { box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
+.kanban-card-title { font-size: 13px; font-weight: 500; margin-bottom: 6px; }
+.kanban-card-meta { display: flex; gap: 8px; font-size: 11px; color: #6b7280; }
+.kanban-card-tags { margin-top: 6px; display: flex; gap: 4px; flex-wrap: wrap; }
+.tag { background: #e0e7ff; color: #3730a3; padding: 1px 6px; border-radius: 4px; font-size: 11px; }
+.due-date { color: #9333ea; }
+.est-time { color: #6b7280; }
+
+/* ─── Timeline View ─────────────────────────────────────────────────────── */
+.timeline-view { display: flex; flex-direction: column; gap: 6px; }
+.timeline-row { display: flex; align-items: center; gap: 12px; }
+.timeline-label { width: 220px; min-width: 220px; display: flex; justify-content: space-between; align-items: center; font-size: 13px; }
+.timeline-task-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 160px; }
+.timeline-task-status { font-size: 10px; padding: 1px 6px; border-radius: 4px; background: #f3f4f6; }
+.timeline-bar-container { flex: 1; background: #f3f4f6; border-radius: 4px; height: 28px; position: relative; }
+.timeline-bar { height: 100%; border-radius: 4px; display: flex; align-items: center; padding-left: 8px; min-width: 40px; transition: width 0.3s; }
+.timeline-bar-text { color: #fff; font-size: 11px; font-weight: 500; }
+.status-todo { color: #6b7280; } .status-in_progress { color: #3b82f6; }
+.status-executing { color: #f59e0b; } .status-done { color: #10b981; }
+.status-failed { color: #ef4444; } .status-skipped { color: #9ca3af; }
+
+/* ─── Calendar View ─────────────────────────────────────────────────────── */
+.calendar-view { max-width: 900px; }
+.calendar-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+.cal-month-title { font-size: 18px; font-weight: 600; }
+.cal-nav { background: none; border: 1px solid #d1d5db; border-radius: 4px; padding: 4px 10px; cursor: pointer; }
+.cal-nav:hover { background: #f3f4f6; }
+.calendar-day-names { display: grid; grid-template-columns: repeat(7, 1fr); text-align: center; font-size: 12px; font-weight: 600; color: #6b7280; margin-bottom: 4px; }
+.calendar-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 2px; }
+.calendar-cell { border: 1px solid #e5e7eb; border-radius: 4px; min-height: 80px; padding: 4px; background: #fff; }
+.calendar-cell.empty { border: none; background: transparent; }
+.calendar-day-number { font-size: 12px; font-weight: 500; margin-bottom: 4px; }
+.calendar-day-number.today { background: #2563eb; color: #fff; border-radius: 50%; width: 22px; height: 22px; display: flex; align-items: center; justify-content: center; }
+.calendar-day-tasks { display: flex; flex-direction: column; gap: 2px; }
+.calendar-task { font-size: 10px; padding: 2px 4px; border-radius: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; background: #f0f4ff; }
+.calendar-task.status-done { background: #dcfce7; color: #166534; }
+.calendar-task.status-in_progress { background: #dbeafe; color: #1e40af; }
+.calendar-task.status-failed { background: #fee2e2; color: #991b1b; }
