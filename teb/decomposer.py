@@ -902,7 +902,7 @@ def _build_context_for_ai(goal: Goal) -> str:
     # 1. User profile context
     if goal.user_id:
         try:
-            profile = _storage.get_user_profile(goal.user_id)
+            profile = _storage.get_or_create_profile(goal.user_id)
             if profile:
                 profile_lines = []
                 if profile.skills:

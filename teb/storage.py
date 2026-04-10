@@ -2349,7 +2349,8 @@ def get_goal_roi(goal_id: int) -> dict:
         if total_spent > 0:
             roi_percent = round(((total_earned - total_spent) / total_spent) * 100, 1)
         else:
-            roi_percent = 0.0 if total_earned == 0 else float("inf")
+            # No spending: ROI is N/A; use None for JSON safety (inf is not JSON-serializable)
+            roi_percent = None if total_earned > 0 else 0.0
 
         # Budget utilization
         budgets = con.execute(
@@ -2429,7 +2430,7 @@ def get_user_roi_summary(user_id: int) -> dict:
     if total_spent > 0:
         overall_roi = round(((total_earned - total_spent) / total_spent) * 100, 1)
     else:
-        overall_roi = 0.0 if total_earned == 0 else float("inf")
+        overall_roi = 0.0 if total_earned == 0 else None
 
     return {
         "total_spent": round(total_spent, 2),
@@ -2547,15 +2548,16 @@ def get_platform_patterns() -> dict:
 
 def _detect_goal_type(title: str, description: str) -> str:
     """Simple keyword-based goal type detection for aggregate stats."""
-    combined = f"{title} {description}".lower()
-    if any(w in combined for w in ("money", "earn", "income", "revenue", "freelanc", "sell", "profit")):
-        return "make_money_online"
-    if any(w in combined for w in ("learn", "study", "course", "skill", "tutorial")):
+    combined = f" {title} {description} ".lower()
+    # Check 'learn' before 'earn' since 'learn' contains 'earn'
+    if any(w in combined for w in (" learn ", " study ", " course ", " skill ", " tutorial ")):
         return "learn_skill"
-    if any(w in combined for w in ("fit", "exercise", "gym", "workout", "health", "weight")):
+    if any(w in combined for w in ("money", " earn ", "income", "revenue", "freelanc", " sell ", "profit")):
+        return "make_money_online"
+    if any(w in combined for w in (" fit ", "exercise", " gym ", "workout", "health", "weight")):
         return "get_fit"
-    if any(w in combined for w in ("build", "app", "website", "project", "develop", "code", "create")):
+    if any(w in combined for w in ("build", " app ", "website", "project", "develop", " code ", "create")):
         return "build_project"
-    if any(w in combined for w in ("write", "book", "blog", "content", "article")):
+    if any(w in combined for w in ("write", "book", " blog ", "content", "article")):
         return "write_book"
     return "generic"

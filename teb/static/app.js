@@ -1708,7 +1708,7 @@ async function loadRoiDashboard() {
     // Summary cards
     const cards = document.getElementById('roi-summary-cards');
     const roiClass = roi.net_profit >= 0 ? 'roi-positive' : 'roi-negative';
-    const roiDisplay = roi.roi_percent === Infinity ? '∞' : `${roi.roi_percent}%`;
+    const roiDisplay = roi.roi_percent === null ? '∞' : `${roi.roi_percent}%`;
     cards.innerHTML = `
       <div class="roi-card">
         <div class="roi-card-value roi-negative">$${roi.total_spent.toFixed(2)}</div>
