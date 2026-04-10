@@ -905,3 +905,220 @@ class AgentFlow:
             "status": self.status,
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }
+
+
+# ─── Time Tracking (WP-08) ──────────────────────────────────────────────────
+
+@dataclass
+class TimeEntry:
+    """Time tracking entry for a task."""
+    task_id: int
+    user_id: int
+    started_at: str = ""
+    ended_at: str = ""
+    duration_minutes: int = 0
+    note: str = ""
+    id: Optional[int] = None
+    created_at: Optional[datetime] = None
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "task_id": self.task_id,
+            "user_id": self.user_id,
+            "started_at": self.started_at or None,
+            "ended_at": self.ended_at or None,
+            "duration_minutes": self.duration_minutes,
+            "note": self.note,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+# ─── Task Recurrence (WP-10) ────────────────────────────────────────────────
+
+@dataclass
+class RecurrenceRule:
+    """Repeating task rule — daily, weekly, or monthly."""
+    task_id: int
+    frequency: str = "weekly"          # daily | weekly | monthly
+    interval: int = 1                  # every N frequency units
+    next_due: str = ""                 # ISO date for next occurrence
+    end_date: str = ""                 # optional ISO date to stop recurrence
+    id: Optional[int] = None
+    created_at: Optional[datetime] = None
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "task_id": self.task_id,
+            "frequency": self.frequency,
+            "interval": self.interval,
+            "next_due": self.next_due or None,
+            "end_date": self.end_date or None,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+# ─── Goal Collaboration (WP-11) ─────────────────────────────────────────────
+
+@dataclass
+class GoalCollaborator:
+    """User collaboration on a shared goal."""
+    goal_id: int
+    user_id: int
+    role: str = "viewer"               # viewer | editor | admin
+    id: Optional[int] = None
+    created_at: Optional[datetime] = None
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "goal_id": self.goal_id,
+            "user_id": self.user_id,
+            "role": self.role,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+# ─── Custom Fields (WP-12) ──────────────────────────────────────────────────
+
+@dataclass
+class CustomField:
+    """User-defined key-value metadata on a task."""
+    task_id: int
+    field_name: str
+    field_value: str = ""
+    field_type: str = "text"           # text | number | date | url
+    id: Optional[int] = None
+    created_at: Optional[datetime] = None
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "task_id": self.task_id,
+            "field_name": self.field_name,
+            "field_value": self.field_value,
+            "field_type": self.field_type,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+# ─── Goal Progress Snapshots (WP-14) ────────────────────────────────────────
+
+@dataclass
+class ProgressSnapshot:
+    """Periodic snapshot of goal completion percentage."""
+    goal_id: int
+    total_tasks: int = 0
+    completed_tasks: int = 0
+    percentage: float = 0.0
+    id: Optional[int] = None
+    captured_at: Optional[datetime] = None
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "goal_id": self.goal_id,
+            "total_tasks": self.total_tasks,
+            "completed_tasks": self.completed_tasks,
+            "percentage": self.percentage,
+            "captured_at": self.captured_at.isoformat() if self.captured_at else None,
+        }
+
+
+# ─── Notification Preferences (WP-16) ───────────────────────────────────────
+
+@dataclass
+class NotificationPreference:
+    """Per-user notification settings."""
+    user_id: int
+    channel: str = "in_app"            # in_app | email | slack | telegram
+    event_type: str = "all"            # all | task_completed | goal_completed | mention | nudge
+    enabled: bool = True
+    id: Optional[int] = None
+    created_at: Optional[datetime] = None
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "user_id": self.user_id,
+            "channel": self.channel,
+            "event_type": self.event_type,
+            "enabled": self.enabled,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+# ─── API Key Management (WP-17) ─────────────────────────────────────────────
+
+@dataclass
+class PersonalApiKey:
+    """Personal API key for programmatic access."""
+    user_id: int
+    name: str
+    key_hash: str = ""
+    key_prefix: str = ""               # first 8 chars for identification
+    last_used_at: str = ""
+    id: Optional[int] = None
+    created_at: Optional[datetime] = None
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "user_id": self.user_id,
+            "name": self.name,
+            "key_prefix": self.key_prefix,
+            "last_used_at": self.last_used_at or None,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+# ─── Task Blockers (WP-19) ──────────────────────────────────────────────────
+
+@dataclass
+class TaskBlocker:
+    """Explicit blocker on a task with resolution tracking."""
+    task_id: int
+    description: str
+    blocker_type: str = "internal"     # internal | external | dependency | resource
+    status: str = "open"               # open | resolved
+    resolved_at: str = ""
+    id: Optional[int] = None
+    created_at: Optional[datetime] = None
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "task_id": self.task_id,
+            "description": self.description,
+            "blocker_type": self.blocker_type,
+            "status": self.status,
+            "resolved_at": self.resolved_at or None,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+# ─── Dashboard Widgets (WP-20) ──────────────────────────────────────────────
+
+@dataclass
+class DashboardWidget:
+    """User-configurable dashboard widget."""
+    user_id: int
+    widget_type: str                   # progress_chart | recent_tasks | streak | xp_bar | activity_feed | calendar
+    position: int = 0
+    config_json: str = "{}"
+    enabled: bool = True
+    id: Optional[int] = None
+    created_at: Optional[datetime] = None
+
+    def to_dict(self) -> dict:
+        import json as _json
+        return {
+            "id": self.id,
+            "user_id": self.user_id,
+            "widget_type": self.widget_type,
+            "position": self.position,
+            "config": _json.loads(self.config_json) if self.config_json else {},
+            "enabled": self.enabled,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
