@@ -32,6 +32,7 @@ class Goal:
     description: str
     id: Optional[int] = None
     user_id: Optional[int] = None     # FK to users; None for legacy/unscoped goals
+    parent_goal_id: Optional[int] = None  # FK to goals; None for top-level goals
     status: str = "drafting"          # drafting | clarifying | decomposed | in_progress | done
     answers: dict = field(default_factory=dict)
     auto_execute: bool = False        # when True, tasks are auto-picked by the execution loop
@@ -42,6 +43,7 @@ class Goal:
         return {
             "id": self.id,
             "user_id": self.user_id,
+            "parent_goal_id": self.parent_goal_id,
             "title": self.title,
             "description": self.description,
             "status": self.status,
@@ -502,4 +504,191 @@ class MessagingConfig:
             "user_id": self.user_id,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+
+# ─── Goal Milestone ──────────────────────────────────────────────────────────
+
+@dataclass
+class Milestone:
+    """A measurable milestone within a goal hierarchy."""
+    goal_id: int
+    title: str
+    target_metric: str = ""
+    target_value: float = 0.0
+    current_value: float = 0.0
+    deadline: str = ""
+    status: str = "pending"            # pending | in_progress | achieved | missed
+    id: Optional[int] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "goal_id": self.goal_id,
+            "title": self.title,
+            "target_metric": self.target_metric,
+            "target_value": self.target_value,
+            "current_value": self.current_value,
+            "deadline": self.deadline,
+            "status": self.status,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+
+# ─── Agent Goal Memory ──────────────────────────────────────────────────────
+
+@dataclass
+class AgentGoalMemory:
+    """Per-goal working memory for a specialist agent — persists across invocations."""
+    agent_type: str
+    goal_id: int
+    context_json: str = "{}"
+    summary: str = ""
+    invocation_count: int = 0
+    id: Optional[int] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "agent_type": self.agent_type,
+            "goal_id": self.goal_id,
+            "context_json": self.context_json,
+            "summary": self.summary,
+            "invocation_count": self.invocation_count,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+
+# ─── Audit Event ─────────────────────────────────────────────────────────────
+
+@dataclass
+class AuditEvent:
+    """Immutable audit trail event for full lifecycle tracing."""
+    goal_id: Optional[int]
+    event_type: str                    # goal_created | clarifying_answered | decomposed |
+                                       # task_assigned | agent_invoked | api_called |
+                                       # result_captured | outcome_measured | milestone_achieved |
+                                       # spending_approved | spending_denied | template_exported
+    actor_type: str = "system"         # human | agent | system
+    actor_id: str = ""                 # user_id, agent_type, or "system"
+    context_json: str = "{}"           # arbitrary context for the event
+    id: Optional[int] = None
+    created_at: Optional[datetime] = None
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "goal_id": self.goal_id,
+            "event_type": self.event_type,
+            "actor_type": self.actor_type,
+            "actor_id": self.actor_id,
+            "context_json": self.context_json,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+# ─── Goal Template ───────────────────────────────────────────────────────────
+
+@dataclass
+class GoalTemplate:
+    """A shareable goal template — sanitized success path for re-use."""
+    title: str
+    description: str = ""
+    goal_type: str = "generic"
+    category: str = "general"
+    skill_level: str = "any"           # beginner | intermediate | advanced | any
+    tasks_json: str = "[]"             # serialized task list template
+    milestones_json: str = "[]"        # serialized milestone template
+    services_json: str = "[]"          # recommended services
+    outcome_type: str = ""             # what kind of outcome this produces
+    estimated_days: int = 0
+    rating_sum: float = 0.0
+    rating_count: int = 0
+    times_used: int = 0
+    source_goal_id: Optional[int] = None
+    author_id: Optional[int] = None
+    id: Optional[int] = None
+    created_at: Optional[datetime] = None
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "title": self.title,
+            "description": self.description,
+            "goal_type": self.goal_type,
+            "category": self.category,
+            "skill_level": self.skill_level,
+            "tasks_json": self.tasks_json,
+            "milestones_json": self.milestones_json,
+            "services_json": self.services_json,
+            "outcome_type": self.outcome_type,
+            "estimated_days": self.estimated_days,
+            "rating": round(self.rating_sum / self.rating_count, 1) if self.rating_count > 0 else 0,
+            "rating_count": self.rating_count,
+            "times_used": self.times_used,
+            "source_goal_id": self.source_goal_id,
+            "author_id": self.author_id,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+# ─── Execution Context (Sandbox) ─────────────────────────────────────────────
+
+@dataclass
+class ExecutionContext:
+    """Isolated execution sandbox for a goal."""
+    goal_id: int
+    browser_profile_dir: str = ""
+    temp_dir: str = ""
+    credential_scope: str = "[]"       # JSON array of credential IDs allowed
+    status: str = "active"             # active | completed | cleaned_up
+    id: Optional[int] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "goal_id": self.goal_id,
+            "browser_profile_dir": self.browser_profile_dir,
+            "temp_dir": self.temp_dir,
+            "credential_scope": self.credential_scope,
+            "status": self.status,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+
+# ─── Plugin Manifest ─────────────────────────────────────────────────────────
+
+@dataclass
+class PluginManifest:
+    """Registered execution plugin."""
+    name: str
+    version: str = "0.1.0"
+    description: str = ""
+    task_types: str = "[]"             # JSON array of task type strings this plugin handles
+    required_credentials: str = "[]"   # JSON array of credential type strings needed
+    module_path: str = ""              # Python import path or file path
+    enabled: bool = True
+    id: Optional[int] = None
+    created_at: Optional[datetime] = None
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "name": self.name,
+            "version": self.version,
+            "description": self.description,
+            "task_types": self.task_types,
+            "required_credentials": self.required_credentials,
+            "module_path": self.module_path,
+            "enabled": self.enabled,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
         }
