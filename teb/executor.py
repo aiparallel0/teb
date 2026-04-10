@@ -43,6 +43,8 @@ class ExecutionStep:
     headers: Dict[str, str]
     body: Optional[Dict[str, Any]]
     description: str     # human-readable explanation
+    reversible: bool = False         # whether this step can be rolled back
+    rollback_plan: str = ""          # JSON description of how to undo this step
 
     def to_dict(self) -> dict:
         return {
@@ -52,6 +54,8 @@ class ExecutionStep:
             "headers": {k: v for k, v in self.headers.items()},
             "body": self.body,
             "description": self.description,
+            "reversible": self.reversible,
+            "rollback_plan": self.rollback_plan,
         }
 
 

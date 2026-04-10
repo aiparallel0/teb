@@ -28,8 +28,11 @@ from teb.models import (
     SpendingRequest,
     SuccessPath,
     Task,
+    TaskArtifact,
+    TaskComment,
     User,
     UserProfile,
+    WebhookConfig,
 )
 
 _DB_PATH: Optional[str] = None
@@ -625,6 +628,64 @@ def _run_migrations(con: sqlite3.Connection) -> None:
         )
     """)
 
+    # ─── Bridging Plan Phase 1: Usability Foundations ──────────────────────
+
+    # tasks.due_date, tasks.depends_on, tasks.tags (Phase 1, Step 1+2)
+    if not _has_column("tasks", "due_date"):
+        con.execute("ALTER TABLE tasks ADD COLUMN due_date TEXT NOT NULL DEFAULT ''")
+    if not _has_column("tasks", "depends_on"):
+        con.execute("ALTER TABLE tasks ADD COLUMN depends_on TEXT NOT NULL DEFAULT '[]'")
+    if not _has_column("tasks", "tags"):
+        con.execute("ALTER TABLE tasks ADD COLUMN tags TEXT NOT NULL DEFAULT ''")
+
+    # goals.tags (Phase 1, Step 2)
+    if not _has_column("goals", "tags"):
+        con.execute("ALTER TABLE goals ADD COLUMN tags TEXT NOT NULL DEFAULT ''")
+
+    # task_comments table (Phase 1, Step 3)
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS task_comments (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            task_id         INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+            content         TEXT    NOT NULL,
+            author_type     TEXT    NOT NULL DEFAULT 'system',
+            author_id       TEXT    NOT NULL DEFAULT '',
+            created_at      TEXT    NOT NULL
+        )
+    """)
+    con.execute("CREATE INDEX IF NOT EXISTS idx_task_comments_task ON task_comments(task_id, created_at ASC)")
+
+    # task_artifacts table (Phase 1, Step 4)
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS task_artifacts (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            task_id         INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+            artifact_type   TEXT    NOT NULL,
+            title           TEXT    NOT NULL DEFAULT '',
+            content_url     TEXT    NOT NULL DEFAULT '',
+            metadata_json   TEXT    NOT NULL DEFAULT '{}',
+            created_at      TEXT    NOT NULL
+        )
+    """)
+    con.execute("CREATE INDEX IF NOT EXISTS idx_task_artifacts_task ON task_artifacts(task_id, created_at ASC)")
+
+    # ─── Bridging Plan Phase 2: Webhooks for external systems ─────────────
+
+    # webhook_configs table (Phase 2, Step 7)
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS webhook_configs (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id         INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            url             TEXT    NOT NULL,
+            events          TEXT    NOT NULL DEFAULT '[]',
+            secret          TEXT    NOT NULL DEFAULT '',
+            enabled         INTEGER NOT NULL DEFAULT 1,
+            created_at      TEXT    NOT NULL,
+            updated_at      TEXT    NOT NULL
+        )
+    """)
+    con.execute("CREATE INDEX IF NOT EXISTS idx_webhook_configs_user ON webhook_configs(user_id)")
+
 
 # ─── Credential Encryption ───────────────────────────────────────────────────
 
@@ -853,6 +914,7 @@ def _row_to_goal(row: sqlite3.Row) -> Goal:
     g.user_id = row["user_id"] if "user_id" in row.keys() else None
     g.parent_goal_id = row["parent_goal_id"] if "parent_goal_id" in row.keys() else None
     g.auto_execute = bool(row["auto_execute"]) if "auto_execute" in row.keys() else False
+    g.tags = row["tags"] if "tags" in row.keys() else ""
     g.created_at = datetime.fromisoformat(row["created_at"])
     g.updated_at = datetime.fromisoformat(row["updated_at"])
     return g
@@ -862,10 +924,10 @@ def create_goal(goal: Goal) -> Goal:
     now = datetime.now(timezone.utc).isoformat()
     with _conn() as con:
         cur = con.execute(
-            "INSERT INTO goals (user_id, parent_goal_id, title, description, status, answers, auto_execute, created_at, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO goals (user_id, parent_goal_id, title, description, status, answers, auto_execute, tags, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (goal.user_id, goal.parent_goal_id, goal.title, goal.description, goal.status,
-             json.dumps(goal.answers), int(goal.auto_execute), now, now),
+             json.dumps(goal.answers), int(goal.auto_execute), goal.tags, now, now),
         )
         goal.id = cur.lastrowid
         goal.created_at = datetime.fromisoformat(now)
@@ -898,9 +960,9 @@ def update_goal(goal: Goal) -> Goal:
     now = datetime.now(timezone.utc).isoformat()
     with _conn() as con:
         con.execute(
-            "UPDATE goals SET title=?, description=?, status=?, answers=?, auto_execute=?, updated_at=? WHERE id=?",
+            "UPDATE goals SET title=?, description=?, status=?, answers=?, auto_execute=?, tags=?, updated_at=? WHERE id=?",
             (goal.title, goal.description, goal.status, json.dumps(goal.answers),
-             int(goal.auto_execute), now, goal.id),
+             int(goal.auto_execute), goal.tags, now, goal.id),
         )
     goal.updated_at = datetime.fromisoformat(now)
     return goal
@@ -919,6 +981,9 @@ def _row_to_task(row: sqlite3.Row) -> Task:
         status=row["status"],
         order_index=row["order_index"],
     )
+    t.due_date = row["due_date"] if "due_date" in row.keys() else ""
+    t.depends_on = row["depends_on"] if "depends_on" in row.keys() else "[]"
+    t.tags = row["tags"] if "tags" in row.keys() else ""
     t.created_at = datetime.fromisoformat(row["created_at"])
     t.updated_at = datetime.fromisoformat(row["updated_at"])
     return t
@@ -930,10 +995,12 @@ def create_task(task: Task) -> Task:
     with _conn() as con:
         cur = con.execute(
             "INSERT INTO tasks (goal_id, parent_id, title, description, estimated_minutes, "
-            "status, order_index, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "status, order_index, due_date, depends_on, tags, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 task.goal_id, task.parent_id, task.title, task.description,
-                task.estimated_minutes, task.status, task.order_index, now, now,
+                task.estimated_minutes, task.status, task.order_index,
+                task.due_date, task.depends_on, task.tags, now, now,
             ),
         )
         task.id = cur.lastrowid
@@ -969,10 +1036,11 @@ def update_task(task: Task) -> Task:
     with _conn() as con:
         con.execute(
             "UPDATE tasks SET title=?, description=?, estimated_minutes=?, status=?, "
-            "order_index=?, parent_id=?, updated_at=? WHERE id=?",
+            "order_index=?, parent_id=?, due_date=?, depends_on=?, tags=?, updated_at=? WHERE id=?",
             (
                 task.title, task.description, task.estimated_minutes,
-                task.status, task.order_index, task.parent_id, now, task.id,
+                task.status, task.order_index, task.parent_id,
+                task.due_date, task.depends_on, task.tags, now, task.id,
             ),
         )
     task.updated_at = datetime.fromisoformat(now)
@@ -3140,3 +3208,254 @@ def _row_to_plugin(row) -> PluginManifest:
         module_path=row["module_path"], enabled=bool(row["enabled"]),
         created_at=datetime.fromisoformat(row["created_at"]),
     )
+
+
+# ─── Task Comments ───────────────────────────────────────────────────────────
+
+def create_task_comment(comment: TaskComment) -> TaskComment:
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        cur = con.execute(
+            "INSERT INTO task_comments (task_id, content, author_type, author_id, created_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (comment.task_id, comment.content, comment.author_type, comment.author_id, now),
+        )
+        comment.id = cur.lastrowid
+        comment.created_at = datetime.fromisoformat(now)
+    return comment
+
+
+def list_task_comments(task_id: int) -> List[TaskComment]:
+    with _conn() as con:
+        rows = con.execute(
+            "SELECT * FROM task_comments WHERE task_id = ? ORDER BY created_at ASC",
+            (task_id,),
+        ).fetchall()
+    return [_row_to_task_comment(r) for r in rows]
+
+
+def _row_to_task_comment(row: sqlite3.Row) -> TaskComment:
+    return TaskComment(
+        id=row["id"],
+        task_id=row["task_id"],
+        content=row["content"],
+        author_type=row["author_type"],
+        author_id=row["author_id"],
+        created_at=datetime.fromisoformat(row["created_at"]),
+    )
+
+
+def delete_task_comment(comment_id: int) -> None:
+    with _conn() as con:
+        con.execute("DELETE FROM task_comments WHERE id = ?", (comment_id,))
+
+
+# ─── Task Artifacts ──────────────────────────────────────────────────────────
+
+def create_task_artifact(artifact: TaskArtifact) -> TaskArtifact:
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        cur = con.execute(
+            "INSERT INTO task_artifacts (task_id, artifact_type, title, content_url, metadata_json, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (artifact.task_id, artifact.artifact_type, artifact.title,
+             artifact.content_url, artifact.metadata_json, now),
+        )
+        artifact.id = cur.lastrowid
+        artifact.created_at = datetime.fromisoformat(now)
+    return artifact
+
+
+def list_task_artifacts(task_id: int) -> List[TaskArtifact]:
+    with _conn() as con:
+        rows = con.execute(
+            "SELECT * FROM task_artifacts WHERE task_id = ? ORDER BY created_at ASC",
+            (task_id,),
+        ).fetchall()
+    return [_row_to_task_artifact(r) for r in rows]
+
+
+def _row_to_task_artifact(row: sqlite3.Row) -> TaskArtifact:
+    return TaskArtifact(
+        id=row["id"],
+        task_id=row["task_id"],
+        artifact_type=row["artifact_type"],
+        title=row["title"],
+        content_url=row["content_url"],
+        metadata_json=row["metadata_json"],
+        created_at=datetime.fromisoformat(row["created_at"]),
+    )
+
+
+def delete_task_artifact(artifact_id: int) -> None:
+    with _conn() as con:
+        con.execute("DELETE FROM task_artifacts WHERE id = ?", (artifact_id,))
+
+
+# ─── Webhook Configs ─────────────────────────────────────────────────────────
+
+def create_webhook_config(wh: WebhookConfig) -> WebhookConfig:
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        cur = con.execute(
+            "INSERT INTO webhook_configs (user_id, url, events, secret, enabled, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (wh.user_id, wh.url, wh.events, wh.secret, int(wh.enabled), now, now),
+        )
+        wh.id = cur.lastrowid
+        wh.created_at = datetime.fromisoformat(now)
+        wh.updated_at = datetime.fromisoformat(now)
+    return wh
+
+
+def list_webhook_configs(user_id: int) -> List[WebhookConfig]:
+    with _conn() as con:
+        rows = con.execute(
+            "SELECT * FROM webhook_configs WHERE user_id = ? ORDER BY created_at DESC",
+            (user_id,),
+        ).fetchall()
+    return [_row_to_webhook_config(r) for r in rows]
+
+
+def get_webhook_config(webhook_id: int) -> Optional[WebhookConfig]:
+    with _conn() as con:
+        row = con.execute("SELECT * FROM webhook_configs WHERE id = ?", (webhook_id,)).fetchone()
+    return _row_to_webhook_config(row) if row else None
+
+
+def update_webhook_config(wh: WebhookConfig) -> WebhookConfig:
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        con.execute(
+            "UPDATE webhook_configs SET url=?, events=?, secret=?, enabled=?, updated_at=? WHERE id=?",
+            (wh.url, wh.events, wh.secret, int(wh.enabled), now, wh.id),
+        )
+    wh.updated_at = datetime.fromisoformat(now)
+    return wh
+
+
+def delete_webhook_config(webhook_id: int) -> None:
+    with _conn() as con:
+        con.execute("DELETE FROM webhook_configs WHERE id = ?", (webhook_id,))
+
+
+def list_webhooks_for_event(user_id: int, event_type: str) -> List[WebhookConfig]:
+    """List enabled webhooks for a user that subscribe to a given event type."""
+    with _conn() as con:
+        rows = con.execute(
+            "SELECT * FROM webhook_configs WHERE user_id = ? AND enabled = 1",
+            (user_id,),
+        ).fetchall()
+    results = []
+    for row in rows:
+        wh = _row_to_webhook_config(row)
+        events = json.loads(wh.events) if wh.events else []
+        if not events or event_type in events:
+            results.append(wh)
+    return results
+
+
+def _row_to_webhook_config(row: sqlite3.Row) -> WebhookConfig:
+    return WebhookConfig(
+        id=row["id"],
+        user_id=row["user_id"],
+        url=row["url"],
+        events=row["events"],
+        secret=row["secret"],
+        enabled=bool(row["enabled"]),
+        created_at=datetime.fromisoformat(row["created_at"]),
+        updated_at=datetime.fromisoformat(row["updated_at"]),
+    )
+
+
+# ─── Task Search ─────────────────────────────────────────────────────────────
+
+def search_tasks(goal_id: Optional[int] = None, query: str = "",
+                 tags: Optional[str] = None, status: Optional[str] = None) -> List[Task]:
+    """Search tasks by title/description text, tags, and/or status."""
+    sql = "SELECT * FROM tasks WHERE 1=1"
+    params: list = []
+    if goal_id is not None:
+        sql += " AND goal_id = ?"
+        params.append(goal_id)
+    if query:
+        sql += " AND (title LIKE ? OR description LIKE ?)"
+        like = f"%{query}%"
+        params.extend([like, like])
+    if tags:
+        # Match any of the given tags (comma-separated search)
+        for tag in tags.split(","):
+            tag = tag.strip()
+            if tag:
+                sql += " AND tags LIKE ?"
+                params.append(f"%{tag}%")
+    if status:
+        sql += " AND status = ?"
+        params.append(status)
+    sql += " ORDER BY order_index ASC, id ASC"
+    with _conn() as con:
+        rows = con.execute(sql, params).fetchall()
+    return [_row_to_task(r) for r in rows]
+
+
+# ─── Dependency Graph Helpers ────────────────────────────────────────────────
+
+def get_task_dependents(task_id: int) -> List[Task]:
+    """Get all tasks that depend on the given task_id."""
+    with _conn() as con:
+        rows = con.execute("SELECT * FROM tasks ORDER BY order_index ASC, id ASC").fetchall()
+    result = []
+    for row in rows:
+        t = _row_to_task(row)
+        deps = json.loads(t.depends_on) if t.depends_on else []
+        if task_id in deps:
+            result.append(t)
+    return result
+
+
+def get_ready_tasks(goal_id: int) -> List[Task]:
+    """Get tasks that are ready to execute — status='todo' and all dependencies are 'done'."""
+    tasks = list_tasks(goal_id=goal_id)
+    done_ids = {t.id for t in tasks if t.status == "done"}
+    ready = []
+    for t in tasks:
+        if t.status != "todo":
+            continue
+        deps = json.loads(t.depends_on) if t.depends_on else []
+        if all(d in done_ids for d in deps):
+            ready.append(t)
+    return ready
+
+
+def validate_no_cycles(goal_id: int) -> Optional[str]:
+    """Check for dependency cycles in a goal's tasks. Returns error message or None."""
+    tasks = list_tasks(goal_id=goal_id)
+    task_map = {t.id: t for t in tasks}
+
+    # Build adjacency list
+    graph: dict = {}
+    for t in tasks:
+        deps = json.loads(t.depends_on) if t.depends_on else []
+        graph[t.id] = deps
+
+    # Topological sort with cycle detection
+    visited: Set[int] = set()
+    in_stack: Set[int] = set()
+
+    def _dfs(node: int) -> bool:
+        if node in in_stack:
+            return True  # cycle
+        if node in visited:
+            return False
+        visited.add(node)
+        in_stack.add(node)
+        for dep in graph.get(node, []):
+            if dep in task_map and _dfs(dep):
+                return True
+        in_stack.discard(node)
+        return False
+
+    for tid in graph:
+        if _dfs(tid):
+            return f"Dependency cycle detected involving task {tid}"
+    return None

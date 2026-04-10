@@ -36,6 +36,7 @@ class Goal:
     status: str = "drafting"          # drafting | clarifying | decomposed | in_progress | done
     answers: dict = field(default_factory=dict)
     auto_execute: bool = False        # when True, tasks are auto-picked by the execution loop
+    tags: str = ""                     # comma-separated tags for AI routing and categorization
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
@@ -49,6 +50,7 @@ class Goal:
             "status": self.status,
             "answers": self.answers,
             "auto_execute": self.auto_execute,
+            "tags": [t.strip() for t in self.tags.split(",") if t.strip()] if self.tags else [],
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
         }
@@ -64,10 +66,14 @@ class Task:
     parent_id: Optional[int] = None
     status: str = "todo"              # todo | in_progress | done | skipped | executing | failed
     order_index: int = 0
+    due_date: str = ""                 # ISO date string (e.g. "2025-06-15")
+    depends_on: str = "[]"             # JSON array of task IDs this task depends on
+    tags: str = ""                     # comma-separated tags for AI routing and categorization
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
     def to_dict(self) -> dict:
+        import json as _json
         return {
             "id": self.id,
             "goal_id": self.goal_id,
@@ -77,6 +83,9 @@ class Task:
             "estimated_minutes": self.estimated_minutes,
             "status": self.status,
             "order_index": self.order_index,
+            "due_date": self.due_date if self.due_date else None,
+            "depends_on": _json.loads(self.depends_on) if self.depends_on else [],
+            "tags": [t.strip() for t in self.tags.split(",") if t.strip()] if self.tags else [],
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
         }
@@ -691,4 +700,81 @@ class PluginManifest:
             "module_path": self.module_path,
             "enabled": self.enabled,
             "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+# ─── Task Comments (agent transparency) ─────────────────────────────────────
+
+@dataclass
+class TaskComment:
+    """A comment on a task — from a human, agent, or system."""
+    task_id: int
+    content: str
+    author_type: str = "system"        # human | agent | system
+    author_id: str = ""                # user_id, agent_type, or "system"
+    id: Optional[int] = None
+    created_at: Optional[datetime] = None
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "task_id": self.task_id,
+            "content": self.content,
+            "author_type": self.author_type,
+            "author_id": self.author_id,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+# ─── Task Artifacts (execution outputs) ─────────────────────────────────────
+
+@dataclass
+class TaskArtifact:
+    """A file, URL, screenshot, or code artifact produced during task execution."""
+    task_id: int
+    artifact_type: str                 # file | url | screenshot | code | api_response
+    title: str = ""
+    content_url: str = ""              # URL or file path to the artifact
+    metadata_json: str = "{}"          # additional metadata (size, mime type, etc.)
+    id: Optional[int] = None
+    created_at: Optional[datetime] = None
+
+    def to_dict(self) -> dict:
+        import json as _json
+        return {
+            "id": self.id,
+            "task_id": self.task_id,
+            "artifact_type": self.artifact_type,
+            "title": self.title,
+            "content_url": self.content_url,
+            "metadata": _json.loads(self.metadata_json) if self.metadata_json else {},
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+# ─── Webhook Configuration ──────────────────────────────────────────────────
+
+@dataclass
+class WebhookConfig:
+    """Webhook that fires on goal/task/milestone events for external systems."""
+    user_id: int
+    url: str
+    events: str = "[]"                 # JSON array of event types to listen for
+    secret: str = ""                   # shared secret for HMAC signature verification
+    enabled: bool = True
+    id: Optional[int] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+    def to_dict(self) -> dict:
+        import json as _json
+        return {
+            "id": self.id,
+            "user_id": self.user_id,
+            "url": self.url,
+            "events": _json.loads(self.events) if self.events else [],
+            "secret_set": bool(self.secret),
+            "enabled": self.enabled,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
         }

@@ -23,6 +23,7 @@ from teb.models import (
     AgentGoalMemory, ApiCredential, AuditEvent, BrowserAction, CheckIn,
     ExecutionLog, Goal, GoalTemplate, MessagingConfig, Milestone, NudgeEvent,
     OutcomeMetric, PluginManifest, SpendingBudget, SpendingRequest, Task,
+    TaskArtifact, TaskComment, WebhookConfig,
 )
 
 # ─── Logging ──────────────────────────────────────────────────────────────────
@@ -267,6 +268,7 @@ app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
 class GoalCreate(BaseModel):
     title: str
     description: str = ""
+    tags: Optional[str] = None  # comma-separated tags
 
 
 class TaskPatch(BaseModel):
@@ -274,6 +276,9 @@ class TaskPatch(BaseModel):
     notes: Optional[str] = None   # stored in description for simplicity
     title: Optional[str] = None
     order_index: Optional[int] = None
+    due_date: Optional[str] = None
+    depends_on: Optional[list] = None
+    tags: Optional[str] = None
 
 
 class TaskCreate(BaseModel):
@@ -282,6 +287,9 @@ class TaskCreate(BaseModel):
     description: str = ""
     estimated_minutes: int = 30
     parent_id: Optional[int] = None
+    due_date: Optional[str] = None
+    depends_on: Optional[list] = None
+    tags: Optional[str] = None
 
 
 class ClarifyAnswer(BaseModel):
@@ -591,6 +599,8 @@ async def create_goal(body: GoalCreate, request: Request):
     if not goal.title:
         raise HTTPException(status_code=422, detail="title must not be empty")
     goal.user_id = user_id
+    if body.tags:
+        goal.tags = body.tags
     goal = storage.create_goal(goal)
     return goal.to_dict()
 
@@ -820,6 +830,12 @@ async def create_task_manual(body: TaskCreate, request: Request):
         estimated_minutes=max(1, body.estimated_minutes),
         order_index=next_order,
     )
+    if body.due_date is not None:
+        task.due_date = body.due_date
+    if body.depends_on is not None:
+        task.depends_on = json.dumps(body.depends_on)
+    if body.tags is not None:
+        task.tags = body.tags
     task = storage.create_task(task)
     return task.to_dict()
 
@@ -846,6 +862,15 @@ async def update_task(task_id: int, body: TaskPatch, request: Request):
 
     if body.order_index is not None:
         task.order_index = body.order_index
+
+    if body.due_date is not None:
+        task.due_date = body.due_date
+
+    if body.depends_on is not None:
+        task.depends_on = json.dumps(body.depends_on)
+
+    if body.tags is not None:
+        task.tags = body.tags
 
     # Update the goal's status if all tasks are done
     task = storage.update_task(task)
@@ -3534,6 +3559,493 @@ async def match_plugins_for_task(request: Request,
     from teb import plugins as _plugins  # noqa: E402
     matches = _plugins.find_plugins_for_task(task_type)
     return {"plugins": [p.to_dict() for p in matches]}
+
+
+# ─── Task Comments (Phase 1, Step 3) ─────────────────────────────────────────
+
+@app.post("/api/tasks/{task_id}/comments", status_code=201)
+async def create_task_comment(task_id: int, request: Request):
+    uid = _require_user(request)
+    task = _get_task_for_user(task_id, uid)
+    body = await request.json()
+    content = str(body.get("content", "")).strip()
+    if not content:
+        raise HTTPException(status_code=422, detail="content must not be empty")
+    author_type = body.get("author_type", "human")
+    if author_type not in ("human", "agent", "system"):
+        raise HTTPException(status_code=422, detail="author_type must be human, agent, or system")
+    comment = TaskComment(
+        task_id=task_id,
+        content=content,
+        author_type=author_type,
+        author_id=body.get("author_id", str(uid)),
+    )
+    comment = storage.create_task_comment(comment)
+    return comment.to_dict()
+
+
+@app.get("/api/tasks/{task_id}/comments")
+async def list_task_comments(task_id: int, request: Request):
+    uid = _require_user(request)
+    _get_task_for_user(task_id, uid)
+    return [c.to_dict() for c in storage.list_task_comments(task_id)]
+
+
+@app.delete("/api/comments/{comment_id}", status_code=200)
+async def delete_task_comment_endpoint(comment_id: int, request: Request):
+    _require_user(request)
+    storage.delete_task_comment(comment_id)
+    return {"deleted": True}
+
+
+# ─── Task Artifacts (Phase 1, Step 4) ────────────────────────────────────────
+
+@app.post("/api/tasks/{task_id}/artifacts", status_code=201)
+async def create_task_artifact(task_id: int, request: Request):
+    uid = _require_user(request)
+    task = _get_task_for_user(task_id, uid)
+    body = await request.json()
+    artifact_type = str(body.get("artifact_type", "")).strip()
+    if artifact_type not in ("file", "url", "screenshot", "code", "api_response"):
+        raise HTTPException(status_code=422, detail="artifact_type must be file, url, screenshot, code, or api_response")
+    artifact = TaskArtifact(
+        task_id=task_id,
+        artifact_type=artifact_type,
+        title=str(body.get("title", "")),
+        content_url=str(body.get("content_url", "")),
+        metadata_json=json.dumps(body.get("metadata", {})),
+    )
+    artifact = storage.create_task_artifact(artifact)
+    return artifact.to_dict()
+
+
+@app.get("/api/tasks/{task_id}/artifacts")
+async def list_task_artifacts(task_id: int, request: Request):
+    uid = _require_user(request)
+    _get_task_for_user(task_id, uid)
+    return [a.to_dict() for a in storage.list_task_artifacts(task_id)]
+
+
+@app.delete("/api/artifacts/{artifact_id}", status_code=200)
+async def delete_task_artifact_endpoint(artifact_id: int, request: Request):
+    _require_user(request)
+    storage.delete_task_artifact(artifact_id)
+    return {"deleted": True}
+
+
+# ─── Task Search (Phase 1, Step 2 enhancement) ──────────────────────────────
+
+@app.get("/api/tasks/search")
+async def search_tasks(request: Request,
+                       goal_id: Optional[int] = Query(default=None),
+                       q: Optional[str] = Query(default=None),
+                       tags: Optional[str] = Query(default=None),
+                       status: Optional[str] = Query(default=None)):
+    uid = _require_user(request)
+    if goal_id:
+        _get_goal_for_user(goal_id, uid)
+    results = storage.search_tasks(goal_id=goal_id, query=q or "", tags=tags, status=status)
+    return [t.to_dict() for t in results]
+
+
+# ─── Dependency Graph (Phase 2, Step 5) ──────────────────────────────────────
+
+@app.get("/api/goals/{goal_id}/dependency-graph")
+async def get_dependency_graph(goal_id: int, request: Request):
+    """Get the dependency DAG for a goal's tasks."""
+    uid = _require_user(request)
+    _get_goal_for_user(goal_id, uid)
+    tasks = storage.list_tasks(goal_id=goal_id)
+    nodes = []
+    edges = []
+    for t in tasks:
+        nodes.append({"id": t.id, "title": t.title, "status": t.status})
+        deps = json.loads(t.depends_on) if t.depends_on else []
+        for dep_id in deps:
+            edges.append({"from": dep_id, "to": t.id})
+
+    cycle_error = storage.validate_no_cycles(goal_id)
+    return {
+        "nodes": nodes,
+        "edges": edges,
+        "has_cycles": cycle_error is not None,
+        "cycle_error": cycle_error,
+    }
+
+
+@app.get("/api/goals/{goal_id}/ready-tasks")
+async def get_ready_tasks(goal_id: int, request: Request):
+    """Get tasks ready to execute (all dependencies satisfied)."""
+    uid = _require_user(request)
+    _get_goal_for_user(goal_id, uid)
+    ready = storage.get_ready_tasks(goal_id)
+    return [t.to_dict() for t in ready]
+
+
+# ─── Execution Replay (Phase 2, Step 6) ──────────────────────────────────────
+
+@app.post("/api/tasks/{task_id}/replay")
+async def replay_task_execution(task_id: int, request: Request):
+    """Replay the last execution of a failed task."""
+    uid = _require_user(request)
+    task = _get_task_for_user(task_id, uid)
+    if task.status not in ("failed", "error"):
+        raise HTTPException(status_code=422, detail="Only failed tasks can be replayed")
+    task.status = "todo"
+    task = storage.update_task(task)
+    # Add a system comment about replay
+    comment = TaskComment(
+        task_id=task_id,
+        content="Task reset for replay after failure.",
+        author_type="system",
+        author_id="system",
+    )
+    storage.create_task_comment(comment)
+    return task.to_dict()
+
+
+# ─── Webhooks (Phase 2, Step 7) ──────────────────────────────────────────────
+
+@app.post("/api/webhooks", status_code=201)
+async def create_webhook(request: Request):
+    uid = _require_user(request)
+    body = await request.json()
+    url = str(body.get("url", "")).strip()
+    if not url:
+        raise HTTPException(status_code=422, detail="url is required")
+    from teb import security as _sec  # noqa: E402
+    if not _sec.is_safe_url(url):
+        raise HTTPException(status_code=422, detail="URL targets a private or disallowed address")
+    events = body.get("events", [])
+    if not isinstance(events, list):
+        raise HTTPException(status_code=422, detail="events must be a list")
+    wh = WebhookConfig(
+        user_id=uid,
+        url=url,
+        events=json.dumps(events),
+        secret=str(body.get("secret", "")),
+        enabled=bool(body.get("enabled", True)),
+    )
+    wh = storage.create_webhook_config(wh)
+    return wh.to_dict()
+
+
+@app.get("/api/webhooks")
+async def list_webhooks(request: Request):
+    uid = _require_user(request)
+    return [wh.to_dict() for wh in storage.list_webhook_configs(uid)]
+
+
+@app.patch("/api/webhooks/{webhook_id}")
+async def update_webhook(webhook_id: int, request: Request):
+    uid = _require_user(request)
+    wh = storage.get_webhook_config(webhook_id)
+    if not wh or wh.user_id != uid:
+        raise HTTPException(status_code=404, detail="Webhook not found")
+    body = await request.json()
+    if "url" in body:
+        url = str(body["url"]).strip()
+        from teb import security as _sec  # noqa: E402
+        if not _sec.is_safe_url(url):
+            raise HTTPException(status_code=422, detail="URL targets a private or disallowed address")
+        wh.url = url
+    if "events" in body:
+        wh.events = json.dumps(body["events"])
+    if "enabled" in body:
+        wh.enabled = bool(body["enabled"])
+    if "secret" in body:
+        wh.secret = str(body["secret"])
+    wh = storage.update_webhook_config(wh)
+    return wh.to_dict()
+
+
+@app.delete("/api/webhooks/{webhook_id}", status_code=200)
+async def delete_webhook(webhook_id: int, request: Request):
+    uid = _require_user(request)
+    wh = storage.get_webhook_config(webhook_id)
+    if not wh or wh.user_id != uid:
+        raise HTTPException(status_code=404, detail="Webhook not found")
+    storage.delete_webhook_config(webhook_id)
+    return {"deleted": True}
+
+
+# ─── Import Adapters (Phase 3, Step 9) ───────────────────────────────────────
+
+@app.post("/api/import/trello", status_code=201)
+async def import_trello_board(request: Request):
+    """Import a Trello board JSON export into teb goals and tasks."""
+    uid = _require_user(request)
+    body = await request.json()
+    board = body.get("board", {})
+    if not board or not isinstance(board, dict):
+        raise HTTPException(status_code=422, detail="board (Trello JSON export) is required")
+
+    board_name = board.get("name", "Imported Trello Board")
+    goal = Goal(title=board_name, description=board.get("desc", ""))
+    goal.user_id = uid
+    goal.tags = "imported,trello"
+    goal.status = "decomposed"
+    goal = storage.create_goal(goal)
+
+    tasks_created = []
+    lists_data = board.get("lists", [])
+    cards_data = board.get("cards", [])
+
+    # Map list IDs to names for tagging
+    list_names = {lst["id"]: lst.get("name", "") for lst in lists_data if not lst.get("closed")}
+
+    for idx, card in enumerate(cards_data):
+        if card.get("closed"):
+            continue
+        list_name = list_names.get(card.get("idList", ""), "")
+        status = "todo"
+        if list_name.lower() in ("done", "complete", "completed", "finished"):
+            status = "done"
+        elif list_name.lower() in ("in progress", "doing", "wip"):
+            status = "in_progress"
+
+        task = Task(
+            goal_id=goal.id,
+            title=card.get("name", f"Card {idx+1}"),
+            description=card.get("desc", ""),
+            status=status,
+            order_index=idx,
+            tags=f"trello,{list_name}" if list_name else "trello",
+        )
+        if card.get("due"):
+            task.due_date = card["due"][:10]  # extract date part
+        task = storage.create_task(task)
+        tasks_created.append(task)
+
+    return {
+        "goal": goal.to_dict(),
+        "tasks_imported": len(tasks_created),
+    }
+
+
+@app.post("/api/import/asana", status_code=201)
+async def import_asana_project(request: Request):
+    """Import an Asana project (simplified JSON) into teb goals and tasks."""
+    uid = _require_user(request)
+    body = await request.json()
+    project = body.get("project", {})
+    if not project or not isinstance(project, dict):
+        raise HTTPException(status_code=422, detail="project (Asana JSON) is required")
+
+    project_name = project.get("name", "Imported Asana Project")
+    goal = Goal(title=project_name, description=project.get("notes", ""))
+    goal.user_id = uid
+    goal.tags = "imported,asana"
+    goal.status = "decomposed"
+    goal = storage.create_goal(goal)
+
+    tasks_created = []
+    asana_tasks = project.get("tasks", [])
+
+    for idx, at in enumerate(asana_tasks):
+        completed = at.get("completed", False)
+        task = Task(
+            goal_id=goal.id,
+            title=at.get("name", f"Task {idx+1}"),
+            description=at.get("notes", ""),
+            status="done" if completed else "todo",
+            order_index=idx,
+            tags="asana",
+        )
+        if at.get("due_on"):
+            task.due_date = at["due_on"]
+        task = storage.create_task(task)
+        tasks_created.append(task)
+
+        # Import subtasks
+        for si, sub in enumerate(at.get("subtasks", [])):
+            sub_task = Task(
+                goal_id=goal.id,
+                parent_id=task.id,
+                title=sub.get("name", f"Subtask {si+1}"),
+                description=sub.get("notes", ""),
+                status="done" if sub.get("completed") else "todo",
+                order_index=si,
+                tags="asana",
+            )
+            sub_task = storage.create_task(sub_task)
+            tasks_created.append(sub_task)
+
+    return {
+        "goal": goal.to_dict(),
+        "tasks_imported": len(tasks_created),
+    }
+
+
+# ─── Adaptive Pacing (Phase 3, Step 10) ──────────────────────────────────────
+
+@app.get("/api/goals/{goal_id}/pacing")
+async def get_goal_pacing(goal_id: int, request: Request):
+    """Analyze user's pacing and suggest adjustments."""
+    uid = _require_user(request)
+    goal = _get_goal_for_user(goal_id, uid)
+    tasks = storage.list_tasks(goal_id=goal_id)
+    checkins = storage.list_check_ins(goal_id)
+
+    total = len(tasks)
+    done = sum(1 for t in tasks if t.status == "done")
+    failed = sum(1 for t in tasks if t.status == "failed")
+
+    # Analyze mood from recent check-ins
+    recent_moods = [c.mood for c in checkins[-5:]] if checkins else []
+    struggling = recent_moods.count("frustrated") + recent_moods.count("stuck")
+    thriving = recent_moods.count("positive")
+
+    recommendation = "on_track"
+    suggestion = ""
+    if total > 0:
+        fail_rate = failed / total
+        if struggling >= 2 or fail_rate > 0.3:
+            recommendation = "break_down"
+            suggestion = "Consider breaking remaining tasks into smaller, more manageable steps."
+        elif thriving >= 3 and done > total * 0.5:
+            recommendation = "consolidate"
+            suggestion = "Great progress! Consider consolidating similar remaining tasks."
+
+    return {
+        "goal_id": goal_id,
+        "total_tasks": total,
+        "done": done,
+        "failed": failed,
+        "completion_pct": round(done / total * 100) if total > 0 else 0,
+        "recent_moods": recent_moods,
+        "recommendation": recommendation,
+        "suggestion": suggestion,
+    }
+
+
+# ─── Outcome Attribution (Phase 3, Step 11) ──────────────────────────────────
+
+@app.get("/api/goals/{goal_id}/impact")
+async def get_goal_impact(goal_id: int, request: Request):
+    """Trace which tasks/agents contributed most to goal outcomes."""
+    uid = _require_user(request)
+    goal = _get_goal_for_user(goal_id, uid)
+
+    tasks = storage.list_tasks(goal_id=goal_id)
+    metrics = storage.list_outcome_metrics(goal_id)
+    audit_events = storage.list_audit_events(goal_id=goal_id)
+    exec_logs: list = []
+    for t in tasks:
+        logs = storage.list_execution_logs(t.id)
+        for log in logs:
+            exec_logs.append({"task_id": t.id, "task_title": t.title, "log": log.to_dict()})
+
+    # Build impact attribution
+    agent_contributions: dict = {}
+    for evt in audit_events:
+        if evt.actor_type == "agent":
+            agent_contributions[evt.actor_id] = agent_contributions.get(evt.actor_id, 0) + 1
+
+    task_impact = []
+    for t in tasks:
+        if t.status == "done":
+            logs_count = sum(1 for el in exec_logs if el["task_id"] == t.id)
+            task_impact.append({
+                "task_id": t.id,
+                "title": t.title,
+                "executions": logs_count,
+            })
+
+    return {
+        "goal_id": goal_id,
+        "metrics": [m.to_dict() for m in metrics],
+        "agent_contributions": agent_contributions,
+        "task_impact": sorted(task_impact, key=lambda x: x["executions"], reverse=True),
+        "total_audit_events": len(audit_events),
+    }
+
+
+# ─── Sync Adapters (Phase 4, Step 13) ────────────────────────────────────────
+
+@app.post("/api/sync/trello/export")
+async def export_to_trello_format(request: Request):
+    """Export a goal as Trello-compatible JSON for import."""
+    uid = _require_user(request)
+    body = await request.json()
+    goal_id = body.get("goal_id")
+    if not goal_id:
+        raise HTTPException(status_code=422, detail="goal_id is required")
+    goal = _get_goal_for_user(goal_id, uid)
+    tasks = storage.list_tasks(goal_id=goal_id)
+
+    # Build Trello-compatible board structure
+    lists = [
+        {"id": "todo", "name": "To Do", "closed": False},
+        {"id": "in_progress", "name": "In Progress", "closed": False},
+        {"id": "done", "name": "Done", "closed": False},
+    ]
+    status_to_list = {
+        "todo": "todo", "in_progress": "in_progress", "executing": "in_progress",
+        "done": "done", "skipped": "done", "failed": "todo",
+    }
+    cards = []
+    for t in tasks:
+        card = {
+            "name": t.title,
+            "desc": t.description,
+            "idList": status_to_list.get(t.status, "todo"),
+            "closed": False,
+        }
+        if t.due_date:
+            card["due"] = t.due_date
+        cards.append(card)
+
+    return {
+        "name": goal.title,
+        "desc": goal.description,
+        "lists": lists,
+        "cards": cards,
+    }
+
+
+@app.post("/api/sync/asana/export")
+async def export_to_asana_format(request: Request):
+    """Export a goal as Asana-compatible JSON for import."""
+    uid = _require_user(request)
+    body = await request.json()
+    goal_id = body.get("goal_id")
+    if not goal_id:
+        raise HTTPException(status_code=422, detail="goal_id is required")
+    goal = _get_goal_for_user(goal_id, uid)
+    tasks = storage.list_tasks(goal_id=goal_id)
+
+    # Build Asana-compatible structure
+    asana_tasks = []
+    task_map: dict = {}
+    for t in tasks:
+        task_map[t.id] = t
+
+    top_level = [t for t in tasks if t.parent_id is None]
+    for t in top_level:
+        subtasks = [c for c in tasks if c.parent_id == t.id]
+        at = {
+            "name": t.title,
+            "notes": t.description,
+            "completed": t.status in ("done", "skipped"),
+            "subtasks": [
+                {
+                    "name": s.title,
+                    "notes": s.description,
+                    "completed": s.status in ("done", "skipped"),
+                }
+                for s in subtasks
+            ],
+        }
+        if t.due_date:
+            at["due_on"] = t.due_date
+        asana_tasks.append(at)
+
+    return {
+        "name": goal.title,
+        "notes": goal.description,
+        "tasks": asana_tasks,
+    }
 
 
 # ─── ASGI app for deployment ──────────────────────────────────────────────────
