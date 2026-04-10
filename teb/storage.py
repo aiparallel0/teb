@@ -6,13 +6,17 @@ from typing import Generator, List, Optional, Set
 
 from teb.config import get_db_path
 from teb.models import (
+    Achievement,
+    AgentFlow,
     AgentGoalMemory,
     AgentHandoff,
     AgentMessage,
+    AgentSchedule,
     ApiCredential,
     AuditEvent,
     BrowserAction,
     CheckIn,
+    ExecutionCheckpoint,
     ExecutionContext,
     ExecutionLog,
     Goal,
@@ -32,15 +36,8 @@ from teb.models import (
     TaskComment,
     User,
     UserProfile,
-    WebhookConfig,
-)
-
-from teb.models import (  # noqa: F811
-    Achievement,
-    AgentFlow,
-    AgentSchedule,
-    ExecutionCheckpoint,
     UserXP,
+    WebhookConfig,
 )
 
 _DB_PATH: Optional[str] = None

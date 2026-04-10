@@ -94,6 +94,8 @@ def parse_task_text(text: str) -> Dict[str, Any]:
     depends_on, remaining = _parse_depends_on(remaining)
     estimated_minutes, remaining = _parse_estimate(remaining)
     title = re.sub(r'\s+', ' ', remaining).strip().rstrip('.,;:')
+    if not title:
+        title = "Untitled Task"
     result: Dict[str, Any] = {"title": title}
     if due_date:
         result["due_date"] = due_date

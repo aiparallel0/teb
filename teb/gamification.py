@@ -16,6 +16,8 @@ logger = logging.getLogger(__name__)
 
 
 def xp_for_task(estimated_minutes: int) -> int:
+    if estimated_minutes < 0:
+        return 0
     if estimated_minutes <= 15:
         return 10
     if estimated_minutes <= 30:
