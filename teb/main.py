@@ -12,13 +12,13 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import FastAPI, Form, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from teb import agents, auth, browser, config, decomposer, deployer, executor, integrations, messaging, provisioning, storage
+from teb import agents, auth, browser, config, decomposer, deployer, executor, integrations, messaging, provisioning, storage, transcribe
 from teb.models import (
     ApiCredential, BrowserAction, CheckIn, ExecutionLog,
     Goal, MessagingConfig, NudgeEvent, OutcomeMetric,
@@ -351,7 +351,7 @@ class SpendingAction(BaseModel):
 
 
 class MessagingConfigCreate(BaseModel):
-    channel: str         # telegram | webhook
+    channel: str         # telegram | webhook | slack | discord | whatsapp
     config: dict = {}    # channel-specific config
     notify_nudges: bool = True
     notify_tasks: bool = True
@@ -1048,6 +1048,52 @@ async def create_checkin(goal_id: int, body: CheckInCreate, request: Request):
     return {"checkin": ci.to_dict(), "coaching": coaching}
 
 
+@app.post("/api/goals/{goal_id}/checkin/voice", status_code=201)
+async def create_voice_checkin(
+    goal_id: int,
+    request: Request,
+    audio: UploadFile,
+    blockers: str = Form(""),
+    mood: Optional[str] = Form(None),
+):
+    _check_api_rate_limit(request)
+    uid = _require_user(request)
+    _get_goal_for_user(goal_id, uid)
+
+    audio_bytes = await audio.read()
+    filename = audio.filename or "audio.wav"
+
+    try:
+        done_summary = transcribe.transcribe_audio(audio_bytes, filename)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+    if not done_summary and not blockers.strip():
+        raise HTTPException(
+            status_code=422,
+            detail="Transcription returned empty text and no blockers provided",
+        )
+
+    coaching = decomposer.analyze_checkin(done_summary, blockers)
+    stripped_mood = mood.strip() if mood else ""
+    detected_mood = stripped_mood if stripped_mood else coaching["mood_detected"]
+
+    ci = CheckIn(
+        goal_id=goal_id,
+        done_summary=done_summary,
+        blockers=blockers.strip(),
+        mood=detected_mood,
+        feedback=coaching["feedback"],
+    )
+    ci = storage.create_checkin(ci)
+
+    return {
+        "checkin": ci.to_dict(),
+        "coaching": coaching,
+        "transcription": done_summary,
+    }
+
+
 @app.get("/api/goals/{goal_id}/checkins")
 async def list_checkins(goal_id: int, request: Request, limit: Optional[int] = Query(default=None)):
     uid = _require_user(request)
@@ -1276,6 +1322,45 @@ async def list_goal_messages(goal_id: int, request: Request, agent: Optional[str
     goal = _get_goal_for_user(goal_id, uid)
     messages = storage.list_agent_messages(goal_id, agent_type=agent)
     return [m.to_dict() for m in messages]
+
+
+@app.get("/api/goals/{goal_id}/agent-activity")
+async def get_agent_activity(goal_id: int, request: Request):
+    """Get combined agent activity for a goal — handoffs, messages, and task map.
+
+    Returns a unified view of all agent orchestration activity, suitable
+    for rendering an agent activity timeline in the UI.
+    """
+    uid = _require_user(request)
+    goal = _get_goal_for_user(goal_id, uid)
+    handoffs = storage.list_handoffs(goal_id)
+    messages = storage.list_agent_messages(goal_id)
+    tasks = storage.list_tasks(goal_id=goal_id)
+
+    # Build agent summary
+    agent_types = set()
+    for h in handoffs:
+        agent_types.add(h.from_agent)
+        agent_types.add(h.to_agent)
+
+    # Map tasks to agents via handoffs
+    task_agent_map: dict[int, str] = {}
+    for h in handoffs:
+        if h.task_id is not None:
+            task_agent_map[h.task_id] = h.to_agent
+
+    return {
+        "goal_id": goal_id,
+        "agents_involved": sorted(agent_types),
+        "handoffs": [h.to_dict() for h in handoffs],
+        "messages": [m.to_dict() for m in messages],
+        "task_agent_map": task_agent_map,
+        "total_tasks_created": len(tasks),
+        "tasks_by_agent": {
+            agent: sum(1 for tid, a in task_agent_map.items() if a == agent)
+            for agent in agent_types
+        },
+    }
 
 
 # ─── Browser Automation ─────────────────────────────────────────────────────
@@ -1772,7 +1857,7 @@ async def create_messaging_config(body: MessagingConfigCreate, request: Request)
     import json as _json
     uid = _require_user(request)
 
-    valid_channels = {"telegram", "webhook"}
+    valid_channels = {"telegram", "webhook", "slack", "discord", "whatsapp"}
     if body.channel not in valid_channels:
         raise HTTPException(status_code=422, detail=f"channel must be one of {valid_channels}")
 
@@ -1786,6 +1871,22 @@ async def create_messaging_config(body: MessagingConfigCreate, request: Request)
     elif body.channel == "webhook":
         if "url" not in body.config:
             raise HTTPException(status_code=422, detail="Webhook config requires 'url'")
+    elif body.channel == "slack":
+        if "bot_token" not in body.config or "channel_id" not in body.config:
+            raise HTTPException(
+                status_code=422,
+                detail="Slack config requires 'bot_token' and 'channel_id'",
+            )
+    elif body.channel == "discord":
+        if "webhook_url" not in body.config:
+            raise HTTPException(status_code=422, detail="Discord config requires 'webhook_url'")
+    elif body.channel == "whatsapp":
+        _wa_required = {"access_token", "phone_number_id", "recipient"}
+        if not _wa_required.issubset(body.config):
+            raise HTTPException(
+                status_code=422,
+                detail="WhatsApp config requires 'access_token', 'phone_number_id', and 'recipient'",
+            )
 
     cfg = MessagingConfig(
         channel=body.channel,
@@ -2095,6 +2196,142 @@ async def telegram_webhook(body: TelegramUpdate, request: Request):
         "/deny <id> [reason] — deny a spending request"
     )
     return {"ok": True}
+
+
+# ─── Channel Webhook Endpoints ───────────────────────────────────────────────
+
+from teb.channels import route_command as _route_channel_command  # noqa: E402
+from teb.channels.slack import SlackChannel as _SlackChannel  # noqa: E402
+from teb.channels.discord import DiscordChannel as _DiscordChannel  # noqa: E402
+from teb.channels.whatsapp import WhatsAppChannel as _WhatsAppChannel  # noqa: E402
+
+
+@app.post("/api/channels/slack/webhook")
+async def slack_channel_webhook(request: Request):
+    """Inbound Slack webhook endpoint.
+
+    Handles Events API callbacks and slash commands, routing recognised
+    teb commands through the command router.
+    """
+    body_bytes = await request.body()
+
+    # Verify Slack signature when a signing secret is configured
+    slack = _SlackChannel()
+    timestamp = request.headers.get("x-slack-request-timestamp", "")
+    signature = request.headers.get("x-slack-signature", "")
+    if slack.signing_secret and not slack.verify_signature(body_bytes, timestamp, signature):
+        raise HTTPException(status_code=403, detail="Invalid Slack signature")
+
+    payload = await request.json()
+    parsed = slack.receive_command(payload)
+
+    # Handle URL verification challenge
+    if "challenge" in parsed:
+        return {"challenge": parsed["challenge"]}
+
+    text = parsed.get("text", "")
+    if not text:
+        return {"ok": True}
+
+    result = _route_channel_command(text, user_id=parsed.get("user_id"))
+
+    # Reply via Slack if we have a channel_id
+    channel_id = parsed.get("channel_id", "")
+    if channel_id and result.message:
+        slack.send_message(channel_id, result.message)
+
+    return {
+        "ok": True,
+        "command": result.command,
+        "success": result.success,
+        "message": result.message,
+    }
+
+
+@app.post("/api/channels/discord/webhook")
+async def discord_channel_webhook(request: Request):
+    """Inbound Discord interactions webhook endpoint.
+
+    Handles PING verification and application command interactions,
+    routing recognised teb commands through the command router.
+    """
+    body_bytes = await request.body()
+
+    discord = _DiscordChannel()
+    timestamp = request.headers.get("x-signature-timestamp", "")
+    signature = request.headers.get("x-signature-ed25519", "")
+    if discord.public_key and not discord.verify_signature(body_bytes, timestamp, signature):
+        raise HTTPException(status_code=401, detail="Invalid Discord signature")
+
+    payload = await request.json()
+    parsed = discord.receive_command(payload)
+
+    # PING response (type 1)
+    if parsed.get("type") == 1:
+        return {"type": 1}
+
+    text = parsed.get("text", "")
+    if not text:
+        return {"type": 4, "data": {"content": "No command received."}}
+
+    result = _route_channel_command(text, user_id=parsed.get("user_id"))
+
+    # Discord interaction response (type 4 = CHANNEL_MESSAGE_WITH_SOURCE)
+    return {
+        "type": 4,
+        "data": {"content": result.message or "Done."},
+    }
+
+
+@app.get("/api/channels/whatsapp/webhook")
+async def whatsapp_channel_webhook_verify(
+    request: Request,
+    hub_mode: str = Query("", alias="hub.mode"),
+    hub_token: str = Query("", alias="hub.verify_token"),
+    hub_challenge: str = Query("", alias="hub.challenge"),
+):
+    """WhatsApp webhook verification (GET).
+
+    Meta sends a GET request with hub.mode, hub.verify_token, and
+    hub.challenge to verify the webhook endpoint.
+    """
+    wa = _WhatsAppChannel()
+    challenge = wa.verify_webhook(hub_mode, hub_token, hub_challenge)
+    if challenge is not None:
+        from fastapi.responses import PlainTextResponse
+        return PlainTextResponse(content=challenge)
+    raise HTTPException(status_code=403, detail="Verification failed")
+
+
+@app.post("/api/channels/whatsapp/webhook")
+async def whatsapp_channel_webhook(request: Request):
+    """Inbound WhatsApp Cloud API webhook endpoint.
+
+    Parses incoming messages and routes recognised teb commands through
+    the command router.  Replies are sent back via the WhatsApp API.
+    """
+    payload = await request.json()
+
+    wa = _WhatsAppChannel()
+    parsed = wa.receive_command(payload)
+
+    text = parsed.get("text", "")
+    sender = parsed.get("user_id", "")
+    if not text:
+        return {"ok": True}
+
+    result = _route_channel_command(text, user_id=sender)
+
+    # Reply to the sender
+    if sender and result.message:
+        wa.send_message(sender, result.message)
+
+    return {
+        "ok": True,
+        "command": result.command,
+        "success": result.success,
+        "message": result.message,
+    }
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

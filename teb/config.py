@@ -70,6 +70,21 @@ AUTONOMOUS_EXECUTION_INTERVAL: int = int(os.getenv("TEB_AUTONOMOUS_EXECUTION_INT
 # Autopilot default threshold (max $ auto-approved per transaction)
 AUTOPILOT_DEFAULT_THRESHOLD: float = float(os.getenv("TEB_AUTOPILOT_DEFAULT_THRESHOLD", "50.0"))
 
+# ─── Channel adapters ────────────────────────────────────────────────────────
+
+# Slack
+SLACK_BOT_TOKEN: Optional[str] = os.getenv("TEB_SLACK_BOT_TOKEN")
+SLACK_SIGNING_SECRET: Optional[str] = os.getenv("TEB_SLACK_SIGNING_SECRET")
+
+# Discord
+DISCORD_WEBHOOK_URL: Optional[str] = os.getenv("TEB_DISCORD_WEBHOOK_URL")
+DISCORD_PUBLIC_KEY: Optional[str] = os.getenv("TEB_DISCORD_PUBLIC_KEY")
+
+# WhatsApp (Meta Cloud API)
+WHATSAPP_TOKEN: Optional[str] = os.getenv("TEB_WHATSAPP_TOKEN")
+WHATSAPP_PHONE_ID: Optional[str] = os.getenv("TEB_WHATSAPP_PHONE_ID")
+WHATSAPP_VERIFY_TOKEN: Optional[str] = os.getenv("TEB_WHATSAPP_VERIFY_TOKEN")
+
 
 def get_ai_provider() -> Optional[str]:
     """Resolve which AI provider to use. Returns 'anthropic', 'openai', or None."""

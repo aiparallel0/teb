@@ -1,13 +1,16 @@
 """
 External messaging integration.
 
-Sends notifications to users via Telegram bots or generic webhooks
-when important events occur (nudges, task completions, spending
-approval requests, check-in reminders).
+Sends notifications to users via Telegram bots, generic webhooks, or
+channel adapters (Slack, Discord, WhatsApp) when important events occur
+(nudges, task completions, spending approval requests, check-in reminders).
 
-Supports two channels:
-  - telegram: Uses Telegram Bot API to send messages to a chat
-  - webhook: Sends JSON POST to a user-configured URL
+Supports channels:
+  - telegram:  Uses Telegram Bot API to send messages to a chat
+  - webhook:   Sends JSON POST to a user-configured URL
+  - slack:     Uses Slack Web API via channel adapter
+  - discord:   Uses Discord webhook via channel adapter
+  - whatsapp:  Uses WhatsApp Cloud API via channel adapter
 
 Each channel is configured via MessagingConfig in the database.
 Multiple channels can be active simultaneously.
@@ -182,6 +185,51 @@ def _send_webhook(config: Dict[str, Any], event_type: str, message: str, data: D
     return False
 
 
+def _send_slack(config_data: dict[str, Any], message: str) -> bool:
+    """Send a message via Slack using the channel adapter."""
+    from teb.channels.slack import SlackChannel
+
+    bot_token = config_data.get("bot_token", "")
+    channel_id = config_data.get("channel_id", "")
+
+    if not bot_token or not channel_id:
+        logger.warning("Slack config missing bot_token or channel_id")
+        return False
+
+    adapter = SlackChannel(bot_token=bot_token)
+    return adapter.send_message(channel_id, message)
+
+
+def _send_discord(config_data: dict[str, Any], message: str) -> bool:
+    """Send a message via Discord using the channel adapter."""
+    from teb.channels.discord import DiscordChannel
+
+    webhook_url = config_data.get("webhook_url", "")
+
+    if not webhook_url:
+        logger.warning("Discord config missing webhook_url")
+        return False
+
+    adapter = DiscordChannel(webhook_url=webhook_url)
+    return adapter.send_message("", message)
+
+
+def _send_whatsapp(config_data: dict[str, Any], message: str) -> bool:
+    """Send a message via WhatsApp using the channel adapter."""
+    from teb.channels.whatsapp import WhatsAppChannel
+
+    access_token = config_data.get("access_token", "")
+    phone_number_id = config_data.get("phone_number_id", "")
+    recipient = config_data.get("recipient", "")
+
+    if not access_token or not phone_number_id or not recipient:
+        logger.warning("WhatsApp config missing access_token, phone_number_id, or recipient")
+        return False
+
+    adapter = WhatsAppChannel(access_token=access_token, phone_number_id=phone_number_id)
+    return adapter.send_message(recipient, message)
+
+
 # ─── Public API ──────────────────────────────────────────────────────────────
 
 def send_notification(
@@ -242,6 +290,12 @@ def send_notification(
             success = _send_telegram(config_data, message)
         elif cfg.channel == "webhook":
             success = _send_webhook(config_data, event_type, message, data)
+        elif cfg.channel == "slack":
+            success = _send_slack(config_data, message)
+        elif cfg.channel == "discord":
+            success = _send_discord(config_data, message)
+        elif cfg.channel == "whatsapp":
+            success = _send_whatsapp(config_data, message)
         else:
             logger.warning("Unknown messaging channel: %s", cfg.channel)
             continue
