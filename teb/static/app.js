@@ -518,6 +518,8 @@ async function showTasksScreen(goal, freshDecompose) {
   loadOutcomeMetrics();
   loadNudge();
   loadAutopilotStatus();
+  loadRoiDashboard();
+  loadPlatformInsights();
   showScreen('screen-tasks');
   // Default to drip mode
   setDripMode(true);
@@ -1692,6 +1694,206 @@ document.getElementById('btn-add-outcome').addEventListener('click', async () =>
     showError('error-tasks', e.message);
   }
 });
+
+// ─── ROI Dashboard ────────────────────────────────────────────────────────────
+
+async function loadRoiDashboard() {
+  if (!currentGoalId) return;
+  const panel = document.getElementById('roi-dashboard-panel');
+  if (!panel) return;
+
+  try {
+    const roi = await api.get(`/api/goals/${currentGoalId}/roi`);
+
+    // Summary cards
+    const cards = document.getElementById('roi-summary-cards');
+    const roiClass = roi.net_profit >= 0 ? 'roi-positive' : 'roi-negative';
+    const roiDisplay = roi.roi_percent === Infinity ? '∞' : `${roi.roi_percent}%`;
+    cards.innerHTML = `
+      <div class="roi-card">
+        <div class="roi-card-value roi-negative">$${roi.total_spent.toFixed(2)}</div>
+        <div class="roi-card-label">Total Spent</div>
+      </div>
+      <div class="roi-card">
+        <div class="roi-card-value roi-positive">$${roi.total_earned.toFixed(2)}</div>
+        <div class="roi-card-label">Total Earned</div>
+      </div>
+      <div class="roi-card">
+        <div class="roi-card-value ${roiClass}">$${roi.net_profit.toFixed(2)}</div>
+        <div class="roi-card-label">Net Profit</div>
+      </div>
+      <div class="roi-card">
+        <div class="roi-card-value ${roiClass}">${roiDisplay}</div>
+        <div class="roi-card-label">ROI</div>
+      </div>
+      ${roi.pending_requests > 0 ? `<div class="roi-card roi-card-warn">
+        <div class="roi-card-value">${roi.pending_requests}</div>
+        <div class="roi-card-label">Pending Approvals</div>
+      </div>` : ''}
+      ${roi.failed_transactions > 0 ? `<div class="roi-card roi-card-error">
+        <div class="roi-card-value">${roi.failed_transactions}</div>
+        <div class="roi-card-label">Failed Transactions</div>
+      </div>` : ''}
+    `;
+
+    // Spending by category breakdown
+    const breakdown = document.getElementById('roi-spending-breakdown');
+    const cats = Object.entries(roi.spending_by_category);
+    if (cats.length > 0) {
+      breakdown.innerHTML = `
+        <h4>Spending by Category</h4>
+        <div class="roi-bar-chart">
+          ${cats.map(([cat, amt]) => {
+            const pct = roi.total_spent > 0 ? ((amt / roi.total_spent) * 100).toFixed(0) : 0;
+            return `<div class="roi-bar-row">
+              <span class="roi-bar-label">${escHtml(cat)}</span>
+              <div class="roi-bar-track">
+                <div class="roi-bar-fill" style="width:${pct}%"></div>
+              </div>
+              <span class="roi-bar-amount">$${amt.toFixed(2)}</span>
+            </div>`;
+          }).join('')}
+        </div>
+      `;
+    } else {
+      breakdown.innerHTML = '<p class="sub">No spending data yet.</p>';
+    }
+
+    // Spending timeline
+    const timeline = document.getElementById('roi-timeline');
+    if (roi.spending_timeline && roi.spending_timeline.length > 0) {
+      const maxAmt = Math.max(...roi.spending_timeline.map(d => d.amount));
+      timeline.innerHTML = `
+        <h4>Spending Timeline</h4>
+        <div class="roi-timeline-chart">
+          ${roi.spending_timeline.map(d => {
+            const h = maxAmt > 0 ? ((d.amount / maxAmt) * 100).toFixed(0) : 0;
+            return `<div class="roi-timeline-bar" title="$${d.amount} on ${d.date}">
+              <div class="roi-timeline-fill" style="height:${h}%"></div>
+              <span class="roi-timeline-label">${d.date.slice(5)}</span>
+            </div>`;
+          }).join('')}
+        </div>
+      `;
+    } else {
+      timeline.innerHTML = '';
+    }
+
+    // Earnings breakdown
+    const earnings = document.getElementById('roi-earnings');
+    if (roi.earnings_breakdown && roi.earnings_breakdown.length > 0) {
+      earnings.innerHTML = `
+        <h4>Earnings Sources</h4>
+        ${roi.earnings_breakdown.map(e => {
+          const pct = e.target_value > 0 ? Math.min(100, ((e.current_value / e.target_value) * 100)).toFixed(0) : 0;
+          return `<div class="roi-earning-row">
+            <span>${escHtml(e.label)}</span>
+            <div class="progress-bar-bg" style="flex:1;margin:0 8px">
+              <div class="progress-bar-fill" style="width:${pct}%"></div>
+            </div>
+            <span>$${e.current_value.toFixed(2)} / $${e.target_value.toFixed(2)}</span>
+          </div>`;
+        }).join('')}
+      `;
+    } else {
+      earnings.innerHTML = '';
+    }
+
+    // Budget utilization
+    const budgets = document.getElementById('roi-budgets');
+    if (roi.budget_summary && roi.budget_summary.length > 0) {
+      budgets.innerHTML = `
+        <h4>Budget Utilization</h4>
+        ${roi.budget_summary.map(b => `
+          <div class="roi-budget-row">
+            <span class="roi-budget-cat">${escHtml(b.category)}</span>
+            <div class="progress-bar-bg" style="flex:1;margin:0 8px">
+              <div class="progress-bar-fill ${b.utilization_pct > 90 ? 'warn' : ''}" style="width:${Math.min(100, b.utilization_pct)}%"></div>
+            </div>
+            <span class="roi-budget-nums">$${b.spent_total.toFixed(2)} / $${b.total_limit.toFixed(2)} (${b.utilization_pct}%)</span>
+          </div>
+        `).join('')}
+      `;
+    } else {
+      budgets.innerHTML = '';
+    }
+
+    // Show/hide panel based on data
+    const hasData = roi.total_spent > 0 || roi.total_earned > 0 || roi.pending_requests > 0;
+    panel.style.display = hasData ? 'block' : 'none';
+  } catch (e) {
+    console.warn('ROI dashboard load failed:', e);
+    panel.style.display = 'none';
+  }
+}
+
+
+// ─── Platform Insights ────────────────────────────────────────────────────────
+
+async function loadPlatformInsights() {
+  const panel = document.getElementById('platform-insights-panel');
+  if (!panel) return;
+
+  try {
+    const data = await api.get('/api/platform/insights');
+    const content = document.getElementById('platform-insights-content');
+    let html = '';
+
+    // Goal type success rates
+    const types = data.goal_type_insights || [];
+    if (types.length > 0) {
+      html += `<h4>Goal Success Rates</h4><div class="roi-bar-chart">`;
+      for (const t of types) {
+        html += `<div class="roi-bar-row">
+          <span class="roi-bar-label">${escHtml(t.goal_type)} (${t.total_goals})</span>
+          <div class="roi-bar-track">
+            <div class="roi-bar-fill" style="width:${t.completion_rate}%"></div>
+          </div>
+          <span class="roi-bar-amount">${t.completion_rate}%</span>
+        </div>`;
+      }
+      html += `</div>`;
+    }
+
+    // Task stats
+    const ts = data.task_stats;
+    if (ts && ts.total > 0) {
+      html += `<h4>Platform Task Stats</h4>
+        <div class="platform-task-stats">
+          <span>✅ ${ts.done} done</span>
+          <span>⏭ ${ts.skipped} skipped</span>
+          <span>❌ ${ts.failed} failed</span>
+          <span>📊 ${ts.completion_rate}% completion</span>
+        </div>`;
+    }
+
+    // Proven paths
+    const paths = data.proven_paths || [];
+    if (paths.length > 0) {
+      html += `<h4>Proven Success Paths</h4><ul class="platform-paths">`;
+      for (const p of paths) {
+        html += `<li><strong>${escHtml(p.goal_type)}</strong> — ${escHtml(p.outcome_summary || 'completed')} <span class="badge">${p.times_reused}× reused</span></li>`;
+      }
+      html += `</ul>`;
+    }
+
+    // Popular services
+    const svcs = data.popular_services || [];
+    if (svcs.length > 0) {
+      html += `<h4>Popular Services</h4><div class="platform-services">`;
+      for (const s of svcs) {
+        html += `<span class="platform-service-tag">${escHtml(s.service)} <small>(${s.use_count}×, $${s.total_spent})</small></span> `;
+      }
+      html += `</div>`;
+    }
+
+    content.innerHTML = html || '<p class="sub">Not enough data yet. Keep working on goals!</p>';
+    panel.style.display = 'block';
+  } catch (e) {
+    console.warn('Platform insights load failed:', e);
+    panel.style.display = 'none';
+  }
+}
 
 // ─── Admin Panel ──────────────────────────────────────────────────────────────
 

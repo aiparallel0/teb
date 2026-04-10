@@ -2291,3 +2291,271 @@ def list_provisioning_logs(task_id: int) -> list[dict]:
         }
         for r in rows
     ]
+
+
+# ─── ROI Dashboard ──────────────────────────────────────────────────────────
+
+def get_goal_roi(goal_id: int) -> dict:
+    """Compute ROI for a goal: money spent (spending_requests) vs money earned (outcome_metrics with unit='$').
+
+    Returns a dict with total_spent, total_earned, roi_percent, and breakdowns.
+    """
+    with _conn() as con:
+        # Money spent: sum of approved/executed spending requests for this goal's tasks
+        spent_rows = con.execute(
+            """SELECT sr.service, sr.status, sr.amount, sr.currency, sr.created_at
+               FROM spending_requests sr
+               JOIN tasks t ON sr.task_id = t.id
+               WHERE t.goal_id = ? AND sr.status IN ('approved', 'executed')
+               ORDER BY sr.created_at ASC""",
+            (goal_id,),
+        ).fetchall()
+
+        total_spent = sum(r["amount"] for r in spent_rows)
+
+        # Breakdown by category (service)
+        spending_by_category: dict = {}
+        for r in spent_rows:
+            cat = r["service"] or "general"
+            spending_by_category[cat] = spending_by_category.get(cat, 0.0) + r["amount"]
+
+        # Spending over time (daily)
+        spending_timeline: dict = {}
+        for r in spent_rows:
+            day = r["created_at"][:10] if r["created_at"] else "unknown"
+            spending_timeline[day] = spending_timeline.get(day, 0.0) + r["amount"]
+
+        # Money earned: outcome_metrics with unit containing '$' or 'dollar' or 'revenue' or 'USD'
+        revenue_units = {'$', 'usd', 'dollar', 'dollars', 'revenue', 'income', 'earnings'}
+        om_rows = con.execute(
+            "SELECT * FROM outcome_metrics WHERE goal_id = ?",
+            (goal_id,),
+        ).fetchall()
+
+        total_earned = 0.0
+        earnings_breakdown: list = []
+        for r in om_rows:
+            unit_lower = (r["unit"] or "").lower().strip()
+            if unit_lower in revenue_units or '$' in (r["unit"] or ""):
+                total_earned += r["current_value"]
+                earnings_breakdown.append({
+                    "label": r["label"],
+                    "current_value": r["current_value"],
+                    "target_value": r["target_value"],
+                    "unit": r["unit"],
+                })
+
+        # ROI calculation
+        if total_spent > 0:
+            roi_percent = round(((total_earned - total_spent) / total_spent) * 100, 1)
+        else:
+            roi_percent = 0.0 if total_earned == 0 else float("inf")
+
+        # Budget utilization
+        budgets = con.execute(
+            "SELECT * FROM spending_budgets WHERE goal_id = ?",
+            (goal_id,),
+        ).fetchall()
+        budget_summary = []
+        for b in budgets:
+            budget_summary.append({
+                "category": b["category"],
+                "daily_limit": b["daily_limit"],
+                "total_limit": b["total_limit"],
+                "spent_today": b["spent_today"],
+                "spent_total": b["spent_total"],
+                "utilization_pct": round((b["spent_total"] / b["total_limit"]) * 100, 1) if b["total_limit"] > 0 else 0,
+            })
+
+        # Pending requests
+        pending_count = con.execute(
+            """SELECT COUNT(*) FROM spending_requests sr
+               JOIN tasks t ON sr.task_id = t.id
+               WHERE t.goal_id = ? AND sr.status = 'pending'""",
+            (goal_id,),
+        ).fetchone()[0]
+
+        # Failed transactions
+        failed_count = con.execute(
+            """SELECT COUNT(*) FROM spending_requests sr
+               JOIN tasks t ON sr.task_id = t.id
+               WHERE t.goal_id = ? AND sr.status = 'failed'""",
+            (goal_id,),
+        ).fetchone()[0]
+
+    return {
+        "goal_id": goal_id,
+        "total_spent": round(total_spent, 2),
+        "total_earned": round(total_earned, 2),
+        "net_profit": round(total_earned - total_spent, 2),
+        "roi_percent": roi_percent,
+        "spending_by_category": spending_by_category,
+        "spending_timeline": [
+            {"date": d, "amount": round(a, 2)}
+            for d, a in sorted(spending_timeline.items())
+        ],
+        "earnings_breakdown": earnings_breakdown,
+        "budget_summary": budget_summary,
+        "pending_requests": pending_count,
+        "failed_transactions": failed_count,
+    }
+
+
+def get_user_roi_summary(user_id: int) -> dict:
+    """Aggregate ROI across all goals for a user."""
+    with _conn() as con:
+        goal_rows = con.execute(
+            "SELECT id, title, status FROM goals WHERE user_id = ?",
+            (user_id,),
+        ).fetchall()
+
+    total_spent = 0.0
+    total_earned = 0.0
+    goal_summaries = []
+
+    for g in goal_rows:
+        roi = get_goal_roi(g["id"])
+        total_spent += roi["total_spent"]
+        total_earned += roi["total_earned"]
+        goal_summaries.append({
+            "goal_id": g["id"],
+            "title": g["title"],
+            "status": g["status"],
+            "spent": roi["total_spent"],
+            "earned": roi["total_earned"],
+            "roi_percent": roi["roi_percent"],
+        })
+
+    if total_spent > 0:
+        overall_roi = round(((total_earned - total_spent) / total_spent) * 100, 1)
+    else:
+        overall_roi = 0.0 if total_earned == 0 else float("inf")
+
+    return {
+        "total_spent": round(total_spent, 2),
+        "total_earned": round(total_earned, 2),
+        "net_profit": round(total_earned - total_spent, 2),
+        "overall_roi_percent": overall_roi,
+        "goals": goal_summaries,
+    }
+
+
+# ─── Platform-wide Aggregate Learning ───────────────────────────────────────
+
+def get_platform_patterns() -> dict:
+    """Aggregate anonymized patterns across ALL users for platform-wide learning.
+
+    Returns:
+    - Most successful goal types (highest completion rate)
+    - Common failure patterns (high skip/stall rates)
+    - Average time-to-complete by template type
+    - Most effective task orderings from success paths
+    - Service usage frequency
+    """
+    with _conn() as con:
+        # Goal completion rates by detected template type
+        all_goals = con.execute(
+            "SELECT title, description, status FROM goals"
+        ).fetchall()
+
+        template_stats: dict = {}
+        for g in all_goals:
+            # Simple template detection from title keywords
+            ttype = _detect_goal_type(g["title"], g["description"])
+            if ttype not in template_stats:
+                template_stats[ttype] = {"total": 0, "done": 0, "in_progress": 0}
+            template_stats[ttype]["total"] += 1
+            if g["status"] == "done":
+                template_stats[ttype]["done"] += 1
+            elif g["status"] == "in_progress":
+                template_stats[ttype]["in_progress"] += 1
+
+        goal_type_insights = []
+        for ttype, stats in template_stats.items():
+            completion_rate = round((stats["done"] / stats["total"]) * 100, 1) if stats["total"] > 0 else 0
+            goal_type_insights.append({
+                "goal_type": ttype,
+                "total_goals": stats["total"],
+                "completed": stats["done"],
+                "completion_rate": completion_rate,
+            })
+        goal_type_insights.sort(key=lambda x: x["completion_rate"], reverse=True)
+
+        # Task skip patterns (anonymized)
+        skip_rows = con.execute(
+            """SELECT t.title, COUNT(*) as skip_count
+               FROM tasks t WHERE t.status = 'skipped'
+               GROUP BY LOWER(t.title) ORDER BY skip_count DESC LIMIT 20"""
+        ).fetchall()
+        commonly_skipped = [{"title": r["title"], "skip_count": r[1]} for r in skip_rows]
+
+        # Average task completion time by status
+        total_tasks = con.execute("SELECT COUNT(*) FROM tasks").fetchone()[0]
+        done_tasks = con.execute("SELECT COUNT(*) FROM tasks WHERE status='done'").fetchone()[0]
+        skipped_tasks = con.execute("SELECT COUNT(*) FROM tasks WHERE status='skipped'").fetchone()[0]
+        failed_tasks = con.execute("SELECT COUNT(*) FROM tasks WHERE status='failed'").fetchone()[0]
+
+        # Most used services in spending
+        service_rows = con.execute(
+            """SELECT service, COUNT(*) as use_count, SUM(amount) as total_amount
+               FROM spending_requests WHERE status IN ('approved', 'executed')
+               GROUP BY LOWER(service) ORDER BY use_count DESC LIMIT 15"""
+        ).fetchall()
+        popular_services = [
+            {"service": r["service"], "use_count": r[1], "total_spent": round(r[2] or 0, 2)}
+            for r in service_rows
+        ]
+
+        # Success path insights
+        sp_rows = con.execute(
+            "SELECT goal_type, times_reused, outcome_summary FROM success_paths ORDER BY times_reused DESC LIMIT 10"
+        ).fetchall()
+        proven_paths = [
+            {"goal_type": r["goal_type"], "times_reused": r["times_reused"],
+             "outcome_summary": r["outcome_summary"]}
+            for r in sp_rows
+        ]
+
+        # Aggregate behavior patterns (anonymized, just counts)
+        behavior_rows = con.execute(
+            """SELECT behavior_type, pattern_key, SUM(occurrences) as total_occ
+               FROM user_behavior
+               GROUP BY behavior_type, pattern_key
+               ORDER BY total_occ DESC LIMIT 20"""
+        ).fetchall()
+        common_behaviors = [
+            {"behavior_type": r["behavior_type"], "pattern": r["pattern_key"],
+             "total_occurrences": r[2]}
+            for r in behavior_rows
+        ]
+
+    return {
+        "goal_type_insights": goal_type_insights,
+        "commonly_skipped_tasks": commonly_skipped,
+        "task_stats": {
+            "total": total_tasks,
+            "done": done_tasks,
+            "skipped": skipped_tasks,
+            "failed": failed_tasks,
+            "completion_rate": round((done_tasks / total_tasks) * 100, 1) if total_tasks > 0 else 0,
+        },
+        "popular_services": popular_services,
+        "proven_paths": proven_paths,
+        "common_behaviors": common_behaviors,
+    }
+
+
+def _detect_goal_type(title: str, description: str) -> str:
+    """Simple keyword-based goal type detection for aggregate stats."""
+    combined = f"{title} {description}".lower()
+    if any(w in combined for w in ("money", "earn", "income", "revenue", "freelanc", "sell", "profit")):
+        return "make_money_online"
+    if any(w in combined for w in ("learn", "study", "course", "skill", "tutorial")):
+        return "learn_skill"
+    if any(w in combined for w in ("fit", "exercise", "gym", "workout", "health", "weight")):
+        return "get_fit"
+    if any(w in combined for w in ("build", "app", "website", "project", "develop", "code", "create")):
+        return "build_project"
+    if any(w in combined for w in ("write", "book", "blog", "content", "article")):
+        return "write_book"
+    return "generic"
