@@ -52,12 +52,14 @@ logger = logging.getLogger(__name__)
 
 _RATE_WINDOW = 60   # seconds
 _RATE_LIMIT = 20    # max auth requests per window per IP
+_API_RATE_LIMIT = 120  # max general API requests per window per IP
 # bucket: IP -> deque of timestamps
 _rate_buckets: dict[str, collections.deque] = {}
+_api_rate_buckets: dict[str, collections.deque] = {}
 
 
 def _check_rate_limit(request: Request) -> None:
-    """Raise 429 if caller exceeds the per-IP rate limit."""
+    """Raise 429 if caller exceeds the per-IP auth rate limit (stricter)."""
     ip = request.client.host if request.client else "unknown"
     now = time.monotonic()
     bucket = _rate_buckets.setdefault(ip, collections.deque())
@@ -69,9 +71,22 @@ def _check_rate_limit(request: Request) -> None:
     bucket.append(now)
 
 
+def _check_api_rate_limit(request: Request) -> None:
+    """Raise 429 if caller exceeds the per-IP general API rate limit."""
+    ip = request.client.host if request.client else "unknown"
+    now = time.monotonic()
+    bucket = _api_rate_buckets.setdefault(ip, collections.deque())
+    while bucket and bucket[0] <= now - _RATE_WINDOW:
+        bucket.popleft()
+    if len(bucket) >= _API_RATE_LIMIT:
+        raise HTTPException(status_code=429, detail="Too many requests")
+    bucket.append(now)
+
+
 def reset_rate_limits() -> None:
     """Clear all rate-limit buckets. Called on startup and available for tests."""
     _rate_buckets.clear()
+    _api_rate_buckets.clear()
 
 
 # ─── Startup / lifespan ───────────────────────────────────────────────────────
@@ -442,21 +457,60 @@ def _get_task_for_user(task_id: int, user_id: int) -> Task:
 
 # ─── Health check ─────────────────────────────────────────────────────────────
 
+_APP_START_TIME = time.monotonic()
+
+
 @app.get("/health")
 async def health_check():
-    """Health check — returns DB status for monitoring."""
+    """Health check — returns DB status, uptime, version, and component health."""
+    import platform
+
+    components: dict = {}
+
+    # Database connectivity
     try:
-        # Lightweight DB connectivity check via a trivial query
         with storage._conn() as con:
             con.execute("SELECT 1")
+            # Check table count as a deeper validation
+            row = con.execute(
+                "SELECT COUNT(*) AS cnt FROM sqlite_master WHERE type='table'"
+            ).fetchone()
+            table_count = row["cnt"] if row else 0
+        components["database"] = {"status": "ok", "tables": table_count}
         db_ok = True
-    except Exception:
+    except Exception as exc:
+        components["database"] = {"status": "error", "detail": str(exc)}
         db_ok = False
+
+    # AI provider availability
+    ai_provider = config.get_ai_provider()
+    components["ai"] = {
+        "status": "ok" if ai_provider else "unconfigured",
+        "provider": ai_provider or "none",
+    }
+
+    # Payment providers
+    from teb import payments as _pay
+    providers = _pay.list_providers()
+    components["payments"] = {
+        "status": "ok" if any(p["configured"] for p in providers) else "unconfigured",
+        "providers": providers,
+    }
+
+    # Overall status
     status = "healthy" if db_ok else "degraded"
     code = 200 if db_ok else 503
+    uptime_seconds = round(time.monotonic() - _APP_START_TIME, 1)
+
     return JSONResponse(
         status_code=code,
-        content={"status": status, "database": "ok" if db_ok else "error"},
+        content={
+            "status": status,
+            "version": "1.0.0",
+            "uptime_seconds": uptime_seconds,
+            "python_version": platform.python_version(),
+            "components": components,
+        },
     )
 
 
@@ -530,6 +584,7 @@ async def serve_frontend():
 
 @app.post("/api/goals", status_code=201)
 async def create_goal(body: GoalCreate, request: Request):
+    _check_api_rate_limit(request)
     user_id = _get_user_id(request)
     goal = Goal(title=body.title.strip(), description=body.description.strip())
     if not goal.title:
@@ -557,6 +612,7 @@ async def get_goal(goal_id: int, request: Request):
 
 @app.post("/api/goals/{goal_id}/decompose")
 async def decompose_goal(goal_id: int, request: Request):
+    _check_api_rate_limit(request)
     uid = _require_user(request)
     goal = _get_goal_for_user(goal_id, uid)
 
@@ -610,6 +666,7 @@ _MAX_DECOMPOSE_DEPTH = 3  # Maximum nesting depth for task decomposition
 
 @app.post("/api/tasks/{task_id}/decompose")
 async def decompose_task(task_id: int, request: Request):
+    _check_api_rate_limit(request)
     uid = _require_user(request)
     task = _get_task_for_user(task_id, uid)
 
@@ -738,6 +795,7 @@ async def list_tasks(
 @app.post("/api/tasks", status_code=201)
 async def create_task_manual(body: TaskCreate, request: Request):
     """Create a custom user task (not from decomposition)."""
+    _check_api_rate_limit(request)
     uid = _require_user(request)
     goal = _get_goal_for_user(body.goal_id, uid)
     title = body.title.strip()
@@ -874,6 +932,7 @@ async def delete_credential(cred_id: int, request: Request):
 @app.post("/api/tasks/{task_id}/execute")
 async def execute_task(task_id: int, request: Request):
     """Ask teb to autonomously execute a task via registered APIs."""
+    _check_api_rate_limit(request)
     uid = _require_user(request)
     task = _get_task_for_user(task_id, uid)
 
@@ -2024,6 +2083,7 @@ class PaymentExecute(BaseModel):
 @app.get("/api/payments/providers")
 async def list_payment_providers(request: Request):
     """List available payment providers and their configuration status."""
+    _check_api_rate_limit(request)
     _require_user(request)
     return _payments.list_providers()
 
@@ -2032,6 +2092,7 @@ async def list_payment_providers(request: Request):
 async def create_payment_account(body: PaymentAccountCreate, request: Request):
     """Register a payment account (Mercury, Stripe) for the current user."""
     import json as _json
+    _check_api_rate_limit(request)
     uid = _require_user(request)
     valid_providers = {"mercury", "stripe"}
     if body.provider not in valid_providers:
@@ -2048,6 +2109,7 @@ async def create_payment_account(body: PaymentAccountCreate, request: Request):
 @app.get("/api/payments/accounts")
 async def list_payment_accounts(request: Request):
     """List payment accounts for the current user."""
+    _check_api_rate_limit(request)
     uid = _require_user(request)
     return storage.list_payment_accounts(uid)
 
@@ -2055,6 +2117,7 @@ async def list_payment_accounts(request: Request):
 @app.get("/api/payments/balance/{provider}")
 async def get_payment_balance(provider: str, request: Request):
     """Get account balance for a payment provider."""
+    _check_api_rate_limit(request)
     uid = _require_user(request)
     result = _payments.get_account_balance(uid, provider)
     if result.get("error"):
@@ -2069,7 +2132,11 @@ async def execute_payment(body: PaymentExecute, request: Request):
     The user must have a registered and enabled payment account for the
     specified provider. If a spending_request_id is given, the payment
     is linked to that approval-gated spending request.
+
+    Balance is verified before executing the transfer to prevent
+    overdraft. The provider layer retries on transient failures.
     """
+    _check_api_rate_limit(request)
     uid = _require_user(request)
     result = _payments.execute_payment(
         user_id=uid,
@@ -2088,11 +2155,49 @@ async def execute_payment(body: PaymentExecute, request: Request):
 @app.get("/api/payments/transactions/{account_id}")
 async def list_payment_transactions(account_id: int, request: Request):
     """List transactions for a payment account."""
+    _check_api_rate_limit(request)
     uid = _require_user(request)
     account = storage.get_payment_account(account_id)
     if not account or account["user_id"] != uid:
         raise HTTPException(status_code=404, detail="Payment account not found")
     return storage.list_payment_transactions(account_id)
+
+
+# ─── Payment Webhooks ─────────────────────────────────────────────────────────
+
+@app.post("/api/webhooks/payments/{provider}")
+async def payment_webhook(provider: str, request: Request):
+    """Receive payment status webhooks from Mercury or Stripe.
+
+    Verifies the webhook signature if a secret is configured, then
+    reconciles the event with local transaction records.
+    """
+    valid_providers = {"mercury", "stripe"}
+    if provider not in valid_providers:
+        raise HTTPException(status_code=404, detail="Unknown provider")
+
+    body = await request.body()
+    signature = request.headers.get("x-signature", "") or request.headers.get("stripe-signature", "")
+
+    result = _payments.process_webhook(provider, body, signature)
+    if result.get("error"):
+        raise HTTPException(status_code=400, detail=result["error"])
+    return result
+
+
+# ─── Transaction Recovery ─────────────────────────────────────────────────────
+
+@app.post("/api/payments/recover")
+async def recover_transactions(request: Request):
+    """Attempt to recover failed payment transactions.
+
+    Re-checks provider status for each failed transaction with remaining
+    retries and reconciles local records accordingly. Admin only.
+    """
+    _check_api_rate_limit(request)
+    _require_admin(request)
+    result = _payments.recover_failed_transactions()
+    return result
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

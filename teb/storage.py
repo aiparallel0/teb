@@ -373,10 +373,12 @@ def init_db() -> None:
                 status           TEXT    NOT NULL DEFAULT 'pending',
                 description      TEXT    NOT NULL DEFAULT '',
                 provider_response TEXT   NOT NULL DEFAULT '{}',
+                retry_count      INTEGER NOT NULL DEFAULT 0,
                 created_at       TEXT    NOT NULL,
                 updated_at       TEXT    NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_payment_tx_account ON payment_transactions(account_id);
+            CREATE INDEX IF NOT EXISTS idx_payment_tx_status ON payment_transactions(status);
 
             CREATE TABLE IF NOT EXISTS discovered_services (
                 id              INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -499,6 +501,11 @@ def _run_migrations(con: sqlite3.Connection) -> None:
         )
     """)
     con.execute("CREATE INDEX IF NOT EXISTS idx_refresh_tokens_user ON refresh_tokens(user_id)")
+
+    # payment_transactions.retry_count (for failed transaction recovery)
+    if not _has_column("payment_transactions", "retry_count"):
+        con.execute("ALTER TABLE payment_transactions ADD COLUMN retry_count INTEGER NOT NULL DEFAULT 0")
+        con.execute("CREATE INDEX IF NOT EXISTS idx_payment_tx_status ON payment_transactions(status)")
 
 
 # ─── Credential Encryption ───────────────────────────────────────────────────
@@ -1987,6 +1994,67 @@ def list_payment_transactions(account_id: int, limit: int = 50) -> list[dict]:
          "description": r["description"], "created_at": r["created_at"]}
         for r in rows
     ]
+
+
+def reconcile_transaction_by_provider_id(provider_tx_id: str, status: str,
+                                          provider_response: str = "{}") -> Optional[dict]:
+    """Find a transaction by its provider_tx_id and update its status.
+
+    Used by webhook reconciliation to sync provider-side status changes.
+    """
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        row = con.execute(
+            "SELECT id FROM payment_transactions WHERE provider_tx_id = ?",
+            (provider_tx_id,),
+        ).fetchone()
+        if not row:
+            return None
+        tx_id = row["id"]
+        con.execute(
+            """UPDATE payment_transactions
+               SET status = ?, provider_response = ?, updated_at = ?
+               WHERE id = ?""",
+            (status, provider_response, now, tx_id),
+        )
+        updated = con.execute(
+            "SELECT * FROM payment_transactions WHERE id = ?", (tx_id,),
+        ).fetchone()
+    if updated:
+        return {"id": updated["id"], "status": updated["status"],
+                "provider_tx_id": updated["provider_tx_id"],
+                "amount": updated["amount"], "currency": updated["currency"]}
+    return None
+
+
+def list_failed_transactions(max_retries: int = 3) -> list[dict]:
+    """List failed transactions eligible for recovery (retry_count < max_retries)."""
+    with _conn() as con:
+        rows = con.execute(
+            """SELECT * FROM payment_transactions
+               WHERE status = 'failed' AND retry_count < ?
+               ORDER BY created_at ASC LIMIT 50""",
+            (max_retries,),
+        ).fetchall()
+    return [
+        {"id": r["id"], "account_id": r["account_id"], "provider_tx_id": r["provider_tx_id"],
+         "amount": r["amount"], "currency": r["currency"], "status": r["status"],
+         "retry_count": r["retry_count"], "description": r["description"],
+         "created_at": r["created_at"]}
+        for r in rows
+    ]
+
+
+def increment_transaction_retry(tx_id: int) -> None:
+    """Increment the retry_count for a failed transaction."""
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        con.execute(
+            """UPDATE payment_transactions
+               SET retry_count = retry_count + 1, updated_at = ?
+               WHERE id = ?""",
+            (now, tx_id),
+        )
 
 
 # ─── Discovered Services ─────────────────────────────────────────────────────
