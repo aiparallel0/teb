@@ -39,12 +39,18 @@ def set_db_path(path: str) -> None:
     _DB_PATH = path
 
 
+_BUSY_TIMEOUT_MS = 5000  # Wait up to 5 seconds on lock contention
+_MAX_RETRIES = 3         # Retry on SQLITE_BUSY up to 3 times
+
+
 @contextmanager
 def _conn() -> Generator[sqlite3.Connection, None, None]:
-    con = sqlite3.connect(_db_path())
+    con = sqlite3.connect(_db_path(), timeout=_BUSY_TIMEOUT_MS / 1000)
     con.row_factory = sqlite3.Row
     con.execute("PRAGMA journal_mode=WAL")
     con.execute("PRAGMA foreign_keys=ON")
+    con.execute(f"PRAGMA busy_timeout={_BUSY_TIMEOUT_MS}")
+    con.execute("PRAGMA wal_autocheckpoint=1000")
     try:
         yield con
         con.commit()
@@ -53,6 +59,27 @@ def _conn() -> Generator[sqlite3.Connection, None, None]:
         raise
     finally:
         con.close()
+
+
+def _with_retry(fn):
+    """Decorator that retries a storage function on SQLITE_BUSY / OperationalError."""
+    import functools
+    import time as _time
+
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        last_exc = None
+        for attempt in range(_MAX_RETRIES):
+            try:
+                return fn(*args, **kwargs)
+            except sqlite3.OperationalError as exc:
+                last_exc = exc
+                if "locked" in str(exc).lower() or "busy" in str(exc).lower():
+                    _time.sleep(0.1 * (2 ** attempt))  # exponential backoff: 0.1, 0.2, 0.4s
+                    continue
+                raise
+        raise last_exc  # type: ignore[misc]
+    return wrapper
 
 
 def init_db() -> None:
@@ -740,6 +767,7 @@ def list_goals(user_id: Optional[int] = None) -> List[Goal]:
     return [_row_to_goal(r) for r in rows]
 
 
+@_with_retry
 def update_goal(goal: Goal) -> Goal:
     now = datetime.now(timezone.utc).isoformat()
     with _conn() as con:
@@ -770,6 +798,7 @@ def _row_to_task(row: sqlite3.Row) -> Task:
     return t
 
 
+@_with_retry
 def create_task(task: Task) -> Task:
     now = datetime.now(timezone.utc).isoformat()
     with _conn() as con:
@@ -808,6 +837,7 @@ def list_tasks(goal_id: Optional[int] = None, status: Optional[str] = None) -> L
     return [_row_to_task(r) for r in rows]
 
 
+@_with_retry
 def update_task(task: Task) -> Task:
     now = datetime.now(timezone.utc).isoformat()
     with _conn() as con:
@@ -903,6 +933,7 @@ def _row_to_execution_log(row: sqlite3.Row) -> ExecutionLog:
     )
 
 
+@_with_retry
 def create_execution_log(log: ExecutionLog) -> ExecutionLog:
     now = datetime.now(timezone.utc).isoformat()
     with _conn() as con:
@@ -1260,6 +1291,7 @@ def _row_to_handoff(row: sqlite3.Row) -> AgentHandoff:
     )
 
 
+@_with_retry
 def create_handoff(handoff: AgentHandoff) -> AgentHandoff:
     now = datetime.now(timezone.utc).isoformat()
     with _conn() as con:

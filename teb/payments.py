@@ -255,8 +255,11 @@ class StripeProvider(PaymentProvider):
 
         For MVP this creates a PaymentIntent that can be confirmed by the frontend
         or used for server-to-server payments with an existing payment method.
+        Uses Idempotency-Key header to prevent duplicate charges on retries.
         """
         try:
+            import hashlib
+
             payload = {
                 "amount": int(amount * 100),  # dollars -> cents
                 "currency": currency.lower(),
@@ -269,9 +272,14 @@ class StripeProvider(PaymentProvider):
                 payload["payment_method"] = config["payment_method"]
                 payload["confirm"] = "true"
 
+            # Stripe idempotency key: deterministic hash of amount + recipient + description
+            idem_input = f"{amount}:{currency}:{recipient}:{description}".encode()
+            idem_key = f"teb-{hashlib.sha256(idem_input).hexdigest()[:32]}"
+            headers = {**self._headers(config), "Idempotency-Key": idem_key}
+
             resp = httpx.post(
                 f"{STRIPE_BASE_URL}/payment_intents",
-                headers=self._headers(config),
+                headers=headers,
                 data=payload,  # Stripe uses form-encoded
                 timeout=_HTTP_TIMEOUT,
             )
