@@ -351,7 +351,7 @@ class SpendingAction(BaseModel):
 
 
 class MessagingConfigCreate(BaseModel):
-    channel: str         # telegram | webhook
+    channel: str         # telegram | webhook | slack | discord | whatsapp
     config: dict = {}    # channel-specific config
     notify_nudges: bool = True
     notify_tasks: bool = True
@@ -1772,7 +1772,7 @@ async def create_messaging_config(body: MessagingConfigCreate, request: Request)
     import json as _json
     uid = _require_user(request)
 
-    valid_channels = {"telegram", "webhook"}
+    valid_channels = {"telegram", "webhook", "slack", "discord", "whatsapp"}
     if body.channel not in valid_channels:
         raise HTTPException(status_code=422, detail=f"channel must be one of {valid_channels}")
 
@@ -1786,6 +1786,21 @@ async def create_messaging_config(body: MessagingConfigCreate, request: Request)
     elif body.channel == "webhook":
         if "url" not in body.config:
             raise HTTPException(status_code=422, detail="Webhook config requires 'url'")
+    elif body.channel == "slack":
+        if "bot_token" not in body.config or "channel_id" not in body.config:
+            raise HTTPException(
+                status_code=422,
+                detail="Slack config requires 'bot_token' and 'channel_id'",
+            )
+    elif body.channel == "discord":
+        if "webhook_url" not in body.config:
+            raise HTTPException(status_code=422, detail="Discord config requires 'webhook_url'")
+    elif body.channel == "whatsapp":
+        if "access_token" not in body.config or "phone_number_id" not in body.config or "recipient" not in body.config:
+            raise HTTPException(
+                status_code=422,
+                detail="WhatsApp config requires 'access_token', 'phone_number_id', and 'recipient'",
+            )
 
     cfg = MessagingConfig(
         channel=body.channel,
@@ -2095,6 +2110,141 @@ async def telegram_webhook(body: TelegramUpdate, request: Request):
         "/deny <id> [reason] — deny a spending request"
     )
     return {"ok": True}
+
+
+# ─── Channel Webhook Endpoints ───────────────────────────────────────────────
+
+from teb.channels import route_command as _route_channel_command  # noqa: E402
+from teb.channels.slack import SlackChannel as _SlackChannel  # noqa: E402
+from teb.channels.discord import DiscordChannel as _DiscordChannel  # noqa: E402
+from teb.channels.whatsapp import WhatsAppChannel as _WhatsAppChannel  # noqa: E402
+
+
+@app.post("/api/channels/slack/webhook")
+async def slack_channel_webhook(request: Request):
+    """Inbound Slack webhook endpoint.
+
+    Handles Events API callbacks and slash commands, routing recognised
+    teb commands through the command router.
+    """
+    body_bytes = await request.body()
+
+    # Verify Slack signature when a signing secret is configured
+    slack = _SlackChannel()
+    timestamp = request.headers.get("x-slack-request-timestamp", "")
+    signature = request.headers.get("x-slack-signature", "")
+    if slack.signing_secret and not slack.verify_signature(body_bytes, timestamp, signature):
+        raise HTTPException(status_code=403, detail="Invalid Slack signature")
+
+    payload = await request.json()
+    parsed = slack.receive_command(payload)
+
+    # Handle URL verification challenge
+    if "challenge" in parsed:
+        return {"challenge": parsed["challenge"]}
+
+    text = parsed.get("text", "")
+    if not text:
+        return {"ok": True}
+
+    result = _route_channel_command(text, user_id=parsed.get("user_id"))
+
+    # Reply via Slack if we have a channel_id
+    channel_id = parsed.get("channel_id", "")
+    if channel_id and result.message:
+        slack.send_message(channel_id, result.message)
+
+    return {
+        "ok": True,
+        "command": result.command,
+        "success": result.success,
+        "message": result.message,
+    }
+
+
+@app.post("/api/channels/discord/webhook")
+async def discord_channel_webhook(request: Request):
+    """Inbound Discord interactions webhook endpoint.
+
+    Handles PING verification and application command interactions,
+    routing recognised teb commands through the command router.
+    """
+    body_bytes = await request.body()
+
+    discord = _DiscordChannel()
+    timestamp = request.headers.get("x-signature-timestamp", "")
+    signature = request.headers.get("x-signature-ed25519", "")
+    if discord.public_key and not discord.verify_signature(body_bytes, timestamp, signature):
+        raise HTTPException(status_code=401, detail="Invalid Discord signature")
+
+    payload = await request.json()
+    parsed = discord.receive_command(payload)
+
+    # PING response (type 1)
+    if parsed.get("type") == 1:
+        return {"type": 1}
+
+    text = parsed.get("text", "")
+    if not text:
+        return {"type": 4, "data": {"content": "No command received."}}
+
+    result = _route_channel_command(text, user_id=parsed.get("user_id"))
+
+    # Discord interaction response (type 4 = CHANNEL_MESSAGE_WITH_SOURCE)
+    return {
+        "type": 4,
+        "data": {"content": result.message or "Done."},
+    }
+
+
+@app.get("/api/channels/whatsapp/webhook")
+async def whatsapp_channel_webhook_verify(
+    request: Request,
+    hub_mode: str = Query("", alias="hub.mode"),
+    hub_token: str = Query("", alias="hub.verify_token"),
+    hub_challenge: str = Query("", alias="hub.challenge"),
+):
+    """WhatsApp webhook verification (GET).
+
+    Meta sends a GET request with hub.mode, hub.verify_token, and
+    hub.challenge to verify the webhook endpoint.
+    """
+    wa = _WhatsAppChannel()
+    challenge = wa.verify_webhook(hub_mode, hub_token, hub_challenge)
+    if challenge is not None:
+        return HTMLResponse(content=challenge)
+    raise HTTPException(status_code=403, detail="Verification failed")
+
+
+@app.post("/api/channels/whatsapp/webhook")
+async def whatsapp_channel_webhook(request: Request):
+    """Inbound WhatsApp Cloud API webhook endpoint.
+
+    Parses incoming messages and routes recognised teb commands through
+    the command router.  Replies are sent back via the WhatsApp API.
+    """
+    payload = await request.json()
+
+    wa = _WhatsAppChannel()
+    parsed = wa.receive_command(payload)
+
+    text = parsed.get("text", "")
+    sender = parsed.get("user_id", "")
+    if not text:
+        return {"ok": True}
+
+    result = _route_channel_command(text, user_id=sender)
+
+    # Reply to the sender
+    if sender and result.message:
+        wa.send_message(sender, result.message)
+
+    return {
+        "ok": True,
+        "command": result.command,
+        "success": result.success,
+        "message": result.message,
+    }
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
