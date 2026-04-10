@@ -892,9 +892,120 @@ def _adapt_template_task(tt: _TemplateTask, profile: _UserProfile) -> _TemplateT
     )
 
 
+def _build_context_for_ai(goal: Goal) -> str:
+    """Build rich context from user profile, platform patterns, and success paths
+    to inject into the AI decomposition prompt for deeper, non-generic results."""
+    from teb import storage as _storage  # noqa: PLC0415
+
+    sections: List[str] = []
+
+    # 1. User profile context
+    if goal.user_id:
+        try:
+            profile = _storage.get_or_create_profile(goal.user_id)
+            if profile:
+                profile_lines = []
+                if profile.skills:
+                    profile_lines.append(f"Skills: {profile.skills}")
+                if profile.experience_level and profile.experience_level != "unknown":
+                    profile_lines.append(f"Experience level: {profile.experience_level}")
+                if profile.available_hours_per_day:
+                    profile_lines.append(f"Available hours/day: {profile.available_hours_per_day}")
+                if profile.interests:
+                    profile_lines.append(f"Interests: {profile.interests}")
+                if profile.goals_completed:
+                    profile_lines.append(f"Goals previously completed: {profile.goals_completed}")
+                if profile.total_tasks_completed:
+                    profile_lines.append(f"Total tasks completed: {profile.total_tasks_completed}")
+                if profile_lines:
+                    sections.append("USER PROFILE:\n" + "\n".join(profile_lines))
+        except Exception:
+            pass
+
+    # 2. User behavior patterns (what they struggle with)
+    if goal.user_id:
+        try:
+            behaviors = _storage.list_user_behaviors(goal.user_id)
+            if behaviors:
+                avoid_items = [b["pattern_key"] for b in behaviors if b["behavior_type"] == "avoids"]
+                stall_items = [b["pattern_key"] for b in behaviors if b["behavior_type"] == "stalled"]
+                behavior_lines = []
+                if avoid_items:
+                    behavior_lines.append(f"This user tends to struggle with: {', '.join(avoid_items[:5])}")
+                if stall_items:
+                    behavior_lines.append(f"This user has stalled on: {', '.join(stall_items[:3])}")
+                if behavior_lines:
+                    sections.append("USER BEHAVIOR PATTERNS:\n" + "\n".join(behavior_lines))
+        except Exception:
+            pass
+
+    # 3. Platform-wide insights (aggregate learning from all users)
+    try:
+        patterns = _storage.get_platform_patterns()
+        platform_lines = []
+
+        # What goal types succeed most
+        top_types = [g for g in patterns.get("goal_type_insights", [])
+                     if g["completion_rate"] > 0 and g["total_goals"] >= 2]
+        if top_types:
+            best = top_types[0]
+            platform_lines.append(
+                f"Most successful goal type on platform: {best['goal_type']} "
+                f"({best['completion_rate']}% completion rate across {best['total_goals']} goals)"
+            )
+
+        # Commonly skipped tasks (so AI avoids generating them)
+        skipped = patterns.get("commonly_skipped_tasks", [])[:5]
+        if skipped:
+            skip_titles = [s["title"] for s in skipped]
+            platform_lines.append(
+                f"Tasks frequently skipped by users: {', '.join(skip_titles)}. "
+                f"Avoid generating these exact tasks; instead provide practical alternatives."
+            )
+
+        # Popular services
+        services = patterns.get("popular_services", [])[:5]
+        if services:
+            svc_names = [s["service"] for s in services]
+            platform_lines.append(f"Most-used services on this platform: {', '.join(svc_names)}")
+
+        if platform_lines:
+            sections.append("PLATFORM-WIDE LEARNINGS (from all users):\n" + "\n".join(platform_lines))
+    except Exception:
+        pass
+
+    # 4. Success path context (proven paths for similar goals)
+    try:
+        template_name = _detect_template(goal)
+        paths = _storage.list_success_paths(goal_type=template_name)
+        if paths:
+            best_path = max(paths, key=lambda p: p.times_reused)
+            steps = json.loads(best_path.steps_json) if best_path.steps_json else {}
+            steps_list = steps.get("steps", steps) if isinstance(steps, dict) else steps
+            if steps_list and isinstance(steps_list, list):
+                step_titles = [s.get("title", s) if isinstance(s, dict) else str(s)
+                              for s in steps_list[:8]]
+                sections.append(
+                    f"PROVEN PATH (used {best_path.times_reused} times for '{template_name}' goals):\n"
+                    f"Steps: {' → '.join(step_titles)}\n"
+                    f"Outcome: {best_path.outcome_summary or 'successful'}"
+                )
+    except Exception:
+        pass
+
+    return "\n\n".join(sections)
+
+
 def decompose_ai(goal: Goal) -> List[Task]:
     """
     Call an OpenAI-compatible API to decompose the goal.
+
+    Enhanced with:
+    - User profile and behavior context
+    - Platform-wide aggregate learnings
+    - Proven success paths from similar goals
+    - Richer prompt that produces actionable, experience-informed tasks
+
     Falls back to template mode on any error.
     """
     try:
@@ -909,20 +1020,33 @@ def decompose_ai(goal: Goal) -> List[Task]:
             f"- {k}: {v}" for k, v in goal.answers.items()
         ) or "No clarifying answers provided."
 
+        # Build rich context from user data, platform patterns, and success paths
+        context = _build_context_for_ai(goal)
+
         system_prompt = (
-            "You are a goal-decomposition assistant. "
-            "Given a user's goal and their answers to clarifying questions, "
-            "produce a JSON array of tasks that will help them achieve the goal. "
-            "Each task must have: title (str), description (str), estimated_minutes (int), "
-            "and optionally subtasks (array of same shape). "
-            "Return ONLY valid JSON with no prose."
+            "You are an expert goal-decomposition and execution-planning assistant. "
+            "Your job is NOT to give generic advice. You must produce hyper-specific, "
+            "immediately actionable tasks that a person can start in the next 15 minutes.\n\n"
+            "RULES:\n"
+            "1. Each task must be completable in a single focused session (5-60 minutes).\n"
+            "2. Tasks must be concrete and verifiable — 'Register a Stripe account' not 'Set up payments'.\n"
+            "3. Include the exact tools, websites, or commands to use in each task description.\n"
+            "4. Order tasks so the first 2-3 produce visible progress (motivation matters).\n"
+            "5. If the user is a beginner, prefer no-code tools and guided approaches.\n"
+            "6. If a proven path exists in the context, use it as a foundation but adapt to this user.\n"
+            "7. If the user avoids certain task types, provide alternatives.\n"
+            "8. Each task must have: title (str), description (str), estimated_minutes (int), "
+            "and optionally subtasks (array of same shape).\n"
+            "9. Return ONLY valid JSON: {\"tasks\": [...]}."
         )
         user_prompt = (
             f"Goal: {goal.title}\n"
             f"Details: {goal.description}\n\n"
-            f"Clarifying answers:\n{answers_text}\n\n"
-            f"Produce up to {config.MAX_TASKS_PER_GOAL} tasks."
+            f"Clarifying answers:\n{answers_text}\n"
         )
+        if context:
+            user_prompt += f"\n--- CONTEXT ---\n{context}\n--- END CONTEXT ---\n"
+        user_prompt += f"\nProduce up to {config.MAX_TASKS_PER_GOAL} tasks."
 
         response = client.chat.completions.create(
             model=config.MODEL,

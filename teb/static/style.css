@@ -2345,3 +2345,169 @@ html {
   .donut-chart { width: 70px; height: 70px; }
   .outcome-ring { width: 44px; height: 44px; }
 }
+
+/* ─── ROI Dashboard ────────────────────────────────────────────────────────── */
+
+.roi-dashboard { padding: var(--space-md) 0; }
+
+.roi-summary-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: var(--space-sm);
+  margin-bottom: var(--space-md);
+}
+
+.roi-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: var(--space-md);
+  text-align: center;
+}
+.roi-card-warn { border-color: #f59e0b; }
+.roi-card-error { border-color: #ef4444; }
+
+.roi-card-value {
+  font-size: 1.5rem;
+  font-weight: 700;
+  line-height: 1.2;
+}
+.roi-card-label {
+  font-size: .75rem;
+  color: var(--muted);
+  margin-top: 4px;
+}
+
+.roi-positive { color: #22c55e; }
+.roi-negative { color: #ef4444; }
+
+.roi-bar-chart { margin: var(--space-sm) 0; }
+.roi-bar-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  margin-bottom: 6px;
+}
+.roi-bar-label {
+  min-width: 100px;
+  font-size: .8rem;
+  color: var(--fg);
+  text-transform: capitalize;
+}
+.roi-bar-track {
+  flex: 1;
+  height: 8px;
+  background: var(--border);
+  border-radius: 4px;
+  overflow: hidden;
+}
+.roi-bar-fill {
+  height: 100%;
+  background: var(--accent);
+  border-radius: 4px;
+  transition: width .3s ease;
+}
+.roi-bar-amount {
+  font-size: .8rem;
+  font-weight: 600;
+  min-width: 60px;
+  text-align: right;
+}
+
+/* Timeline chart */
+.roi-timeline-chart {
+  display: flex;
+  align-items: flex-end;
+  gap: 4px;
+  height: 80px;
+  margin: var(--space-sm) 0;
+  padding: 0 2px;
+}
+.roi-timeline-bar {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  height: 100%;
+  min-width: 20px;
+}
+.roi-timeline-fill {
+  width: 100%;
+  background: var(--accent);
+  border-radius: 3px 3px 0 0;
+  min-height: 2px;
+  transition: height .3s ease;
+}
+.roi-timeline-label {
+  font-size: .6rem;
+  color: var(--muted);
+  margin-top: 2px;
+  white-space: nowrap;
+}
+
+/* Earning rows */
+.roi-earning-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  margin-bottom: 6px;
+  font-size: .85rem;
+}
+
+/* Budget rows */
+.roi-budget-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  margin-bottom: 6px;
+  font-size: .85rem;
+}
+.roi-budget-cat { min-width: 80px; text-transform: capitalize; }
+.roi-budget-nums { font-size: .75rem; white-space: nowrap; }
+
+.progress-bar-fill.warn { background: #f59e0b; }
+
+/* ─── Platform Insights ───────────────────────────────────────────────────── */
+
+.platform-insights { padding: var(--space-md) 0; }
+
+.platform-task-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-md);
+  margin: var(--space-sm) 0 var(--space-md);
+  font-size: .85rem;
+}
+
+.platform-paths {
+  list-style: none;
+  padding: 0;
+  margin: var(--space-sm) 0;
+}
+.platform-paths li {
+  padding: 6px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: .85rem;
+}
+.platform-paths li:last-child { border-bottom: none; }
+
+.platform-services {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: var(--space-sm) 0;
+}
+.platform-service-tag {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  padding: 4px 12px;
+  font-size: .8rem;
+}
+.platform-service-tag small { color: var(--muted); }
+
+@media (max-width: 640px) {
+  .roi-summary-cards { grid-template-columns: repeat(2, 1fr); }
+  .roi-bar-label { min-width: 60px; }
+}

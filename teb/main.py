@@ -1726,6 +1726,44 @@ def _guess_spending_category(service: str) -> str:
     return "general"
 
 
+# ─── ROI Dashboard ──────────────────────────────────────────────────────────
+
+@app.get("/api/goals/{goal_id}/roi")
+async def get_goal_roi(goal_id: int, request: Request):
+    """Get ROI dashboard for a goal: money spent by AI vs money earned.
+
+    Returns spending breakdown by category, spending timeline, earnings
+    from outcome metrics, budget utilization, and overall ROI percentage.
+    """
+    uid = _require_user(request)
+    _check_api_rate_limit(request)
+    _get_goal_for_user(goal_id, uid)
+    return storage.get_goal_roi(goal_id)
+
+
+@app.get("/api/users/me/roi")
+async def get_user_roi(request: Request):
+    """Get aggregate ROI across all of the current user's goals."""
+    uid = _require_user(request)
+    _check_api_rate_limit(request)
+    return storage.get_user_roi_summary(uid)
+
+
+# ─── Platform Insights (Aggregate Learning) ─────────────────────────────────
+
+@app.get("/api/platform/insights")
+async def get_platform_insights(request: Request):
+    """Get anonymized platform-wide patterns aggregated across all users.
+
+    Returns goal type completion rates, commonly-skipped tasks, popular
+    services, proven success paths, and common behavior patterns.
+    Used for platform-wide learning and improving AI decomposition.
+    """
+    _require_user(request)
+    _check_api_rate_limit(request)
+    return storage.get_platform_patterns()
+
+
 # ─── External Messaging ─────────────────────────────────────────────────────
 
 @app.post("/api/messaging/config", status_code=201)
