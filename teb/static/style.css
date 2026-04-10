@@ -2286,3 +2286,62 @@ html {
   .toggle-slider::before { width: 20px; height: 20px; }
   .toggle-switch input:checked + .toggle-slider::before { transform: translateX(20px); }
 }
+
+/* ─── Status donut chart ──────────────────────────────────────────────────── */
+.status-chart-wrap {
+  display: flex;
+  align-items: center;
+  gap: var(--space-lg);
+  margin-top: var(--space-md);
+}
+.donut-chart {
+  width: 90px;
+  height: 90px;
+  flex-shrink: 0;
+}
+.donut-center-text {
+  font-size: 14px;
+  font-weight: 700;
+  fill: var(--text-primary);
+}
+.chart-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-xs) var(--space-md);
+}
+.chart-legend-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+}
+.chart-legend-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+/* ─── Outcome ring charts ─────────────────────────────────────────────────── */
+.outcome-ring {
+  width: 56px;
+  height: 56px;
+  flex-shrink: 0;
+}
+.outcome-ring-text {
+  font-size: 12px;
+  font-weight: 700;
+  fill: var(--text-primary);
+}
+.outcome-metric-card {
+  display: flex;
+  align-items: center;
+  gap: var(--space-md);
+}
+
+@media (max-width: 640px) {
+  .status-chart-wrap { flex-direction: column; align-items: flex-start; gap: var(--space-sm); }
+  .donut-chart { width: 70px; height: 70px; }
+  .outcome-ring { width: 44px; height: 44px; }
+}

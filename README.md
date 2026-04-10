@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python 3.12](https://img.shields.io/badge/Python-3.12-3776AB.svg)](https://python.org)
-[![Tests: 578 passing](https://img.shields.io/badge/Tests-578_passing-brightgreen.svg)](#running-tests)
+[![Tests: 601 passing](https://img.shields.io/badge/Tests-601_passing-brightgreen.svg)](#running-tests)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.115-009688.svg)](https://fastapi.tiangolo.com)
 
 > *Humans are will without infinite execution; AI is infinite execution without will — teb sits at that seam, taking your raw intentions and dissolving everything beneath them into solved problems. You stop managing tasks and start governing outcomes.*
@@ -51,7 +51,8 @@ Then tracks whether you actually earned any money.
 - **Proactive suggestions** — rule-based and AI-powered engine surfaces opportunities, optimizations, and risks
 - **Persistent user profile** — skills, pace, style, and track record accumulate across goals
 - **Knowledge base** — success paths auto-captured and recommended to new users
-- **Pre-built integration catalog** — 10 popular services (Stripe, Namecheap, Vercel, SendGrid, GitHub, Cloudflare, Twitter, LinkedIn, Plausible, OpenAI) with API endpoint metadata
+- **Pre-built integration catalog** — 25 popular services (Stripe, Namecheap, Vercel, SendGrid, GitHub, Cloudflare, Twitter, LinkedIn, Plausible, OpenAI, DigitalOcean, AWS S3, Twilio, HubSpot, Airtable, Notion, Slack, Discord, Shopify, Mailgun, Resend, Supabase, Anthropic, Google Maps, Zapier) with API endpoint metadata
+- **Admin panel** — web UI and REST API for user management, account unlocking, platform stats, and integration management (role-gated to admin users)
 - **External messaging** — Telegram bot and webhook notifications for nudges, completions, spending approvals
 - **Credential vault** — Fernet-encrypted storage for API keys
 
@@ -330,6 +331,19 @@ All endpoints require `Authorization: Bearer <token>` unless marked *(no auth)*.
 |---|---|---|
 | `GET` | `/api/users/me/behaviors` | Get user behavior patterns |
 | `GET` | `/api/users/me/abandonment` | Get abandonment risk analysis |
+
+### Admin Panel *(admin role required)*
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/api/admin/users` | List all users with goal and task counts |
+| `GET` | `/api/admin/users/{id}` | Get user detail plus their goals |
+| `PATCH` | `/api/admin/users/{id}` | Update user role or unlock account |
+| `DELETE` | `/api/admin/users/{id}` | Delete a user and all their data |
+| `GET` | `/api/admin/stats` | Aggregate platform statistics |
+| `GET` | `/api/admin/integrations` | List all integrations with full detail |
+| `POST` | `/api/admin/integrations` | Create a new integration entry |
+| `DELETE` | `/api/admin/integrations/{name}` | Delete an integration by name |
 
 ---
 
@@ -769,7 +783,7 @@ teb is fully functional in **template mode** — no AI keys needed:
 - ✅ Budget management and spending approval
 - ✅ User profiles and knowledge base
 - ✅ Service discovery (50+ curated services)
-- ✅ Integration catalog (10 services)
+- ✅ Integration catalog (25 services)
 - ✅ Multi-agent delegation (template mode)
 - ✅ Proactive suggestions (rule-based)
 - ✅ Drip mode micro-tasking
@@ -843,12 +857,21 @@ All configuration is via environment variables. Copy `.env.example` to `.env`.
 | `TEB_STRIPE_API_KEY` | _(none)_ | Stripe payment processing API key |
 | `TEB_STRIPE_BASE_URL` | `https://api.stripe.com/v1` | Stripe API base URL |
 
+### Autonomous Execution
+
+| Variable | Default | Description |
+|---|---|---|
+| `TEB_AUTONOMOUS_EXECUTION` | `true` | Enable/disable background autopilot loop |
+| `TEB_AUTONOMOUS_EXECUTION_INTERVAL` | `30` | How often (seconds) the loop checks for pending tasks |
+| `TEB_AUTOPILOT_DEFAULT_THRESHOLD` | `50.0` | Max $ per auto-approved transaction |
+
 ### Application
 
 | Variable | Default | Description |
 |---|---|---|
 | `TEB_CORS_ORIGINS` | `*` | Comma-separated allowed origins (restrict in production) |
 | `TEB_LOG_LEVEL` | `INFO` | Logging level (`DEBUG`, `INFO`, `WARNING`, `ERROR`) |
+| `TEB_BASE_PATH` | _(empty)_ | URL path prefix for reverse-proxy mounting (e.g. `/teb`) |
 
 Without an AI key, teb operates in **template mode** — fully offline, instant. When both keys are set, Anthropic (Claude) is preferred by default.
 
@@ -858,14 +881,14 @@ Without an AI key, teb operates in **template mode** — fully offline, instant.
 
 ```
 teb/
-├── main.py            FastAPI app + 90 REST endpoints
-├── models.py          20 dataclass models (Goal, Task, User, etc.)
+├── main.py            FastAPI app + 97 REST endpoints
+├── models.py          18 dataclass models (Goal, Task, User, etc.)
 ├── storage.py         SQLite data access layer (27 tables)
 ├── decomposer.py      Template-based + AI decomposition, coaching, drip mode, success paths
 ├── executor.py        AI-powered task execution engine (API calls via httpx)
 ├── browser.py         Browser automation engine (AI plan generation + Playwright)
 ├── agents.py          Multi-agent delegation system with inter-agent messaging
-├── integrations.py    Pre-built integration catalog (10 services) + matching engine
+├── integrations.py    Pre-built integration catalog (25 services) + matching engine
 ├── payments.py        Real payment integration (Mercury banking + Stripe processing)
 ├── discovery.py       Tool/service discovery engine (50+ curated services + AI discovery)
 ├── deployer.py        Deployment engine (Vercel, Railway, Render) + health monitoring
@@ -873,7 +896,8 @@ teb/
 ├── messaging.py       External messaging (Telegram bots + webhooks)
 ├── ai_client.py       Unified AI client (Anthropic Claude + OpenAI, retry + fallback)
 ├── auth.py            JWT authentication, bcrypt hashing, RBAC, account locking
-├── config.py          Environment variable configuration (17 variables)
+├── security.py        SSRF-safe URL validation for outbound HTTP calls
+├── config.py          Environment variable configuration (23 variables)
 ├── templates/
 │   └── index.html     Single-page frontend
 └── static/
@@ -891,7 +915,8 @@ tests/
 ├── test_plan_features.py        Tests for new templates, spending resets, user storage
 ├── test_mvp_features.py         Tests for payments, discovery, behavior, agent memory
 ├── test_autopilot_features.py   Tests for autonomous execution, deployer, provisioning
-└── test_security_fixes.py       Tests for credential scoping, ownership, payment config
+├── test_security_fixes.py       Tests for credential scoping, ownership, payment config
+└── test_real_behaviors.py       Integration tests: browser execution, concurrency, payments, e2e
 deploy/
 ├── backup.sh                    Database backup script (SQLite .backup)
 ├── docker-entrypoint.sh         Docker entrypoint (auto-generates TEB_SECRET_KEY)
@@ -1107,7 +1132,7 @@ pip install -r requirements.txt
 pytest tests/ -v
 ```
 
-578 tests across 11 test files. Tests use an in-memory SQLite database and mock all external services.
+601 tests across 12 test files. Tests use an in-memory SQLite database and mock all external services. Integration tests verify browser execution, parallel agent orchestration, payment idempotency, SQLite concurrency, rate limiting, and end-to-end workflows.
 
 ---
 

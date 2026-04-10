@@ -906,14 +906,59 @@ document.getElementById('btn-focus-start').addEventListener('click', async () =>
 
 function updateProgress(tasks) {
   const topLevel = tasks.filter(t => t.parent_id === null);
-  if (!topLevel.length) { setProgress(0); return; }
+  if (!topLevel.length) { setProgress(0); renderStatusChart([]); return; }
   const done = topLevel.filter(t => t.status === 'done' || t.status === 'skipped').length;
   setProgress(Math.round((done / topLevel.length) * 100));
+  renderStatusChart(topLevel);
 }
 
 function setProgress(pct) {
   document.getElementById('progress-fill').style.width = pct + '%';
   document.getElementById('progress-label').textContent = pct + '% complete';
+}
+
+function renderStatusChart(tasks) {
+  const container = document.getElementById('status-chart');
+  if (!container) return;
+  if (!tasks.length) { container.innerHTML = ''; return; }
+
+  const counts = { done: 0, in_progress: 0, todo: 0, failed: 0, executing: 0, skipped: 0 };
+  tasks.forEach(t => { counts[t.status] = (counts[t.status] || 0) + 1; });
+  const total = tasks.length;
+  const colors = {
+    done: 'var(--color-success, #22c55e)', in_progress: 'var(--color-warning, #f59e0b)',
+    todo: 'var(--text-muted, #94a3b8)', failed: 'var(--color-error, #ef4444)',
+    executing: 'var(--color-info, #3b82f6)', skipped: '#64748b'
+  };
+  const labels = { done: 'Done', in_progress: 'In progress', todo: 'To do', failed: 'Failed', executing: 'Executing', skipped: 'Skipped' };
+
+  // Build SVG donut chart
+  const size = 100, cx = 50, cy = 50, r = 38, stroke = 10;
+  const circ = 2 * Math.PI * r;
+  let offset = 0;
+  let segments = '';
+  let legend = '';
+
+  for (const [status, count] of Object.entries(counts)) {
+    if (count === 0) continue;
+    const pct = count / total;
+    const len = pct * circ;
+    segments += `<circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="${colors[status]}" `
+      + `stroke-width="${stroke}" stroke-dasharray="${len} ${circ - len}" `
+      + `stroke-dashoffset="${-offset}" transform="rotate(-90 ${cx} ${cy})" />`;
+    offset += len;
+    legend += `<span class="chart-legend-item"><span class="chart-legend-dot" style="background:${colors[status]}"></span>${labels[status]} ${count}</span>`;
+  }
+
+  container.innerHTML = `
+    <div class="status-chart-wrap">
+      <svg viewBox="0 0 ${size} ${size}" class="donut-chart">
+        ${segments}
+        <text x="${cx}" y="${cy}" text-anchor="middle" dominant-baseline="central"
+              class="donut-center-text">${counts.done}/${total}</text>
+      </svg>
+      <div class="chart-legend">${legend}</div>
+    </div>`;
 }
 
 document.getElementById('back-from-tasks').addEventListener('click', () => {
@@ -1567,17 +1612,27 @@ async function loadOutcomeMetrics() {
         </div>`;
       return;
     }
-    container.innerHTML = metrics.map(m => `
+    container.innerHTML = metrics.map(m => {
+      const pct = Math.min(m.achievement_pct, 100);
+      const r = 28, circ = 2 * Math.PI * r, filled = (pct / 100) * circ;
+      const ringColor = pct >= 100 ? 'var(--color-success, #22c55e)' : pct >= 50 ? 'var(--color-warning, #f59e0b)' : 'var(--color-info, #3b82f6)';
+      return `
       <div class="outcome-metric-card">
+        <svg viewBox="0 0 64 64" class="outcome-ring">
+          <circle cx="32" cy="32" r="${r}" fill="none" stroke="var(--border, #334155)" stroke-width="6" />
+          <circle cx="32" cy="32" r="${r}" fill="none" stroke="${ringColor}" stroke-width="6"
+            stroke-dasharray="${filled} ${circ - filled}" stroke-dashoffset="${circ * 0.25}"
+            stroke-linecap="round" transform="rotate(-90 32 32)" />
+          <text x="32" y="32" text-anchor="middle" dominant-baseline="central"
+            class="outcome-ring-text">${pct}%</text>
+        </svg>
         <div class="outcome-metric-info">
           <div class="outcome-metric-label">${escHtml(m.label)}</div>
           <div class="outcome-metric-values">${m.current_value}${m.unit ? ' ' + escHtml(m.unit) : ''} / ${m.target_value}${m.unit ? ' ' + escHtml(m.unit) : ''}</div>
         </div>
-        <div class="outcome-metric-bar"><div class="outcome-metric-bar-fill" style="width:${m.achievement_pct}%"></div></div>
-        <div class="outcome-metric-pct">${m.achievement_pct}%</div>
         <button class="outcome-metric-update" data-id="${m.id}" data-current="${m.current_value}">Update</button>
-      </div>
-    `).join('');
+      </div>`;
+    }).join('');
     // Bind update buttons
     container.querySelectorAll('.outcome-metric-update').forEach(btn => {
       btn.addEventListener('click', async () => {

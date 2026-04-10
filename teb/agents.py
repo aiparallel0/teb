@@ -23,11 +23,16 @@ Without an AI key, agents use template-based heuristics.
 from __future__ import annotations
 
 import json
+import logging
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
+from threading import Lock
 from typing import Any, Dict, List, Optional
 
 from teb import config, storage
 from teb.models import AgentHandoff, AgentMessage, Goal, Task
+
+logger = logging.getLogger(__name__)
 
 
 # ─── Agent definitions ───────────────────────────────────────────────────────
@@ -753,15 +758,39 @@ def orchestrate_goal(goal: Goal) -> Dict[str, Any]:
         saved_task = storage.create_task(task)
         all_tasks.append(saved_task)
 
-    # Step 2: Execute delegations from coordinator
-    for delegation in coordinator_output.delegations:
+    # Step 2: Execute delegations from coordinator — PARALLEL where possible
+    #
+    # Independent specialists (no cross-delegation) run concurrently.
+    # Specialists that delegate to others run after their dependencies.
+    delegations = coordinator_output.delegations
+    _lock = Lock()
+
+    def _parallel_delegation(deleg: Dict[str, Any]) -> None:
+        """Run a single delegation chain; thread-safe via _lock for shared lists."""
         _run_delegation_chain(
             from_agent_type="coordinator",
-            to_agent_type=delegation["to_agent"],
-            instruction=delegation.get("instruction", ""),
+            to_agent_type=deleg["to_agent"],
+            instruction=deleg.get("instruction", ""),
             depth=0,
             context=coordinator_output.summary,
         )
+
+    if len(delegations) > 1:
+        max_workers = min(len(delegations), 4)
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            futures = {
+                executor.submit(_parallel_delegation, d): d
+                for d in delegations
+            }
+            for future in as_completed(futures):
+                try:
+                    future.result()
+                except Exception as exc:
+                    d = futures[future]
+                    logger.warning("Agent %s failed: %s", d.get("to_agent"), exc)
+    else:
+        for delegation in delegations:
+            _parallel_delegation(delegation)
 
     # Update goal status
     goal.status = "decomposed"

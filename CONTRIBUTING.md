@@ -27,7 +27,7 @@ uvicorn teb.main:app --reload
 pytest tests/ -v
 ```
 
-All 578 tests should pass. Tests use an in-memory SQLite database and mock all external services.
+All 601 tests should pass. Tests use an in-memory SQLite database and mock all external services.
 
 ## How to Contribute
 
@@ -85,6 +85,7 @@ All 578 tests should pass. Tests use an in-memory SQLite database and mock all e
 | `messaging.py` | Telegram + webhook notifications |
 | `ai_client.py` | Unified AI client (Anthropic + OpenAI) |
 | `auth.py` | JWT authentication + RBAC |
+| `security.py` | SSRF-safe URL validation for outbound HTTP |
 | `config.py` | Environment configuration |
 
 ## Questions?
