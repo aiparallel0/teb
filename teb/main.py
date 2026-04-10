@@ -3885,7 +3885,7 @@ async def get_goal_pacing(goal_id: int, request: Request):
     uid = _require_user(request)
     goal = _get_goal_for_user(goal_id, uid)
     tasks = storage.list_tasks(goal_id=goal_id)
-    checkins = storage.list_check_ins(goal_id)
+    checkins = storage.list_checkins(goal_id)
 
     total = len(tasks)
     done = sum(1 for t in tasks if t.status == "done")
