@@ -42,6 +42,9 @@ def set_db_path(path: str) -> None:
 _BUSY_TIMEOUT_MS = 5000  # Wait up to 5 seconds on lock contention
 _MAX_RETRIES = 3         # Retry on SQLITE_BUSY up to 3 times
 
+# Units that indicate monetary (revenue/earnings) outcome metrics
+_REVENUE_UNITS = {'$', 'usd', 'dollar', 'dollars', 'revenue', 'income', 'earnings'}
+
 
 @contextmanager
 def _conn() -> Generator[sqlite3.Connection, None, None]:
@@ -2325,8 +2328,7 @@ def get_goal_roi(goal_id: int) -> dict:
             day = r["created_at"][:10] if r["created_at"] else "unknown"
             spending_timeline[day] = spending_timeline.get(day, 0.0) + r["amount"]
 
-        # Money earned: outcome_metrics with unit containing '$' or 'dollar' or 'revenue' or 'USD'
-        revenue_units = {'$', 'usd', 'dollar', 'dollars', 'revenue', 'income', 'earnings'}
+        # Money earned: outcome_metrics with monetary unit
         om_rows = con.execute(
             "SELECT * FROM outcome_metrics WHERE goal_id = ?",
             (goal_id,),
@@ -2336,7 +2338,7 @@ def get_goal_roi(goal_id: int) -> dict:
         earnings_breakdown: list = []
         for r in om_rows:
             unit_lower = (r["unit"] or "").lower().strip()
-            if unit_lower in revenue_units or '$' in (r["unit"] or ""):
+            if unit_lower in _REVENUE_UNITS or '$' in (r["unit"] or ""):
                 total_earned += r["current_value"]
                 earnings_breakdown.append({
                     "label": r["label"],
