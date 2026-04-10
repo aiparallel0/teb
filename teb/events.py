@@ -195,6 +195,11 @@ def emit_goal_updated(user_id: int, goal_id: int, status: str) -> None:
     })
 
 
+def emit_webhook_event(user_id: int, event_type: str, data: Dict[str, Any]) -> None:
+    """Emit an event that should also trigger webhook delivery."""
+    event_bus.publish(user_id, event_type, data)
+
+
 async def stream_events(user_id: int, last_event_id: Optional[str] = None) -> AsyncGenerator[str, None]:
     """Async generator that yields SSE-formatted strings for a user.
 
