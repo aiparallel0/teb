@@ -216,7 +216,8 @@ async def _autonomous_execution_loop() -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _auto_exec_task
+    global _auto_exec_task, _APP_START_TIME
+    _APP_START_TIME = time.monotonic()
     storage.init_db()
     integrations.seed_integrations()
     storage.reset_all_daily_spending()
@@ -457,7 +458,7 @@ def _get_task_for_user(task_id: int, user_id: int) -> Task:
 
 # ─── Health check ─────────────────────────────────────────────────────────────
 
-_APP_START_TIME = time.monotonic()
+_APP_START_TIME: float = time.monotonic()  # Updated in lifespan startup
 
 
 @app.get("/health")

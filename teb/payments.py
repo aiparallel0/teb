@@ -21,6 +21,7 @@ import hashlib
 import hmac
 import json
 import logging
+import random
 import time
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
@@ -85,7 +86,7 @@ def _request_with_retry(
                 url, attempt + 1, max_retries + 1, exc,
             )
 
-        delay = _RETRY_BACKOFF_BASE * (2 ** attempt)
+        delay = _RETRY_BACKOFF_BASE * (2 ** attempt) + random.uniform(0, 0.5)
         time.sleep(delay)
 
     # Should not reach here, but satisfy type checker
@@ -425,7 +426,10 @@ class StripeProvider(PaymentProvider):
         """Verify Stripe webhook signature (v1 HMAC-SHA256)."""
         if not secret or not signature:
             return False
-        parts = dict(item.split("=", 1) for item in signature.split(",") if "=" in item)
+        try:
+            parts = dict(item.split("=", 1) for item in signature.split(",") if "=" in item)
+        except (ValueError, AttributeError):
+            return False
         timestamp = parts.get("t", "")
         v1_sig = parts.get("v1", "")
         if not timestamp or not v1_sig:

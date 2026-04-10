@@ -254,7 +254,8 @@ class TestBalanceVerification:
         }, headers=headers)
 
         assert r.status_code == 400
-        assert "positive" in r.json()["detail"].lower() or "Amount" in r.json()["detail"]
+        detail = r.json()["detail"].lower()
+        assert "positive" in detail or "amount" in detail
 
     def test_execute_payment_rejects_zero_amount(self):
         """Should reject zero payment amounts."""
