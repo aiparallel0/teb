@@ -120,7 +120,7 @@ def handle_tool_call(tool_name: str, arguments: Dict[str, Any],
         return handler(arguments, user_id)
     except Exception as e:
         logger.error("MCP tool call failed: %s(%s) -> %s", tool_name, arguments, e)
-        return {"error": str(e)}
+        return {"error": "Tool execution failed"}
 
 
 def _handle_create_goal(args: Dict[str, Any], user_id: Optional[int]) -> Dict[str, Any]:

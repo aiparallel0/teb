@@ -2754,12 +2754,16 @@ def list_agent_goal_memories(goal_id: int) -> list[AgentGoalMemory]:
 def prune_agent_goal_memory(goal_id: int, max_context_length: int = 8000) -> None:
     """Prune overly long context_json for a goal's agent memories.
 
+    Args:
+        goal_id: The goal whose agent memories to prune.
+        max_context_length: Maximum allowed length for context_json in characters (default: 8000).
+
     Attempts to parse JSON and keep only the last entries if it's a dict or
     list. Falls back to truncation and wraps in valid JSON if parsing fails.
     """
     with _conn() as con:
         rows = con.execute(
-            "SELECT id, context_json FROM agent_goal_memory WHERE goal_id = ? AND LENGTH(context_json) > ?",
+            "SELECT id, agent_type, context_json FROM agent_goal_memory WHERE goal_id = ? AND LENGTH(context_json) > ?",
             (goal_id, max_context_length),
         ).fetchall()
         now = datetime.now(timezone.utc).isoformat()
@@ -2781,6 +2785,11 @@ def prune_agent_goal_memory(goal_id: int, max_context_length: int = 8000) -> Non
                     truncated = json.dumps(data)[:max_context_length]
             except (json.JSONDecodeError, TypeError):
                 # Not valid JSON — truncate and wrap safely
+                import logging as _log
+                _log.getLogger(__name__).warning(
+                    "Pruning corrupt context_json for goal_id=%s agent_type=%s",
+                    goal_id, r["agent_type"],
+                )
                 truncated = json.dumps({"_pruned": raw[-max_context_length:]})
             con.execute(
                 "UPDATE agent_goal_memory SET context_json = ?, updated_at = ? WHERE id = ?",

@@ -3443,7 +3443,13 @@ async def update_execution_sandbox(goal_id: int, request: Request):
     ctx = storage.get_or_create_execution_context(goal_id)
     body = await request.json()
     if "credential_scope" in body:
-        ctx.credential_scope = json.dumps(body["credential_scope"]) if isinstance(body["credential_scope"], list) else body["credential_scope"]
+        scope = body["credential_scope"]
+        if isinstance(scope, list):
+            ctx.credential_scope = json.dumps(scope)
+        elif isinstance(scope, str):
+            ctx.credential_scope = scope
+        else:
+            raise HTTPException(status_code=400, detail="credential_scope must be a list or JSON string")
     ctx = storage.update_execution_context(ctx)
     return ctx.to_dict()
 
