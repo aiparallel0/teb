@@ -27,7 +27,7 @@ uvicorn teb.main:app --reload
 pytest tests/ -v
 ```
 
-All 578 tests should pass. Tests use an in-memory SQLite database and mock all external services.
+All 601 tests should pass. Tests use an in-memory SQLite database and mock all external services.
 
 ## How to Contribute
 

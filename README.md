@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python 3.12](https://img.shields.io/badge/Python-3.12-3776AB.svg)](https://python.org)
-[![Tests: 578 passing](https://img.shields.io/badge/Tests-578_passing-brightgreen.svg)](#running-tests)
+[![Tests: 601 passing](https://img.shields.io/badge/Tests-601_passing-brightgreen.svg)](#running-tests)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.115-009688.svg)](https://fastapi.tiangolo.com)
 
 > *Humans are will without infinite execution; AI is infinite execution without will — teb sits at that seam, taking your raw intentions and dissolving everything beneath them into solved problems. You stop managing tasks and start governing outcomes.*
@@ -915,7 +915,8 @@ tests/
 ├── test_plan_features.py        Tests for new templates, spending resets, user storage
 ├── test_mvp_features.py         Tests for payments, discovery, behavior, agent memory
 ├── test_autopilot_features.py   Tests for autonomous execution, deployer, provisioning
-└── test_security_fixes.py       Tests for credential scoping, ownership, payment config
+├── test_security_fixes.py       Tests for credential scoping, ownership, payment config
+└── test_real_behaviors.py       Integration tests: browser execution, concurrency, payments, e2e
 deploy/
 ├── backup.sh                    Database backup script (SQLite .backup)
 ├── docker-entrypoint.sh         Docker entrypoint (auto-generates TEB_SECRET_KEY)
@@ -1131,7 +1132,7 @@ pip install -r requirements.txt
 pytest tests/ -v
 ```
 
-578 tests across 11 test files. Tests use an in-memory SQLite database and mock all external services.
+601 tests across 12 test files. Tests use an in-memory SQLite database and mock all external services. Integration tests verify browser execution, parallel agent orchestration, payment idempotency, SQLite concurrency, rate limiting, and end-to-end workflows.
 
 ---
 

@@ -102,4 +102,4 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Systemd service file with full installation instructions
 - nginx reverse-proxy config for `/teb` path
 - HTTPS/TLS setup documentation (Certbot + Caddy)
-- 578 automated tests across 11 test files
+- 601 automated tests across 12 test files
