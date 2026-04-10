@@ -1324,6 +1324,45 @@ async def list_goal_messages(goal_id: int, request: Request, agent: Optional[str
     return [m.to_dict() for m in messages]
 
 
+@app.get("/api/goals/{goal_id}/agent-activity")
+async def get_agent_activity(goal_id: int, request: Request):
+    """Get combined agent activity for a goal — handoffs, messages, and task map.
+
+    Returns a unified view of all agent orchestration activity, suitable
+    for rendering an agent activity timeline in the UI.
+    """
+    uid = _require_user(request)
+    goal = _get_goal_for_user(goal_id, uid)
+    handoffs = storage.list_handoffs(goal_id)
+    messages = storage.list_agent_messages(goal_id)
+    tasks = storage.list_tasks(goal_id=goal_id)
+
+    # Build agent summary
+    agent_types = set()
+    for h in handoffs:
+        agent_types.add(h.from_agent)
+        agent_types.add(h.to_agent)
+
+    # Map tasks to agents via handoffs
+    task_agent_map: dict[int, str] = {}
+    for h in handoffs:
+        if h.task_id is not None:
+            task_agent_map[h.task_id] = h.to_agent
+
+    return {
+        "goal_id": goal_id,
+        "agents_involved": sorted(agent_types),
+        "handoffs": [h.to_dict() for h in handoffs],
+        "messages": [m.to_dict() for m in messages],
+        "task_agent_map": task_agent_map,
+        "total_tasks_created": len(tasks),
+        "tasks_by_agent": {
+            agent: sum(1 for tid, a in task_agent_map.items() if a == agent)
+            for agent in agent_types
+        },
+    }
+
+
 # ─── Browser Automation ─────────────────────────────────────────────────────
 
 @app.post("/api/tasks/{task_id}/browser")

@@ -520,9 +520,14 @@ async function showTasksScreen(goal, freshDecompose) {
   loadAutopilotStatus();
   loadRoiDashboard();
   loadPlatformInsights();
+  loadAgentActivity();
   showScreen('screen-tasks');
-  // Default to drip mode
-  setDripMode(true);
+
+  // Smart default: show all tasks view when there are many tasks (e.g. from AI Orchestrate),
+  // use drip mode only for fresh decompositions with fewer tasks
+  const topLevel = currentTasks.filter(t => t.parent_id === null);
+  const useDrip = freshDecompose || topLevel.length <= 8;
+  setDripMode(useDrip);
 
   // After a fresh decompose, auto-fetch outcome suggestions
   if (freshDecompose) {
@@ -558,7 +563,17 @@ async function loadDrip() {
     if (!res.task) {
       card.style.display = 'none';
       doneMsg.style.display = 'block';
-      msg.textContent = res.message || '';
+      // Show contextual done message
+      const doneTitle = document.getElementById('drip-done-title');
+      const doneDesc = document.getElementById('drip-done-desc');
+      if (res.message && res.message.includes('well done')) {
+        doneTitle.textContent = 'All tasks completed!';
+        doneDesc.textContent = 'Great job — you\'ve finished everything on your list.';
+      } else {
+        doneTitle.textContent = 'No tasks yet';
+        doneDesc.textContent = res.message || 'Click "AI Orchestrate" or decompose your goal to get started.';
+      }
+      msg.textContent = '';
       return;
     }
 
@@ -1090,7 +1105,7 @@ document.getElementById('btn-orchestrate').addEventListener('click', async () =>
   btn.disabled = true;
   btn.textContent = '🤖 Orchestrating…';
   panel.style.display = 'block';
-  content.innerHTML = '<p style="color:var(--muted)">Dispatching agents…</p>';
+  content.innerHTML = '<div class="agent-loading"><div class="loading-spinner-sm"></div><span>Dispatching agents…</span></div>';
 
   try {
     const result = await api.post(`/api/goals/${currentGoalId}/orchestrate`, {});
@@ -1098,26 +1113,65 @@ document.getElementById('btn-orchestrate').addEventListener('click', async () =>
     const messages = result.messages || [];
 
     let html = '';
-    if (handoffs.length) {
-      html += '<div class="agent-handoffs"><strong>Agent chain:</strong> ';
-      html += handoffs.map(h =>
-        `<span class="agent-tag">${escHtml(h.from_agent || '')} → ${escHtml(h.to_agent || '')}</span>`
-      ).join(' ');
-      html += '</div>';
-    }
-    if (messages.length) {
-      html += '<div class="agent-messages">';
-      messages.slice(0, 10).forEach(m => {
-        html += `<div class="agent-msg"><span class="agent-msg-from">${escHtml(m.from_agent || 'agent')}</span>: ${escHtml(m.content || '')}</div>`;
+
+    // Build agent activity timeline
+    if (handoffs.length || messages.length) {
+      html += '<div class="agent-timeline">';
+
+      // Strategy summary
+      if (result.strategy) {
+        html += `<div class="agent-timeline-item agent-strategy">
+          <div class="agent-timeline-icon">🎯</div>
+          <div class="agent-timeline-body">
+            <div class="agent-timeline-title">Strategy</div>
+            <div class="agent-timeline-text">${escHtml(result.strategy)}</div>
+          </div>
+        </div>`;
+      }
+
+      // Handoff chain as timeline
+      handoffs.forEach(h => {
+        const statusIcon = h.status === 'completed' ? '✅' : h.status === 'failed' ? '❌' : '⏳';
+        html += `<div class="agent-timeline-item">
+          <div class="agent-timeline-icon">${statusIcon}</div>
+          <div class="agent-timeline-body">
+            <div class="agent-timeline-title">
+              <span class="agent-badge agent-from">${escHtml(h.from_agent || '')}</span>
+              <span class="agent-arrow">→</span>
+              <span class="agent-badge agent-to">${escHtml(h.to_agent || '')}</span>
+            </div>
+            ${h.input_summary ? `<div class="agent-timeline-input">${escHtml(h.input_summary)}</div>` : ''}
+            ${h.output_summary ? `<div class="agent-timeline-output">${escHtml(h.output_summary)}</div>` : ''}
+          </div>
+        </div>`;
       });
+
+      // Agent messages
+      if (messages.length) {
+        html += '<div class="agent-messages-section">';
+        html += '<div class="agent-messages-title">💬 Agent Communication</div>';
+        messages.slice(0, 15).forEach(m => {
+          const typeIcon = m.message_type === 'request' ? '❓' : m.message_type === 'response' ? '💡' : m.message_type === 'context' ? '📋' : 'ℹ️';
+          html += `<div class="agent-msg-card">
+            <span class="agent-msg-icon">${typeIcon}</span>
+            <span class="agent-badge agent-from">${escHtml(m.from_agent || '')}</span>
+            <span class="agent-arrow">→</span>
+            <span class="agent-badge agent-to">${escHtml(m.to_agent || '')}</span>
+            <div class="agent-msg-content">${escHtml(m.content || '')}</div>
+          </div>`;
+        });
+        html += '</div>';
+      }
+
       html += '</div>';
     }
-    if (!html) html = '<p>Orchestration complete. Check back for task updates.</p>';
+
+    if (!html) html = '<p class="agent-empty">Orchestration complete. Tasks have been created.</p>';
     content.innerHTML = html;
     panel.open = true;
     // Refresh tasks after orchestration
     await refreshGoalView();
-    toast.success('Orchestration complete', `${handoffs.length} agent handoffs.`);
+    toast.success('Orchestration complete', `${handoffs.length} agent handoffs, tasks updated.`);
   } catch (e) {
     content.innerHTML = `<p class="error">${escHtml(e.message)}</p>`;
   } finally {
@@ -1141,6 +1195,78 @@ async function autoSuggestOutcomes(goalId) {
     banner.style.display = 'flex';
   } catch (e) {
     // Silent fail — suggestions are optional
+  }
+}
+
+// ─── Agent activity (load on page view, not just after orchestrate) ───────────
+
+async function loadAgentActivity() {
+  if (!currentGoalId) return;
+  const panel = document.getElementById('agent-activity-panel');
+  const content = document.getElementById('agent-activity-content');
+  try {
+    const data = await api.get(`/api/goals/${currentGoalId}/agent-activity`);
+    const handoffs = data.handoffs || [];
+    const messages = data.messages || [];
+    if (!handoffs.length && !messages.length) {
+      panel.style.display = 'none';
+      return;
+    }
+    panel.style.display = 'block';
+
+    let html = '<div class="agent-timeline">';
+
+    // Agent summary
+    const agents = data.agents_involved || [];
+    const tasksByAgent = data.tasks_by_agent || {};
+    if (agents.length) {
+      html += `<div class="agent-timeline-item agent-strategy">
+        <div class="agent-timeline-icon">🤖</div>
+        <div class="agent-timeline-body">
+          <div class="agent-timeline-title">Agents: ${agents.map(a => `<span class="agent-badge agent-from">${escHtml(a)}</span>`).join(' ')}</div>
+          <div class="agent-timeline-text">${data.total_tasks_created || 0} tasks created${Object.keys(tasksByAgent).length ? ' — ' + Object.entries(tasksByAgent).map(([a, c]) => `${a}: ${c}`).join(', ') : ''}</div>
+        </div>
+      </div>`;
+    }
+
+    // Handoffs
+    handoffs.forEach(h => {
+      const statusIcon = h.status === 'completed' ? '✅' : h.status === 'failed' ? '❌' : '⏳';
+      html += `<div class="agent-timeline-item">
+        <div class="agent-timeline-icon">${statusIcon}</div>
+        <div class="agent-timeline-body">
+          <div class="agent-timeline-title">
+            <span class="agent-badge agent-from">${escHtml(h.from_agent || '')}</span>
+            <span class="agent-arrow">→</span>
+            <span class="agent-badge agent-to">${escHtml(h.to_agent || '')}</span>
+          </div>
+          ${h.input_summary ? `<div class="agent-timeline-input">${escHtml(h.input_summary)}</div>` : ''}
+          ${h.output_summary ? `<div class="agent-timeline-output">${escHtml(h.output_summary)}</div>` : ''}
+        </div>
+      </div>`;
+    });
+
+    // Messages
+    if (messages.length) {
+      html += '<div class="agent-messages-section">';
+      html += '<div class="agent-messages-title">💬 Agent Communication</div>';
+      messages.slice(0, 10).forEach(m => {
+        const typeIcon = m.message_type === 'request' ? '❓' : m.message_type === 'response' ? '💡' : m.message_type === 'context' ? '📋' : 'ℹ️';
+        html += `<div class="agent-msg-card">
+          <span class="agent-msg-icon">${typeIcon}</span>
+          <span class="agent-badge agent-from">${escHtml(m.from_agent || '')}</span>
+          <span class="agent-arrow">→</span>
+          <span class="agent-badge agent-to">${escHtml(m.to_agent || '')}</span>
+          <div class="agent-msg-content">${escHtml(m.content || '')}</div>
+        </div>`;
+      });
+      html += '</div>';
+    }
+
+    html += '</div>';
+    content.innerHTML = html;
+  } catch (e) {
+    panel.style.display = 'none';
   }
 }
 
@@ -1191,7 +1317,8 @@ async function loadProactiveSuggestions() {
 
     container.innerHTML = active.map(s => `
       <div class="suggestion-item" data-id="${s.id}">
-        <div class="suggestion-text">${escHtml(s.content || s.message || '')}</div>
+        <div class="suggestion-text">${escHtml(s.suggestion || s.content || s.message || '')}</div>
+        <div class="suggestion-rationale">${s.rationale ? '<span class="suggestion-category badge">' + escHtml(s.category || '') + '</span> ' + escHtml(s.rationale) : ''}</div>
         <div class="suggestion-actions">
           <button class="btn-accept-suggestion btn-primary btn-sm" data-id="${s.id}">Accept</button>
           <button class="btn-dismiss-suggestion btn-secondary btn-sm" data-id="${s.id}">Dismiss</button>
@@ -1238,13 +1365,18 @@ document.getElementById('btn-discover').addEventListener('click', async () => {
           <div class="empty-state-desc">No matching services found.</div>
         </div>`;
     } else {
-      container.innerHTML = services.slice(0, 8).map(s => `
+      container.innerHTML = services.slice(0, 10).map(s => {
+        const category = s.category ? `<span class="badge">${escHtml(s.category)}</span>` : '';
+        const skillLevel = s.skill_level ? `<span class="badge">${escHtml(s.skill_level)}</span>` : '';
+        return `
         <div class="discovery-item">
-          <div class="discovery-name">${escHtml(s.name || s.service_name || '')}</div>
-          <div class="discovery-desc">${escHtml(s.description || '')}</div>
-          ${s.website ? `<a href="${escHtml(s.website)}" target="_blank" rel="noopener" class="discovery-link">Visit →</a>` : ''}
-        </div>
-      `).join('');
+          <div>
+            <div class="discovery-name">${escHtml(s.name || s.service_name || '')} ${category} ${skillLevel}</div>
+            <div class="discovery-desc">${escHtml(s.description || '')}</div>
+            ${s.website || s.url ? `<a href="${escHtml(s.website || s.url)}" target="_blank" rel="noopener" class="discovery-link">Visit →</a>` : ''}
+          </div>
+        </div>`;
+      }).join('');
     }
   } catch (e) {
     container.innerHTML = `<p class="error">${escHtml(e.message)}</p>`;

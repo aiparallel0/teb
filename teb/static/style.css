@@ -1272,6 +1272,64 @@ hr {
   font-size: var(--text-sm);
   line-height: var(--leading-relaxed);
 }
+
+/* Agent timeline visualization */
+.agent-loading {
+  display: flex; align-items: center; gap: var(--space-sm);
+  color: var(--muted); padding: var(--space-md) 0;
+}
+.loading-spinner-sm {
+  width: 18px; height: 18px;
+  border: 2px solid var(--border-subtle);
+  border-top-color: var(--primary);
+  border-radius: 50%; animation: spin .6s linear infinite;
+}
+.agent-timeline {
+  display: flex; flex-direction: column; gap: 0;
+  position: relative; padding-left: 1.5rem;
+}
+.agent-timeline::before {
+  content: ''; position: absolute; left: .55rem; top: .75rem; bottom: .75rem;
+  width: 2px; background: var(--border-subtle);
+}
+.agent-timeline-item {
+  display: flex; gap: var(--space-sm); align-items: flex-start;
+  position: relative; padding: var(--space-sm) 0;
+}
+.agent-timeline-icon {
+  width: 1.5rem; height: 1.5rem; flex-shrink: 0; display: flex;
+  align-items: center; justify-content: center; font-size: .85rem;
+  position: relative; z-index: 1; background: var(--bg); border-radius: 50%;
+  margin-left: -1.5rem;
+}
+.agent-timeline-body { flex: 1; min-width: 0; }
+.agent-timeline-title { font-weight: 600; display: flex; align-items: center; gap: .35rem; flex-wrap: wrap; }
+.agent-timeline-text { color: var(--text-secondary); margin-top: .15rem; font-size: var(--text-xs); }
+.agent-timeline-input { color: var(--muted); font-size: var(--text-xs); margin-top: .15rem; font-style: italic; }
+.agent-timeline-output { color: var(--text-secondary); font-size: var(--text-xs); margin-top: .15rem; }
+.agent-strategy { background: var(--primary-soft); border-radius: var(--radius-md); padding: var(--space-sm) var(--space-md) !important; margin-bottom: var(--space-xs); }
+
+.agent-badge {
+  display: inline-block; padding: .1rem .45rem; border-radius: var(--radius-sm);
+  font-size: var(--text-xs); font-weight: 600; white-space: nowrap;
+}
+.agent-from { background: var(--primary-soft); color: var(--primary); }
+.agent-to { background: var(--success-soft); color: var(--green-600); }
+.agent-arrow { color: var(--muted); font-size: var(--text-xs); }
+
+.agent-messages-section { margin-top: var(--space-sm); }
+.agent-messages-title { font-weight: 600; font-size: var(--text-xs); color: var(--muted); margin-bottom: var(--space-xs); text-transform: uppercase; letter-spacing: .04em; }
+.agent-msg-card {
+  display: flex; flex-wrap: wrap; align-items: center; gap: .3rem;
+  padding: var(--space-xs) 0; border-bottom: 1px solid var(--border-subtle);
+  font-size: var(--text-xs);
+}
+.agent-msg-card:last-child { border-bottom: none; }
+.agent-msg-icon { font-size: .75rem; }
+.agent-msg-content { width: 100%; color: var(--text-secondary); margin-top: .1rem; padding-left: 1.2rem; }
+.agent-empty { color: var(--muted); text-align: center; padding: var(--space-md); }
+
+/* Legacy agent styles (kept for compatibility) */
 .agent-handoffs { margin-bottom: var(--space-sm); }
 .agent-tag {
   display: inline-block;
@@ -1305,20 +1363,29 @@ hr {
 /* ─── Proactive suggestions ──────────────────────────────────────────────────── */
 .suggestions-list { padding: var(--space-sm) var(--space-md) var(--space-md); }
 .suggestion-item {
-  padding: var(--space-sm) 0;
-  border-bottom: 1px solid var(--border-subtle);
+  padding: var(--space-sm) var(--space-md);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  margin-bottom: var(--space-xs);
+  transition: border-color .15s, box-shadow .15s;
 }
-.suggestion-item:last-child { border-bottom: none; }
-.suggestion-text { font-size: var(--text-sm); margin-bottom: .4rem; line-height: var(--leading-relaxed); }
+.suggestion-item:hover { border-color: var(--primary); box-shadow: 0 2px 8px rgba(0,0,0,.05); }
+.suggestion-text { font-size: var(--text-sm); margin-bottom: .35rem; line-height: var(--leading-relaxed); font-weight: 500; }
+.suggestion-rationale { font-size: var(--text-xs); color: var(--text-secondary); margin-bottom: .4rem; line-height: var(--leading-relaxed); }
+.suggestion-category { font-size: var(--text-xxs, .65rem); text-transform: uppercase; letter-spacing: .03em; margin-right: .3rem; }
 .suggestion-actions { display: flex; gap: var(--space-sm); }
 
 /* ─── Service discovery ──────────────────────────────────────────────────────── */
 .discovery-list { padding: var(--space-sm) var(--space-md) var(--space-md); }
 .discovery-item {
-  padding: var(--space-sm) 0;
-  border-bottom: 1px solid var(--border-subtle);
+  display: flex; align-items: flex-start; gap: var(--space-sm);
+  padding: var(--space-sm) var(--space-md);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  margin-bottom: var(--space-xs);
+  transition: border-color .15s;
 }
-.discovery-item:last-child { border-bottom: none; }
+.discovery-item:hover { border-color: var(--primary); }
 .discovery-name { font-weight: 600; font-size: var(--text-sm); }
 .discovery-desc { font-size: var(--text-xs); color: var(--text-secondary); margin-top: .15rem; line-height: var(--leading-relaxed); }
 .discovery-link {

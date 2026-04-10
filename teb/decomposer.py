@@ -1938,6 +1938,10 @@ def drip_next_task(
     done_count = sum(1 for t in top_level if t.status in ("done", "skipped"))
     total_template_tasks = len(template.tasks)
 
+    # Use actual task count when real tasks exist (e.g. from AI Orchestrate),
+    # only fall back to template count when no tasks exist yet.
+    total_actual = len(top_level) if top_level else total_template_tasks
+
     # P2.3: Detect stall — if there's a current task that hasn't been completed in >2 days
     focus = get_focus_task(tasks)
     if focus and focus.status in ("todo", "in_progress"):
@@ -1955,11 +1959,11 @@ def drip_next_task(
             "task": focus.to_dict(),
             "is_new": False,
             "adaptive_question": None,
-            "message": f"Continue working on your current task ({done_count}/{total_template_tasks} completed).",
+            "message": f"Continue working on your current task ({done_count}/{total_actual} completed).",
         }
 
-    # If all template tasks are done, we're complete
-    if done_count >= total_template_tasks:
+    # If all actual tasks are done, we're complete
+    if top_level and done_count >= total_actual:
         return {
             "task": None,
             "is_new": False,
@@ -1967,7 +1971,32 @@ def drip_next_task(
             "message": "All tasks completed — well done! 🎉",
         }
 
-    # Determine which template task comes next
+    # If real tasks already exist (e.g. from AI Orchestrate or decompose),
+    # surface the next todo task instead of creating new template tasks.
+    if top_level:
+        todo_tasks = sorted(
+            [t for t in top_level if t.status == "todo"],
+            key=lambda x: (x.order_index, x.id or 0),
+        )
+        if todo_tasks:
+            next_task = todo_tasks[0]
+            return {
+                "task": next_task.to_dict(),
+                "is_new": False,
+                "adaptive_question": None,
+                "message": f"Task {done_count + 1} of {total_actual}.",
+            }
+        # All tasks are in non-todo, non-done states (executing, failed, etc.)
+        active = [t for t in top_level if t.status not in ("done", "skipped")]
+        if active:
+            return {
+                "task": active[0].to_dict(),
+                "is_new": False,
+                "adaptive_question": None,
+                "message": f"Task is {active[0].status} ({done_count}/{total_actual} completed).",
+            }
+
+    # Determine which template task comes next (only when no real tasks exist)
     next_index = done_count
     if next_index >= total_template_tasks:
         return {
