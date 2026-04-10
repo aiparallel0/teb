@@ -3,16 +3,37 @@ name: Deploy to portearchive.com
 on:
   push:
     branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
+  # Run tests first — never deploy broken code
+  test:
+    uses: ./.github/workflows/ci.yml
+
   deploy:
+    needs: test
     runs-on: ubuntu-latest
     environment: production
+    if: |
+      github.event_name == 'push' || github.event_name == 'workflow_dispatch'
 
     steps:
+      - name: Check required secrets
+        run: |
+          missing=""
+          if [ -z "${{ secrets.DEPLOY_HOST }}" ]; then missing="$missing DEPLOY_HOST"; fi
+          if [ -z "${{ secrets.DEPLOY_USER }}" ]; then missing="$missing DEPLOY_USER"; fi
+          if [ -z "${{ secrets.DEPLOY_SSH_KEY }}" ]; then missing="$missing DEPLOY_SSH_KEY"; fi
+          if [ -n "$missing" ]; then
+            echo "::error::Missing required secrets:$missing"
+            echo "Configure these secrets in Settings → Secrets → Actions to enable auto-deploy."
+            echo "See deploy/README.md for setup instructions."
+            exit 1
+          fi
+
       - name: Deploy via SSH
         uses: appleboy/ssh-action@v1
         with:
@@ -22,8 +43,22 @@ jobs:
           script: |
             set -e
             cd /opt/teb
+
+            echo "==> Pulling latest code..."
             git pull origin main
+
+            echo "==> Updating nginx config..."
             sudo cp nginx/teb.conf /etc/nginx/snippets/teb.conf
             sudo nginx -t
+
+            echo "==> Rebuilding and restarting containers..."
             docker compose up -d --build
+
+            echo "==> Reloading nginx..."
             sudo systemctl reload nginx
+
+            echo "==> Verifying health..."
+            sleep 5
+            curl -sf http://localhost:8000/health | python3 -c "import sys,json; d=json.load(sys.stdin); print(f'Status: {d[\"status\"]}, Version: {d[\"version\"]}'); sys.exit(0 if d['status']=='healthy' else 1)"
+
+            echo "==> Deploy complete!"

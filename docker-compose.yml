@@ -12,9 +12,12 @@ services:
       # Base path for reverse-proxy mounting — required for portearchive.com/teb hosting.
       # Set to empty or remove for standalone deployments (app served at /).
       - TEB_BASE_PATH=/teb
-      # Uncomment and set your AI provider keys:
-      # - OPENAI_API_KEY=${OPENAI_API_KEY}
-      # - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      # AI providers — set at least one for AI-powered decomposition and execution.
+      # Without these, teb falls back to template mode (no real AI involvement).
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - OPENAI_BASE_URL=${OPENAI_BASE_URL:-https://api.openai.com/v1}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - TEB_AI_PROVIDER=${TEB_AI_PROVIDER:-auto}
       # - TEB_CORS_ORIGINS=https://yourdomain.com
     env_file:
       - .env

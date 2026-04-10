@@ -106,7 +106,7 @@ def generate_plan(
 
     1.4: Also consults discovered services to enrich the plan context.
     """
-    if not config.OPENAI_API_KEY:
+    if not config.has_ai():
         return _generate_plan_template(task, credentials)
     return _generate_plan_ai(task, credentials)
 
@@ -125,7 +125,7 @@ def _generate_plan_template(
     return ExecutionPlan(
         can_execute=False,
         reason=(
-            "AI mode is required for automated execution (set OPENAI_API_KEY). "
+            "AI mode is required for automated execution (set OPENAI_API_KEY or ANTHROPIC_API_KEY). "
             f"{len(credentials)} API(s) available but plan generation needs AI."
         ),
         steps=[],
@@ -145,12 +145,7 @@ def _generate_plan_ai(
         )
 
     try:
-        from openai import OpenAI  # noqa: PLC0415
-
-        client = OpenAI(
-            api_key=config.OPENAI_API_KEY,
-            base_url=config.OPENAI_BASE_URL,
-        )
+        from teb.ai_client import ai_chat_json  # noqa: PLC0415
 
         cred_descriptions = "\n".join(
             f"- id={c.id}, name={c.name}, base_url={c.base_url}, description={c.description}"
@@ -223,18 +218,8 @@ def _generate_plan_ai(
             f"Can this task be executed via the available APIs? If so, produce the plan."
         )
 
-        response = client.chat.completions.create(
-            model=config.MODEL,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-            response_format={"type": "json_object"},
-            temperature=0.1,
-        )
+        data = ai_chat_json(system_prompt, user_prompt, temperature=0.1)
 
-        raw = response.choices[0].message.content or "{}"
-        data = json.loads(raw)
         return _parse_plan(data, credentials)
     except Exception as exc:
         return ExecutionPlan(

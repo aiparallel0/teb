@@ -998,7 +998,7 @@ def _build_context_for_ai(goal: Goal) -> str:
 
 def decompose_ai(goal: Goal) -> List[Task]:
     """
-    Call an OpenAI-compatible API to decompose the goal.
+    Call the configured AI provider to decompose the goal.
 
     Enhanced with:
     - User profile and behavior context
@@ -1009,12 +1009,7 @@ def decompose_ai(goal: Goal) -> List[Task]:
     Falls back to template mode on any error.
     """
     try:
-        from openai import OpenAI  # noqa: PLC0415
-
-        client = OpenAI(
-            api_key=config.OPENAI_API_KEY,
-            base_url=config.OPENAI_BASE_URL,
-        )
+        from teb.ai_client import ai_chat_json  # noqa: PLC0415
 
         answers_text = "\n".join(
             f"- {k}: {v}" for k, v in goal.answers.items()
@@ -1048,18 +1043,8 @@ def decompose_ai(goal: Goal) -> List[Task]:
             user_prompt += f"\n--- CONTEXT ---\n{context}\n--- END CONTEXT ---\n"
         user_prompt += f"\nProduce up to {config.MAX_TASKS_PER_GOAL} tasks."
 
-        response = client.chat.completions.create(
-            model=config.MODEL,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-            response_format={"type": "json_object"},
-            temperature=0.3,
-        )
+        data = ai_chat_json(system_prompt, user_prompt, temperature=0.3)
 
-        raw = response.choices[0].message.content or "{}"
-        data = json.loads(raw)
         # Accept {"tasks": [...]} or a bare array
         task_list: List[Any] = data if isinstance(data, list) else data.get("tasks", [])
         return _parse_ai_tasks(task_list, goal.id)  # type: ignore[arg-type]
@@ -1100,7 +1085,7 @@ def decompose(goal: Goal) -> List[Task]:
     - Success paths from similar goals (1.3) to reorder/modify tasks
     - User behavior patterns (1.2) to skip tasks the user avoids
     """
-    if config.OPENAI_API_KEY:
+    if config.has_ai():
         tasks = decompose_ai(goal)
     else:
         tasks = decompose_template(goal)
@@ -1233,7 +1218,7 @@ def decompose_task(task: Task) -> List[Task]:
     approach that splits the task into research → execute → verify steps,
     each ≤ 25 minutes.
     """
-    if config.OPENAI_API_KEY:
+    if config.has_ai():
         return _decompose_task_ai(task)
     return _decompose_task_template(task)
 
@@ -1478,14 +1463,9 @@ def _decompose_generic_task(task: Task, total: int) -> List[Task]:
 
 
 def _decompose_task_ai(task: Task) -> List[Task]:
-    """Call an OpenAI-compatible API to break a single task into sub-tasks."""
+    """Call the configured AI provider to break a single task into sub-tasks."""
     try:
-        from openai import OpenAI  # noqa: PLC0415
-
-        client = OpenAI(
-            api_key=config.OPENAI_API_KEY,
-            base_url=config.OPENAI_BASE_URL,
-        )
+        from teb.ai_client import ai_chat_json  # noqa: PLC0415
 
         system_prompt = (
             "You are a task-decomposition assistant. "
@@ -1502,18 +1482,8 @@ def _decompose_task_ai(task: Task) -> List[Task]:
             f"Break this into 2-5 concrete, actionable sub-tasks."
         )
 
-        response = client.chat.completions.create(
-            model=config.MODEL,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-            response_format={"type": "json_object"},
-            temperature=0.3,
-        )
+        data = ai_chat_json(system_prompt, user_prompt, temperature=0.3)
 
-        raw = response.choices[0].message.content or "{}"
-        data = json.loads(raw)
         subtask_list = data if isinstance(data, list) else data.get("subtasks", [])
         return _parse_task_subtasks(subtask_list, task)
     except Exception:
@@ -1938,9 +1908,10 @@ def drip_next_task(
     done_count = sum(1 for t in top_level if t.status in ("done", "skipped"))
     total_template_tasks = len(template.tasks)
 
-    # Use actual task count when real tasks exist (e.g. from AI Orchestrate),
-    # only fall back to template count when no tasks exist yet.
-    total_actual = len(top_level) if top_level else total_template_tasks
+    # Use the larger of actual task count or template count as the total.
+    # In drip mode, tasks are created one at a time so len(top_level) may be < template count.
+    # After AI Orchestrate, len(top_level) may exceed template count.
+    total_actual = max(len(top_level), total_template_tasks)
 
     # P2.3: Detect stall — if there's a current task that hasn't been completed in >2 days
     focus = get_focus_task(tasks)
