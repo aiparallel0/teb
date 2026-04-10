@@ -161,7 +161,8 @@ async def test_drip_mode_surfaces_existing_tasks(client):
 
     # Manually create tasks as if AI Orchestrate created them
     for i in range(5):
-        resp = await client.post(f"/api/goals/{gid}/tasks", json={
+        resp = await client.post("/api/tasks", json={
+            "goal_id": gid,
             "title": f"Orchestrated task {i+1}",
             "description": f"Step {i+1} from AI",
             "estimated_minutes": 30,
@@ -185,7 +186,8 @@ async def test_drip_mode_not_premature_done(client):
 
     # Create 10 tasks
     for i in range(10):
-        await client.post(f"/api/goals/{gid}/tasks", json={
+        await client.post("/api/tasks", json={
+            "goal_id": gid,
             "title": f"Build step {i+1}",
             "description": f"Step {i+1}",
             "estimated_minutes": 20,
@@ -273,17 +275,18 @@ def test_transcribe_no_api_key(monkeypatch):
     assert result == ""
 
 
-def test_transcribe_validates_format():
-    """transcribe_audio rejects unsupported formats."""
+def test_transcribe_validates_format(monkeypatch):
+    """transcribe_audio raises ValueError for unsupported formats when key is set."""
+    monkeypatch.setattr(config, "OPENAI_API_KEY", "sk-test")
     from teb.transcribe import transcribe_audio
     with pytest.raises(ValueError, match="Unsupported audio format"):
         transcribe_audio(b"data", "test.exe")
 
 
-def test_transcribe_validates_size():
-    """transcribe_audio rejects files over 25MB."""
+def test_transcribe_validates_size(monkeypatch):
+    """transcribe_audio raises ValueError for files over 25MB when key is set."""
+    monkeypatch.setattr(config, "OPENAI_API_KEY", "sk-test")
     from teb.transcribe import transcribe_audio
-    # 26MB of data
     big_data = b"x" * (26 * 1024 * 1024)
     with pytest.raises(ValueError, match="too large"):
         transcribe_audio(big_data, "test.mp3")
