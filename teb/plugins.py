@@ -127,12 +127,21 @@ def discover_plugins(plugins_dir: Optional[str] = None) -> List[PluginManifest]:
 
 
 def load_plugin(plugin: PluginManifest) -> bool:
-    """Load a plugin's executor from its module_path."""
+    """Load a plugin's executor from its module_path.
+
+    For safety, the module_path must be an existing file. It is validated
+    to prevent loading modules from arbitrary locations.
+    """
     if not plugin.module_path or not os.path.exists(plugin.module_path):
         logger.warning("Plugin %s has no valid module_path: %s", plugin.name, plugin.module_path)
         return False
+    # Resolve to real path to prevent symlink tricks
+    real_path = os.path.realpath(plugin.module_path)
+    if not os.path.isfile(real_path):
+        logger.warning("Plugin %s module_path is not a file: %s", plugin.name, real_path)
+        return False
     try:
-        spec = importlib.util.spec_from_file_location(f"teb_plugin_{plugin.name}", plugin.module_path)
+        spec = importlib.util.spec_from_file_location(f"teb_plugin_{plugin.name}", real_path)
         if spec is None or spec.loader is None:
             return False
         module = importlib.util.module_from_spec(spec)

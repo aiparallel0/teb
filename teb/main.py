@@ -3405,7 +3405,11 @@ async def mcp_tool_call(request: Request):
     tool_name = body.get("name", "")
     arguments = body.get("arguments", {})
     from teb import mcp_server  # noqa: E402
-    result = mcp_server.handle_tool_call(tool_name, arguments, user_id=uid)
+    try:
+        result = mcp_server.handle_tool_call(tool_name, arguments, user_id=uid)
+    except Exception:
+        logger.exception("MCP tool call failed: %s", tool_name)
+        result = {"error": "Internal error processing tool call"}
     return result
 
 

@@ -146,19 +146,23 @@ async def test_agent_goal_memory_storage_update():
 
 @pytest.mark.anyio
 async def test_agent_goal_memory_prune(client):
-    """Test pruning overly long agent memories."""
+    """Test pruning overly long agent memories produces valid JSON."""
     goal_id = await _create_goal(client, "Prune test goal")
     mem = storage.get_or_create_agent_goal_memory("web_dev", goal_id)
-    mem.context_json = "x" * 10000
+    # Create a large dict context
+    large_ctx = {f"key_{i}": f"value_{i}" * 100 for i in range(100)}
+    mem.context_json = json.dumps(large_ctx)
     storage.update_agent_goal_memory(mem)
 
     resp = await client.post(f"/api/goals/{goal_id}/agent-memory/prune")
     assert resp.status_code == 200
     assert resp.json()["pruned"] is True
 
-    # Check it was trimmed
+    # Check it was trimmed and is still valid JSON
     mem2 = storage.get_or_create_agent_goal_memory("web_dev", goal_id)
     assert len(mem2.context_json) <= 8000
+    parsed = json.loads(mem2.context_json)  # Should not raise
+    assert isinstance(parsed, dict)
 
 
 @pytest.mark.anyio

@@ -28,6 +28,13 @@ from typing import Any, AsyncGenerator, Dict, List, Optional, Set
 logger = logging.getLogger(__name__)
 
 
+HEARTBEAT_INTERVAL_SECONDS = 30
+"""Seconds between SSE heartbeat comments to keep connections alive."""
+
+_MAX_SUBSCRIBER_QUEUE_SIZE = 200
+"""Maximum events queued per subscriber before events are dropped."""
+
+
 @dataclass
 class SSEEvent:
     """A single server-sent event."""
@@ -112,7 +119,7 @@ class EventBus:
 
     def subscribe(self, user_id: int) -> asyncio.Queue:
         """Create a new subscription queue for a user."""
-        queue: asyncio.Queue = asyncio.Queue(maxsize=200)
+        queue: asyncio.Queue = asyncio.Queue(maxsize=_MAX_SUBSCRIBER_QUEUE_SIZE)
         self._subscribers[user_id].append(queue)
         return queue
 
@@ -204,7 +211,7 @@ async def stream_events(user_id: int, last_event_id: Optional[str] = None) -> As
     try:
         while True:
             try:
-                event = await asyncio.wait_for(queue.get(), timeout=30.0)
+                event = await asyncio.wait_for(queue.get(), timeout=HEARTBEAT_INTERVAL_SECONDS)
                 yield event.serialize()
             except asyncio.TimeoutError:
                 # Heartbeat to keep connection alive

@@ -2752,7 +2752,11 @@ def list_agent_goal_memories(goal_id: int) -> list[AgentGoalMemory]:
 
 
 def prune_agent_goal_memory(goal_id: int, max_context_length: int = 8000) -> None:
-    """Prune overly long context_json for a goal's agent memories."""
+    """Prune overly long context_json for a goal's agent memories.
+
+    Attempts to parse JSON and keep only the last entries if it's a dict or
+    list. Falls back to truncation and wraps in valid JSON if parsing fails.
+    """
     with _conn() as con:
         rows = con.execute(
             "SELECT id, context_json FROM agent_goal_memory WHERE goal_id = ? AND LENGTH(context_json) > ?",
@@ -2760,8 +2764,24 @@ def prune_agent_goal_memory(goal_id: int, max_context_length: int = 8000) -> Non
         ).fetchall()
         now = datetime.now(timezone.utc).isoformat()
         for r in rows:
-            # Keep only the last portion of the context
-            truncated = r["context_json"][-max_context_length:]
+            raw = r["context_json"]
+            try:
+                data = json.loads(raw)
+                if isinstance(data, dict) and len(raw) > max_context_length:
+                    # Keep the most recently added keys (last N items)
+                    keys = list(data.keys())
+                    while len(json.dumps(data)) > max_context_length and keys:
+                        del data[keys.pop(0)]
+                    truncated = json.dumps(data)
+                elif isinstance(data, list) and len(raw) > max_context_length:
+                    while len(json.dumps(data)) > max_context_length and data:
+                        data.pop(0)
+                    truncated = json.dumps(data)
+                else:
+                    truncated = json.dumps(data)[:max_context_length]
+            except (json.JSONDecodeError, TypeError):
+                # Not valid JSON — truncate and wrap safely
+                truncated = json.dumps({"_pruned": raw[-max_context_length:]})
             con.execute(
                 "UPDATE agent_goal_memory SET context_json = ?, updated_at = ? WHERE id = ?",
                 (truncated, now, r["id"]),
@@ -2996,8 +3016,15 @@ def get_or_create_execution_context(goal_id: int) -> ExecutionContext:
         import tempfile, os
         base_dir = os.path.join(tempfile.gettempdir(), "teb_sandbox")
         os.makedirs(base_dir, exist_ok=True)
-        browser_dir = os.path.join(base_dir, f"browser_{goal_id}")
-        temp_dir = os.path.join(base_dir, f"temp_{goal_id}")
+        # Sanitize goal_id to prevent path injection (must be a positive integer)
+        safe_id = abs(int(goal_id))
+        browser_dir = os.path.join(base_dir, f"browser_{safe_id}")
+        temp_dir = os.path.join(base_dir, f"temp_{safe_id}")
+        # Verify paths stay within the sandbox base directory
+        if not os.path.realpath(browser_dir).startswith(os.path.realpath(base_dir)):
+            raise ValueError("Invalid sandbox path")
+        if not os.path.realpath(temp_dir).startswith(os.path.realpath(base_dir)):
+            raise ValueError("Invalid sandbox path")
         os.makedirs(browser_dir, exist_ok=True)
         os.makedirs(temp_dir, exist_ok=True)
         cur = con.execute(
