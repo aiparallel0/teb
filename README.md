@@ -857,12 +857,21 @@ All configuration is via environment variables. Copy `.env.example` to `.env`.
 | `TEB_STRIPE_API_KEY` | _(none)_ | Stripe payment processing API key |
 | `TEB_STRIPE_BASE_URL` | `https://api.stripe.com/v1` | Stripe API base URL |
 
+### Autonomous Execution
+
+| Variable | Default | Description |
+|---|---|---|
+| `TEB_AUTONOMOUS_EXECUTION` | `true` | Enable/disable background autopilot loop |
+| `TEB_AUTONOMOUS_EXECUTION_INTERVAL` | `30` | How often (seconds) the loop checks for pending tasks |
+| `TEB_AUTOPILOT_DEFAULT_THRESHOLD` | `50.0` | Max $ per auto-approved transaction |
+
 ### Application
 
 | Variable | Default | Description |
 |---|---|---|
 | `TEB_CORS_ORIGINS` | `*` | Comma-separated allowed origins (restrict in production) |
 | `TEB_LOG_LEVEL` | `INFO` | Logging level (`DEBUG`, `INFO`, `WARNING`, `ERROR`) |
+| `TEB_BASE_PATH` | _(empty)_ | URL path prefix for reverse-proxy mounting (e.g. `/teb`) |
 
 Without an AI key, teb operates in **template mode** — fully offline, instant. When both keys are set, Anthropic (Claude) is preferred by default.
 
@@ -873,7 +882,7 @@ Without an AI key, teb operates in **template mode** — fully offline, instant.
 ```
 teb/
 ├── main.py            FastAPI app + 97 REST endpoints
-├── models.py          20 dataclass models (Goal, Task, User, etc.)
+├── models.py          18 dataclass models (Goal, Task, User, etc.)
 ├── storage.py         SQLite data access layer (27 tables)
 ├── decomposer.py      Template-based + AI decomposition, coaching, drip mode, success paths
 ├── executor.py        AI-powered task execution engine (API calls via httpx)
@@ -888,7 +897,7 @@ teb/
 ├── ai_client.py       Unified AI client (Anthropic Claude + OpenAI, retry + fallback)
 ├── auth.py            JWT authentication, bcrypt hashing, RBAC, account locking
 ├── security.py        SSRF-safe URL validation for outbound HTTP calls
-├── config.py          Environment variable configuration (17 variables)
+├── config.py          Environment variable configuration (23 variables)
 ├── templates/
 │   └── index.html     Single-page frontend
 └── static/

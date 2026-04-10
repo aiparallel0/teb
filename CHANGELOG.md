@@ -27,7 +27,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - API-based task execution — AI plans and executes REST API calls via registered credentials
 - Browser automation — AI generates Playwright-based browser plans (navigate, click, type, extract)
 - Manual fallback for browser plans when Playwright is not installed
-- Pre-built integration catalog (10 services: Stripe, Namecheap, Vercel, SendGrid, GitHub, Cloudflare, Twitter, LinkedIn, Plausible, OpenAI)
+- Pre-built integration catalog (25 services: Stripe, Namecheap, Vercel, SendGrid, GitHub, Cloudflare, Twitter, LinkedIn, Plausible, OpenAI, DigitalOcean, AWS S3, Twilio, HubSpot, Airtable, Notion, Slack, Discord, Shopify, Mailgun, Resend, Supabase, Anthropic, Google Maps, Zapier)
 - Execution logging for full traceability
 
 #### AI & Agents
@@ -69,9 +69,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Rate limiting on auth endpoints (20 req/min per IP)
 - Account locking after failed login attempts
 - CORS middleware with configurable origins
+- SSRF protection for outbound HTTP calls (private IP/metadata blocking)
+- Timing-safe token comparison for JWT validation
+- Path traversal protection in file-serving routes
+
+#### Admin Panel
+- Admin web UI with platform stats, user management, and integration management
+- 8 admin REST API endpoints (role-gated to admin users)
+- User search, role editing, account unlocking, and user deletion
+- Integration CRUD from the admin panel
+
+#### UI
+- Dark mode with system-preference detection and toggle
+- Toast notification system for user feedback
+- CSS animations and transitions
+- Design tokens for consistent theming
+- Accessibility improvements (ARIA labels, keyboard navigation, focus management)
 
 #### Infrastructure
-- FastAPI REST API (90 endpoints)
+- FastAPI REST API (97 endpoints)
 - SQLite database with 27 tables and WAL mode
 - Docker support with health checks, non-root user, and Playwright pre-installed
 - docker-compose with persistent volume
