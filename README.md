@@ -81,7 +81,7 @@ teb                     # starts the server at http://localhost:8000
 ```bash
 pip install -r requirements.txt
 cp .env.example .env          # edit .env — set TEB_JWT_SECRET at minimum
-uvicorn teb.main:app --reload
+uvicorn teb.main:asgi_app --reload
 # Open http://localhost:8000
 ```
 
@@ -564,7 +564,7 @@ OPENAI_API_KEY=sk-...
 
 Start the server:
 ```bash
-uvicorn teb.main:app --reload
+uvicorn teb.main:asgi_app --reload
 # Open http://localhost:8000
 ```
 

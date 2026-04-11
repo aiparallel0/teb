@@ -18,7 +18,7 @@ Or use the one-liner: `bash start.sh`
 ### Running the Application
 
 ```bash
-uvicorn teb.main:app --reload
+uvicorn teb.main:asgi_app --reload
 ```
 
 ### Running Tests
