@@ -3,36 +3,13 @@
 #  deploy/server-setup.sh — teb MEGA SERVER SETUP SCRIPT
 #  Run once on a fresh server (or re-run safely; it is idempotent).
 #
-#  What this script does, in order:
-#    1.  Checks prerequisites (OS, root, curl, git, docker, nginx)
-#    2.  Creates the deploy user & /opt/teb directory
-#    3.  Generates (or reuses) SSH key pair → tells you the 3 GitHub secrets
-#    4.  Clones / updates the repo at /opt/teb
-#    5.  Writes /opt/teb/.env (interactive or from existing values)
-#    6.  Installs / configures nginx snippet (nginx/teb.conf)
-#    7.  Brings Docker Compose up
-#    8.  Installs systemd backup timer (optional)
-#    9.  Smoke-tests the health endpoint
-#   10.  Prints the exact secrets to paste into GitHub
-#
 #  Usage:
-#    curl -fsSL https://raw.githubusercontent.com/aiparallel0/teb/main/deploy/server-setup.sh | sudo bash
-#    — OR —
-#    sudo bash deploy/server-setup.sh
+#    sudo bash /opt/teb/deploy/server-setup.sh
 #
-#  Environment variables you can pre-set to skip prompts:
-#    REPO_URL          git clone URL          (default: https://github.com/aiparallel0/teb.git)
-#    DEPLOY_USER       OS user for SSH        (default: deploy)
-#    INSTALL_DIR       app directory          (default: /opt/teb)
-#    TEB_JWT_SECRET    JWT signing secret     (auto-generated if not set)
-#    TEB_SECRET_KEY    Fernet key             (auto-generated if not set)
-#    ANTHROPIC_API_KEY Anthropic key          (optional)
-#    OPENAI_API_KEY    OpenAI key             (optional)
-#    TEB_BASE_PATH     proxy mount path       (default: /teb)
-#    DOMAIN            server hostname/IP     (default: portearchive.com)
-#    SKIP_NGINX        set to 1 to skip nginx (default: 0)
-#    SKIP_SYSTEMD      set to 1 to skip timer (default: 0)
-#    NONINTERACTIVE    set to 1 for CI        (default: 0)
+#  Pre-set env vars to skip prompts:
+#    DEPLOY_USER, INSTALL_DIR, TEB_JWT_SECRET, TEB_SECRET_KEY,
+#    ANTHROPIC_API_KEY, OPENAI_API_KEY, TEB_BASE_PATH, DOMAIN,
+#    SKIP_NGINX, SKIP_SYSTEMD, NONINTERACTIVE
 # =============================================================================
 
 set -euo pipefail
@@ -45,9 +22,9 @@ info()    { echo -e "${CYAN}[INFO]${RESET}  $*"; }
 success() { echo -e "${GREEN}[OK]${RESET}    $*"; }
 warn()    { echo -e "${YELLOW}[WARN]${RESET}  $*"; }
 error()   { echo -e "${RED}[ERROR]${RESET} $*" >&2; exit 1; }
-banner()  { echo -e "\n${BOLD}${CYAN}════════════════════════════════════════${RESET}"; \
-echo -e "${BOLD}${CYAN}  $*${RESET}"; \
-echo -e "${BOLD}${CYAN}════════════════════════════════════════${RESET}\n"; }
+banner()  { echo -e "\n${BOLD}${CYAN}════════════════════════════════════════${RESET}";
+            echo -e "${BOLD}${CYAN}  $*${RESET}";
+            echo -e "${BOLD}${CYAN}════════════════════════════════════════${RESET}\n"; }
 
 # ─── Defaults ─────────────────────────────────────────────────────────────────
 REPO_URL="${REPO_URL:-https://github.com/aiparallel0/teb.git}"
@@ -67,8 +44,8 @@ banner "Step 0 — Preflight checks"
 [[ $EUID -eq 0 ]] || error "Please run as root: sudo bash $0"
 info "Running as root ✓"
 
-# Detect OS
 if [[ -f /etc/os-release ]]; then
+  # shellcheck source=/dev/null
   source /etc/os-release
   info "OS: $PRETTY_NAME"
 else
@@ -79,38 +56,33 @@ fi
 banner "Step 1 — System packages"
 
 PKGS_NEEDED=()
-
-command -v git      &>/dev/null || PKGS_NEEDED+=(git)
-command -v curl     &>/dev/null || PKGS_NEEDED+=(curl)
-command -v nginx    &>/dev/null || PKGS_NEEDED+=(nginx)
-command -v docker   &>/dev/null || PKGS_NEEDED+=(docker.io)
-command -v python3  &>/dev/null || PKGS_NEEDED+=(python3)
+command -v git     &>/dev/null || PKGS_NEEDED+=(git)
+command -v curl    &>/dev/null || PKGS_NEEDED+=(curl)
+command -v nginx   &>/dev/null || PKGS_NEEDED+=(nginx)
+command -v docker  &>/dev/null || PKGS_NEEDED+=(docker.io)
+command -v python3 &>/dev/null || PKGS_NEEDED+=(python3)
 
 if [[ ${#PKGS_NEEDED[@]} -gt 0 ]]; then
   info "Installing: ${PKGS_NEEDED[*]}"
   if command -v apt-get &>/dev/null; then
     apt-get update -qq
-    apt-get install -y -qq "${PKGS_NEEDED[@]}"
+    DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "${PKGS_NEEDED[@]}"
   elif command -v dnf &>/dev/null; then
     dnf install -y -q "${PKGS_NEEDED[@]}"
-  elif command -v yum &>/dev/null; then
-    yum install -y -q "${PKGS_NEEDED[@]}"
   else
     error "Unknown package manager. Install manually: ${PKGS_NEEDED[*]}"
   fi
 fi
 
-# Ensure docker compose v2 plugin exists
 if ! docker compose version &>/dev/null 2>&1; then
   info "Installing docker-compose-plugin …"
   if command -v apt-get &>/dev/null; then
-    apt-get install -y -qq docker-compose-plugin
+    DEBIAN_FRONTEND=noninteractive apt-get install -y -qq docker-compose-plugin
   else
-    warn "docker compose v2 plugin not found — install it manually."
+    warn "docker compose v2 not found — install it manually."
   fi
 fi
 
-# Enable & start Docker
 systemctl enable --now docker 2>/dev/null || true
 success "System packages OK"
 
@@ -124,21 +96,21 @@ else
   success "Created user '${DEPLOY_USER}'"
 fi
 
-# Add to docker group
 usermod -aG docker "${DEPLOY_USER}" 2>/dev/null || true
 
-# Passwordless sudo for nginx & systemctl (deploy-specific commands only)
 SUDOERS_FILE="/etc/sudoers.d/teb-deploy"
 if [[ ! -f "$SUDOERS_FILE" ]]; then
   cat > "$SUDOERS_FILE" <<SUDO
-# Auto-generated by teb server-setup.sh — safe to delete if deploy user removed
-${DEPLOY_USER} ALL=(ALL) NOPASSWD: /bin/systemctl reload nginx, /bin/systemctl restart nginx, /usr/sbin/nginx, /bin/cp /opt/teb/nginx/* /etc/nginx/snippets/*
+# Auto-generated by teb server-setup.sh
+${DEPLOY_USER} ALL=(ALL) NOPASSWD: /bin/systemctl reload nginx, /bin/systemctl restart nginx, /usr/sbin/nginx -t, /bin/cp /opt/teb/nginx/* /etc/nginx/snippets/*
 SUDO
   chmod 0440 "$SUDOERS_FILE"
   success "Sudoers rule written to $SUDOERS_FILE"
+else
+  info "Sudoers rule already exists."
 fi
 
-# ─── STEP 3: SSH key for GitHub Actions ───────────────────────────────────────
+# ─── STEP 3: SSH key pair ─────────────────────────────────────────────────────
 banner "Step 3 — SSH key pair (GitHub Actions deploy key)"
 
 SSH_DIR="/home/${DEPLOY_USER}/.ssh"
@@ -160,12 +132,14 @@ fi
 PUB_KEY="$(cat "${SSH_KEY_PATH}.pub")"
 PRIV_KEY="$(cat "${SSH_KEY_PATH}")"
 
-# Authorise the public key so GitHub Actions can SSH in
-auth_keys="${SSH_DIR}/authorized_keys"
-if ! grep -qF "$PUB_KEY" "$AUTH_KEYS" 2>/dev/null; then
+# ── FIX: use consistent variable name AUTH_KEYS throughout ──────────────────
+AUTH_KEYS="${SSH_DIR}/authorized_keys"
+touch "$AUTH_KEYS"
+chmod 600 "$AUTH_KEYS"
+chown "${DEPLOY_USER}:${DEPLOY_USER}" "$AUTH_KEYS"
+
+if ! grep -qF "$PUB_KEY" "$AUTH_KEYS"; then
   echo "$PUB_KEY" >> "$AUTH_KEYS"
-  chmod 600 "$AUTH_KEYS"
-  chown "${DEPLOY_USER}:${DEPLOY_USER}" "$AUTH_KEYS"
   success "Public key added to authorized_keys"
 else
   info "Public key already in authorized_keys."
@@ -181,7 +155,7 @@ banner "Step 4 — Repository at ${INSTALL_DIR}"
 if [[ -d "${INSTALL_DIR}/.git" ]]; then
   info "Repo already cloned — pulling latest …"
   cd "${INSTALL_DIR}"
-  sudo -u "${DEPLOY_USER}" git pull origin main
+  git pull origin main || true
 else
   info "Cloning ${REPO_URL} → ${INSTALL_DIR}"
   git clone "${REPO_URL}" "${INSTALL_DIR}"
@@ -195,8 +169,8 @@ banner "Step 5 — Environment file (.env)"
 
 ENV_FILE="${INSTALL_DIR}/.env"
 
-# Auto-generate secrets if not supplied
-if [[ -z "${TEB_JWT_SECRET:-}" ]]; then
+if [[ -z "
+TEB_JWT_SECRET:-" ]]; then
   if [[ -f "$ENV_FILE" ]] && grep -q "^TEB_JWT_SECRET=" "$ENV_FILE"; then
     TEB_JWT_SECRET="$(grep "^TEB_JWT_SECRET=" "$ENV_FILE" | cut -d= -f2-)"
     info "Reusing existing TEB_JWT_SECRET from .env"
@@ -206,7 +180,8 @@ if [[ -z "${TEB_JWT_SECRET:-}" ]]; then
   fi
 fi
 
-if [[ -z "${TEB_SECRET_KEY:-}" ]]; then
+if [[ -z "
+TEB_SECRET_KEY:-" ]]; then
   if [[ -f "$ENV_FILE" ]] && grep -q "^TEB_SECRET_KEY=" "$ENV_FILE"; then
     TEB_SECRET_KEY="$(grep "^TEB_SECRET_KEY=" "$ENV_FILE" | cut -d= -f2-)"
     info "Reusing existing TEB_SECRET_KEY from .env"
@@ -217,42 +192,34 @@ if [[ -z "${TEB_SECRET_KEY:-}" ]]; then
   fi
 fi
 
-# Interactive prompts for AI keys (unless NONINTERACTIVE=1)
 if [[ "$NONINTERACTIVE" != "1" ]]; then
-  if [[ -z "${ANTHROPIC_API_KEY:-}" ]]; then
-    echo -n "Anthropic API key (sk-ant-…) or ENTER to skip: "
+  if [[ -z "
+ANTHROPIC_API_KEY:-" ]]; then
+    printf "Anthropic API key (sk-ant-…) or ENTER to skip: "
     read -r ANTHROPIC_API_KEY </dev/tty || ANTHROPIC_API_KEY=""
   fi
-  if [[ -z "${OPENAI_API_KEY:-}" ]]; then
-    echo -n "OpenAI API key (sk-…) or ENTER to skip: "
+  if [[ -z "
+OPENAI_API_KEY:-" ]]; then
+    printf "OpenAI API key (sk-…) or ENTER to skip: "
     read -r OPENAI_API_KEY </dev/tty || OPENAI_API_KEY=""
   fi
 fi
 
 info "Writing ${ENV_FILE} …"
 cat > "$ENV_FILE" <<ENV
-# ─── teb .env — generated by server-setup.sh on $(date -u +"%Y-%m-%dT%H:%M:%SZ") ─────
+# teb .env — generated by server-setup.sh on $(date -u +"%Y-%m-%dT%H:%M:%SZ")
 # DO NOT COMMIT THIS FILE.
 
-# ─── Security (REQUIRED) ──────────────────────────────────────────────────────
 TEB_JWT_SECRET=${TEB_JWT_SECRET}
 TEB_SECRET_KEY=${TEB_SECRET_KEY}
-
-# ─── Deployment ───────────────────────────────────────────────────────────────
 TEB_BASE_PATH=${TEB_BASE_PATH}
 DATABASE_URL=sqlite:///data/teb.db
-
-# ─── AI Providers ─────────────────────────────────────────────────────────────
 ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
 OPENAI_API_KEY=${OPENAI_API_KEY:-}
 OPENAI_BASE_URL=${OPENAI_BASE_URL:-https://api.openai.com/v1}
 TEB_AI_PROVIDER=${TEB_AI_PROVIDER:-auto}
-
-# ─── Optional ─────────────────────────────────────────────────────────────────
 # TEB_CORS_ORIGINS=https://${DOMAIN}
 # TEB_LOG_LEVEL=INFO
-# TEB_EXECUTOR_TIMEOUT=30
-# TEB_AUTONOMOUS_EXECUTION=true
 ENV
 
 chmod 600 "$ENV_FILE"
@@ -267,7 +234,6 @@ if [[ "$SKIP_NGINX" == "1" ]]; then
 else
   NGINX_SNIPPET_SRC="${INSTALL_DIR}/nginx/teb.conf"
   NGINX_SNIPPETS_DIR="/etc/nginx/snippets"
-  NGINX_SITE="/etc/nginx/sites-enabled/teb"
 
   mkdir -p "$NGINX_SNIPPETS_DIR"
 
@@ -290,17 +256,29 @@ location ${TEB_BASE_PATH}/ {
 NGINX
   fi
 
-  # Create a basic site config that includes the snippet, only if none exists
-  if [[ ! -f "$NGINX_SITE" ]] && [[ ! -f "/etc/nginx/sites-enabled/default" ]]; then
-    cat > "/etc/nginx/sites-available/teb" <<SITE
+  NGINX_SITE_AVAIL="/etc/nginx/sites-available/teb"
+  NGINX_SITE_ENABLED="/etc/nginx/sites-enabled/teb"
+
+  if [[ ! -f "$NGINX_SITE_AVAIL" ]]; then
+    cat > "$NGINX_SITE_AVAIL" <<SITE
 server {
     listen 80;
     server_name ${DOMAIN};
     include snippets/teb.conf;
 }
 SITE
-    ln -sf "/etc/nginx/sites-available/teb" "$NGINX_SITE"
-    info "Created /etc/nginx/sites-available/teb and symlinked."
+    info "Created ${NGINX_SITE_AVAIL}"
+  fi
+
+  if [[ ! -L "$NGINX_SITE_ENABLED" ]]; then
+    ln -sf "$NGINX_SITE_AVAIL" "$NGINX_SITE_ENABLED"
+    info "Symlinked to sites-enabled."
+  fi
+
+  # Remove default site if it conflicts
+  if [[ -f "/etc/nginx/sites-enabled/default" ]]; then
+    rm -f "/etc/nginx/sites-enabled/default"
+    info "Removed default nginx site to avoid conflicts."
   fi
 
   nginx -t && systemctl reload nginx
@@ -311,15 +289,14 @@ fi
 banner "Step 7 — Docker Compose"
 
 cd "${INSTALL_DIR}"
-sudo -u "${DEPLOY_USER}" docker compose pull --quiet 2>/dev/null || true
-sudo -u "${DEPLOY_USER}" docker compose up -d --build
+docker compose up -d --build
 success "Containers running."
 
 # ─── STEP 8: Systemd backup timer ─────────────────────────────────────────────
 banner "Step 8 — Systemd backup timer"
 
 if [[ "$SKIP_SYSTEMD" == "1" ]]; then
-  warn "SKIP_SYSTEMD=1 — skipping systemd timer setup."
+  warn "SKIP_SYSTEMD=1 — skipping."
 else
   SYSTEMD_SRC="${INSTALL_DIR}/deploy/systemd"
   if [[ -d "$SYSTEMD_SRC" ]]; then
@@ -347,56 +324,65 @@ HEALTH_URL="http://localhost:8000/health"
 if curl -sf "$HEALTH_URL" | python3 -c "
 import sys, json
 d = json.load(sys.stdin)
-print(f'  status : {d[\"status\"]}')
-print(f'  version: {d.get(\"version\", \"unknown\")}')
-sys.exit(0 if d['status'] == 'healthy' else 1)
-"; then
+print(f'  status : {d["status"]}')
+print(f'  version: {d.get("version", "unknown")}')
+s.exit(0 if d['status'] == 'healthy' else 1)"
+; then
   success "Health check passed ✓"
 else
-  warn "Health check did not return healthy. Check logs:"
+  warn "Health check did not return healthy. Run:"
   echo "  docker compose -f ${INSTALL_DIR}/docker-compose.yml logs --tail=40"
 fi
 
-# ─── STEP 10: Print GitHub secrets ───────────────────────────────────────────
+# ─── STEP 10: Print GitHub secrets ────────────────────────────────────────────
 banner "Step 10 — GitHub Actions Secrets"
 
-SERVER_IP="$(curl -sf --max-time 5 https://api.ipify.org || hostname -I | awk '{print $1}')"
+SERVER_IP="$(curl -sf --max-time 5 https://api.ipify.org 2>/dev/null || hostname -I | awk '{print $1}')"
 
-echo -e "${BOLD}Add these 3 secrets to your repository:${RESET}"
-echo -e "  ${YELLOW}Settings → Secrets and variables → Actions → New repository secret${RESET}\n"
+# Save key to temp file for easy scp retrieval
+TMP_KEY_FILE="/tmp/teb_DEPLOY_SSH_KEY_paste_into_github.txt"
+cp "${SSH_KEY_PATH}" "$TMP_KEY_FILE"
+chmod 644 "$TMP_KEY_FILE"
 
-echo -e "${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}" 
-echo -e "${BOLD}Secret 1 — DEPLOY_HOST${RESET}" 
-echo -e "${GREEN}${SERVER_IP}${RESET}   (or use your domain: ${DOMAIN})" 
 echo ""
-echo -e "${BOLD}Secret 2 — DEPLOY_USER${RESET}" 
-echo -e "${GREEN}${DEPLOY_USER}${RESET}"
+echo -e "${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+echo -e "${BOLD}  Add these 3 secrets to GitHub:${RESET}"
+echo -e "  ${YELLOW}Settings → Secrets and variables → Actions → New repository secret${RESET}"
+echo -e "${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
 echo ""
-echo -e "${BOLD}Secret 3 — DEPLOY_SSH_KEY${RESET}" 
-echo -e "${YELLOW}(copy the ENTIRE block below, including -----BEGIN/END----- lines)${RESET}" 
-echo -e "${GREEN}${PRIV_KEY}${RESET}" 
-echo -e "${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+echo -e "${BOLD}DEPLOY_HOST${RESET}"
+echo -e "  ${GREEN}${SERVER_IP}${RESET}   (or: ${DOMAIN})"
 echo ""
-echo -e "${BOLD}Quick copy-paste for GitHub CLI (if you have gh installed locally):${RESET}"
+echo -e "${BOLD}DEPLOY_USER${RESET}"
+echo -e "  ${GREEN}${DEPLOY_USER}${RESET}"
 echo ""
-echo "  gh secret set DEPLOY_HOST    --body '${SERVER_IP}'  --repo aiparallel0/teb" 
-echo "  gh secret set DEPLOY_USER    --body '${DEPLOY_USER}' --repo aiparallel0/teb" 
-echo "  gh secret set DEPLOY_SSH_KEY < ${SSH_KEY_PATH}      --repo aiparallel0/teb" 
+echo -e "${BOLD}DEPLOY_SSH_KEY${RESET}  — copy the ENTIRE block including BEGIN/END lines:" 
+echo -e "${BOLD}━━━ COPY FROM NEXT LINE ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
+cat "${SSH_KEY_PATH}"
+echo -e "${BOLD}━━━ COPY UP TO PREVIOUS LINE ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
 echo ""
+echo -e "${YELLOW}Key also saved to: ${TMP_KEY_FILE}${RESET}"
+echo -e "${YELLOW}To copy it to your local machine: scp root@${SERVER_IP}:${TMP_KEY_FILE} ~/teb_key.txt${RESET}"
+echo ""
+echo -e "${BOLD}GitHub CLI one-liners (run on your local machine after scp):${RESET}"
+echo "  gh secret set DEPLOY_HOST    --body '${SERVER_IP}'  --repo aiparallel0/teb"
+echo "  gh secret set DEPLOY_USER    --body '${DEPLOY_USER}' --repo aiparallel0/teb"
+echo "  gh secret set DEPLOY_SSH_KEY < ~/teb_key.txt         --repo aiparallel0/teb"
+echo ""
+echo -e "${BOLD}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${RESET}"
 
 # ─── Summary ──────────────────────────────────────────────────────────────────
 banner "All done!"
-echo -e "  App running at : ${GREEN}http://${DOMAIN}${TEB_BASE_PATH}/${RESET}"
-echo -e "  Install dir    : ${INSTALL_DIR}"
-echo -e "  Deploy user    : ${DEPLOY_USER}"
-echo -e "  SSH private key: ${SSH_KEY_PATH}"
-echo -e "  Health endpoint: ${HEALTH_URL}"
+echo -e "  App     : ${GREEN}http://${DOMAIN}${TEB_BASE_PATH}/${RESET}"
+echo -e "  Dir     : ${INSTALL_DIR}"
+echo -e "  User    : ${DEPLOY_USER}"
+echo -e "  SSH key : ${SSH_KEY_PATH}"
+echo -e "  Health  : ${HEALTH_URL}"
 echo ""
 echo -e "${BOLD}Next steps:${RESET}"
-echo "  1. Add the 3 secrets above to GitHub (Settings → Secrets → Actions)."
-echo "  2. Push any commit to 'main' — the deploy workflow will run automatically."
-echo "  3. Or trigger it manually: Actions → Deploy to portearchive.com → Run workflow."
+echo "  1. Paste DEPLOY_HOST, DEPLOY_USER, DEPLOY_SSH_KEY into GitHub Secrets."
+echo "  2. Push any commit to main — deploy workflow will succeed."
+echo "  3. Or: gh workflow run deploy.yml --repo aiparallel0/teb"
 echo ""
-echo -e "${YELLOW}If nginx was installed on a server that already has a domain, run:${RESET}"
-echo "  certbot --nginx -d ${DOMAIN}   # for HTTPS / Let's Encrypt"
+echo -e "${YELLOW}For HTTPS: certbot --nginx -d ${DOMAIN}${RESET}"
 echo ""
