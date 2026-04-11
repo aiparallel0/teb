@@ -364,9 +364,9 @@ async function loadGoalList() {
     if (!goals.length) {
       ul.innerHTML = `
         <li class="empty-state">
-          <div class="empty-state-icon">🎯</div>
+          <div class="empty-state-icon">—</div>
           <div class="empty-state-title">No goals yet</div>
-          <div class="empty-state-desc">Enter your first goal above and we'll break it down into actionable tasks.</div>
+          <div class="empty-state-desc">Define your first objective above.</div>
         </li>`;
       return;
     }
@@ -421,7 +421,7 @@ document.getElementById('btn-create-goal').addEventListener('click', async () =>
     showError('error-landing', e.message);
   } finally {
     btn.disabled = false;
-    btn.textContent = 'Get my action plan →';
+    btn.textContent = 'Decompose →';
   }
 });
 
@@ -491,7 +491,7 @@ document.getElementById('back-from-clarify').addEventListener('click', () => {
 // ─── Decompose ────────────────────────────────────────────────────────────────
 
 async function triggerDecompose(goalId) {
-  showLoading('Building your action plan…');
+  showLoading('Decomposing…');
   try {
     await api.post(`/api/goals/${goalId}/decompose`, {});
     const goal = await api.get(`/api/goals/${goalId}`);
@@ -1103,7 +1103,7 @@ document.getElementById('btn-orchestrate').addEventListener('click', async () =>
   const content = document.getElementById('agent-activity-content');
 
   btn.disabled = true;
-  btn.textContent = '🤖 Orchestrating…';
+  btn.textContent = 'Orchestrating…';
   panel.style.display = 'block';
   content.innerHTML = '<div class="agent-loading"><div class="loading-spinner-sm"></div><span>Dispatching agents…</span></div>';
 
@@ -1121,7 +1121,7 @@ document.getElementById('btn-orchestrate').addEventListener('click', async () =>
       // Strategy summary
       if (result.strategy) {
         html += `<div class="agent-timeline-item agent-strategy">
-          <div class="agent-timeline-icon">🎯</div>
+          <div class="agent-timeline-icon">◆</div>
           <div class="agent-timeline-body">
             <div class="agent-timeline-title">Strategy</div>
             <div class="agent-timeline-text">${escHtml(result.strategy)}</div>
@@ -1149,9 +1149,9 @@ document.getElementById('btn-orchestrate').addEventListener('click', async () =>
       // Agent messages
       if (messages.length) {
         html += '<div class="agent-messages-section">';
-        html += '<div class="agent-messages-title">💬 Agent Communication</div>';
+        html += '<div class="agent-messages-title">Agent Communication</div>';
         messages.slice(0, 15).forEach(m => {
-          const typeIcon = m.message_type === 'request' ? '❓' : m.message_type === 'response' ? '💡' : m.message_type === 'context' ? '📋' : 'ℹ️';
+          const typeIcon = m.message_type === 'request' ? '?' : m.message_type === 'response' ? '→' : m.message_type === 'context' ? '•' : 'i';
           html += `<div class="agent-msg-card">
             <span class="agent-msg-icon">${typeIcon}</span>
             <span class="agent-badge agent-from">${escHtml(m.from_agent || '')}</span>
@@ -1176,7 +1176,7 @@ document.getElementById('btn-orchestrate').addEventListener('click', async () =>
     content.innerHTML = `<p class="error">${escHtml(e.message)}</p>`;
   } finally {
     btn.disabled = false;
-    btn.textContent = '🤖 AI Orchestrate';
+    btn.textContent = 'Orchestrate';
   }
 });
 
@@ -1221,7 +1221,7 @@ async function loadAgentActivity() {
     const tasksByAgent = data.tasks_by_agent || {};
     if (agents.length) {
       html += `<div class="agent-timeline-item agent-strategy">
-        <div class="agent-timeline-icon">🤖</div>
+        <div class="agent-timeline-icon">●</div>
         <div class="agent-timeline-body">
           <div class="agent-timeline-title">Agents: ${agents.map(a => `<span class="agent-badge agent-from">${escHtml(a)}</span>`).join(' ')}</div>
           <div class="agent-timeline-text">${data.total_tasks_created || 0} tasks created${Object.keys(tasksByAgent).length ? ' — ' + Object.entries(tasksByAgent).map(([a, c]) => `${a}: ${c}`).join(', ') : ''}</div>
@@ -1249,9 +1249,9 @@ async function loadAgentActivity() {
     // Messages
     if (messages.length) {
       html += '<div class="agent-messages-section">';
-      html += '<div class="agent-messages-title">💬 Agent Communication</div>';
+      html += '<div class="agent-messages-title">Agent Communication</div>';
       messages.slice(0, 10).forEach(m => {
-        const typeIcon = m.message_type === 'request' ? '❓' : m.message_type === 'response' ? '💡' : m.message_type === 'context' ? '📋' : 'ℹ️';
+        const typeIcon = m.message_type === 'request' ? '?' : m.message_type === 'response' ? '→' : m.message_type === 'context' ? '•' : 'i';
         html += `<div class="agent-msg-card">
           <span class="agent-msg-icon">${typeIcon}</span>
           <span class="agent-badge agent-from">${escHtml(m.from_agent || '')}</span>
