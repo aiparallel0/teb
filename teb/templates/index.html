@@ -3,11 +3,11 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>teb — Task Execution Bridge</title>
+  <title>teb</title>
   <base href="{{BASE_PATH}}/" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;0,700;1,300;1,400;1,500&family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="static/style.css" />
   <script>window.__BASE_PATH__ = "{{BASE_PATH}}";</script>
 </head>
@@ -18,8 +18,12 @@
   <!-- Loading overlay shown during decomposition -->
   <div id="loading-overlay" class="loading-overlay" style="display:none">
     <div class="loading-box">
-      <div class="loading-spinner"></div>
-      <p id="loading-message" class="loading-message">Building your action plan…</p>
+      <div class="loading-dots">
+        <span class="loading-dot"></span>
+        <span class="loading-dot"></span>
+        <span class="loading-dot"></span>
+      </div>
+      <p id="loading-message" class="loading-message">Decomposing…</p>
     </div>
   </div>
 
@@ -28,7 +32,7 @@
     <section id="screen-auth" class="screen" role="main">
       <header class="hero">
         <h1>teb</h1>
-        <p class="tagline">Turn your vague goals into focused, actionable tasks.</p>
+        <p class="tagline">From ambition to execution.</p>
       </header>
       <div class="card" id="auth-card">
         <h2 id="auth-title">Sign in</h2>
@@ -52,22 +56,22 @@
     <section id="screen-landing" class="screen" role="main">
       <header class="hero">
         <h1>teb</h1>
-        <p class="tagline">Turn your vague goals into focused, actionable tasks.</p>
+        <p class="tagline">From ambition to execution.</p>
         <div id="user-bar" class="user-bar" style="display:none">
           <span id="user-email"></span>
           <button id="btn-theme-toggle" class="theme-toggle" title="Toggle dark mode" aria-label="Toggle dark mode">🌙</button>
-          <button id="btn-admin" class="btn-secondary btn-sm" style="display:none">🛡 Admin</button>
-          <button id="btn-settings" class="btn-secondary btn-sm">⚙ Settings</button>
+          <button id="btn-admin" class="btn-secondary btn-sm" style="display:none">Admin</button>
+          <button id="btn-settings" class="btn-secondary btn-sm">Settings</button>
           <button id="btn-logout" class="btn-secondary btn-sm">Sign out</button>
         </div>
       </header>
       <div class="card">
-        <label for="goal-title">What do you want to achieve?</label>
-        <input id="goal-title" type="text" placeholder="e.g. earn money online, learn Python, get fit…" autocomplete="off" />
-        <label for="goal-desc" class="mt">A bit more detail <span style="font-weight:400;color:var(--muted)">(optional)</span></label>
-        <textarea id="goal-desc" rows="3" placeholder="Any context that might help narrow things down…" maxlength="2000"></textarea>
+        <label for="goal-title">Define your objective</label>
+        <input id="goal-title" type="text" placeholder="Launch a SaaS product, master Rust, run a sub-3h marathon…" autocomplete="off" />
+        <label for="goal-desc" class="mt">Context &amp; constraints <span style="font-weight:400;color:var(--muted)">(optional)</span></label>
+        <textarea id="goal-desc" rows="3" placeholder="Timeline, resources, prior attempts, constraints…" maxlength="2000"></textarea>
         <div id="goal-desc-counter" class="char-counter"></div>
-        <button id="btn-create-goal" class="btn-primary">Get my action plan →</button>
+        <button id="btn-create-goal" class="btn-primary">Decompose →</button>
         <div class="error" id="error-landing" role="alert"></div>
       </div>
       <div id="goal-list-section" class="mt">
@@ -80,14 +84,14 @@
     <section id="screen-clarify" class="screen" role="main">
       <div class="card">
         <a class="back-link" id="back-from-clarify">← Back</a>
-        <h2 id="clarify-heading">Let's narrow this down</h2>
+        <h2 id="clarify-heading">Calibration</h2>
         <p class="sub" id="clarify-goal-title"></p>
         <div class="question-block">
           <label id="clarify-question-text"></label>
           <input id="clarify-answer" type="text" placeholder="" autocomplete="off" />
         </div>
         <button id="btn-clarify-next" class="btn-primary">Next →</button>
-        <button id="btn-skip-clarify" class="btn-secondary">Skip questions &amp; decompose now</button>
+        <button id="btn-skip-clarify" class="btn-secondary">Skip — decompose directly</button>
         <div class="error" id="error-clarify" role="alert"></div>
       </div>
     </section>
@@ -108,7 +112,7 @@
             <span id="autopilot-status" class="autopilot-status"></span>
           </div>
           <!-- Orchestrate button -->
-          <button id="btn-orchestrate" class="btn-secondary btn-sm">🤖 AI Orchestrate</button>
+          <button id="btn-orchestrate" class="btn-secondary btn-sm">Orchestrate</button>
         </div>
         <div class="progress-bar-wrap">
           <div class="progress-bar-bg">
@@ -136,7 +140,7 @@
 
       <!-- Agent Activity panel (shown after orchestration) -->
       <details id="agent-activity-panel" class="collapsible-panel" style="display:none">
-        <summary>🤖 Agent Activity</summary>
+        <summary>Agent Activity</summary>
         <div id="agent-activity-content" class="agent-activity-content"></div>
       </details>
 
@@ -152,7 +156,7 @@
       <!-- Drip mode: single task card -->
       <div id="drip-section" class="drip-section">
         <div id="drip-card" class="drip-card" style="display:none">
-          <div class="drip-label">📋 Your next task</div>
+          <div class="drip-label">Next task</div>
           <div class="drip-title" id="drip-title"></div>
           <div class="drip-desc" id="drip-desc"></div>
           <div class="drip-meta" id="drip-meta"></div>
@@ -164,7 +168,7 @@
           </div>
           <div id="drip-stall-msg" class="drip-stall-msg" style="display:none"></div>
           <div class="drip-actions">
-            <button class="btn-primary" id="btn-drip-done">Done — give me the next task ✓</button>
+            <button class="btn-primary" id="btn-drip-done">Complete — next</button>
             <button class="btn-secondary btn-sm" id="btn-drip-skip">Skip this task</button>
           </div>
         </div>
@@ -187,7 +191,7 @@
       <div id="all-tasks-section" style="display:none">
         <!-- Focus mode banner -->
         <div id="focus-banner" class="focus-banner" style="display:none">
-          <div class="focus-label">🎯 Focus now</div>
+          <div class="focus-label">Focus now</div>
           <div class="focus-title" id="focus-title"></div>
           <div class="focus-desc" id="focus-desc"></div>
           <div class="focus-meta" id="focus-meta"></div>
@@ -205,13 +209,13 @@
 
       <!-- Proactive suggestions section -->
       <details id="suggestions-panel" class="collapsible-panel mt">
-        <summary>💡 Suggestions <span id="suggestions-count" class="badge"></span></summary>
+        <summary>Suggestions <span id="suggestions-count" class="badge"></span></summary>
         <div id="suggestions-list" class="suggestions-list"></div>
       </details>
 
       <!-- Service discovery section -->
       <details id="discovery-panel" class="collapsible-panel mt">
-        <summary>🔍 Discover Services</summary>
+        <summary>Discover Services</summary>
         <div id="discovery-list" class="discovery-list">
           <button id="btn-discover" class="btn-secondary btn-sm">Find matching services</button>
         </div>
@@ -219,14 +223,14 @@
 
       <!-- Daily Check-in Section -->
       <div id="checkin-section" class="checkin-section mt">
-        <h3>📋 Daily Check-in</h3>
-        <p class="sub">2 minutes. What did you do? What's blocking you?</p>
+        <h3>Daily Debrief</h3>
+        <p class="sub">Brief status update. What moved? What didn't?</p>
         <div class="checkin-form">
-          <label for="checkin-done">What did you accomplish?</label>
-          <textarea id="checkin-done" rows="2" placeholder="e.g. Finished the first module, sent 3 proposals…"></textarea>
-          <label for="checkin-blockers">What's blocking you? <span style="font-weight:400;color:var(--muted)">(optional)</span></label>
-          <textarea id="checkin-blockers" rows="2" placeholder="e.g. Stuck on setup, no time today…"></textarea>
-          <button id="btn-checkin" class="btn-primary btn-sm">Submit check-in →</button>
+          <label for="checkin-done">Progress made</label>
+          <textarea id="checkin-done" rows="2" placeholder="Completed first module, sent 3 proposals…"></textarea>
+          <label for="checkin-blockers">Obstacles <span style="font-weight:400;color:var(--muted)">(optional)</span></label>
+          <textarea id="checkin-blockers" rows="2" placeholder="Blocked on setup, no time today…"></textarea>
+          <button id="btn-checkin" class="btn-primary btn-sm">Log entry</button>
         </div>
         <div id="checkin-feedback" class="checkin-feedback" style="display:none"></div>
         <div id="checkin-history" class="checkin-history"></div>
@@ -234,8 +238,8 @@
 
       <!-- Outcome Metrics Section -->
       <div id="outcome-section" class="outcome-section mt">
-        <h3>🎯 Outcome Tracking</h3>
-        <p class="sub">Track what matters — real results, not just task completion.</p>
+        <h3>Outcome Tracking</h3>
+        <p class="sub">Measure real results, not just task completion.</p>
         <div id="outcome-metrics-list" class="outcome-metrics-list"></div>
         <button id="btn-suggest-outcomes" class="btn-secondary btn-sm">Suggest metrics</button>
         <button id="btn-add-outcome" class="btn-secondary btn-sm">+ Add metric</button>
@@ -243,7 +247,7 @@
 
       <!-- ROI Dashboard Section -->
       <details id="roi-dashboard-panel" class="collapsible-panel mt">
-        <summary>💰 ROI Dashboard</summary>
+        <summary>ROI Dashboard</summary>
         <div id="roi-dashboard-content" class="roi-dashboard">
           <div id="roi-summary-cards" class="roi-summary-cards"></div>
           <div id="roi-spending-breakdown" class="roi-breakdown"></div>
@@ -255,7 +259,7 @@
 
       <!-- Platform Insights Section -->
       <details id="platform-insights-panel" class="collapsible-panel mt">
-        <summary>📊 Platform Insights</summary>
+        <summary>Platform Insights</summary>
         <div id="platform-insights-content" class="platform-insights"></div>
       </details>
 
@@ -271,7 +275,7 @@
     <div id="settings-modal" class="modal" style="display:none">
       <div class="modal-content card">
         <div class="modal-header">
-          <h2>⚙ Settings</h2>
+          <h2>Settings</h2>
           <button id="btn-close-settings" class="btn-close" aria-label="Close settings">&times;</button>
         </div>
 
@@ -320,7 +324,7 @@
 
         <!-- Credentials pane -->
         <div class="settings-pane" id="pane-credentials" role="tabpanel">
-          <h3>🔑 API Credentials</h3>
+          <h3>API Credentials</h3>
           <p class="sub" style="font-size:.8rem">Stored credentials let teb's autopilot call services on your behalf.</p>
           <div id="credentials-list" class="credentials-list"></div>
           <details class="collapsible-panel mt">
@@ -347,7 +351,7 @@
     <div id="admin-modal" class="modal" style="display:none">
       <div class="modal-content card" style="max-width:900px;width:95vw">
         <div class="modal-header">
-          <h2>🛡 Admin Panel</h2>
+          <h2>Administration</h2>
           <button id="btn-close-admin" class="btn-close" aria-label="Close admin panel">&times;</button>
         </div>
 
