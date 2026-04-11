@@ -21,9 +21,11 @@ from pydantic import BaseModel
 from teb import agents, auth, browser, config, decomposer, deployer, executor, integrations, messaging, provisioning, storage, transcribe
 from teb.models import (
     AgentGoalMemory, ApiCredential, AuditEvent, BrowserAction, CheckIn,
-    ExecutionLog, Goal, GoalTemplate, MessagingConfig, Milestone, NudgeEvent,
-    OutcomeMetric, PluginManifest, SpendingBudget, SpendingRequest, Task,
-    TaskArtifact, TaskComment, WebhookConfig,
+    CustomField, DashboardWidget, ExecutionLog, Goal, GoalCollaborator,
+    GoalTemplate, MessagingConfig, Milestone, NotificationPreference,
+    NudgeEvent, OutcomeMetric, PersonalApiKey, PluginManifest,
+    ProgressSnapshot, RecurrenceRule, SpendingBudget, SpendingRequest,
+    Task, TaskArtifact, TaskBlocker, TaskComment, TimeEntry, WebhookConfig,
 )
 
 # ─── Logging ──────────────────────────────────────────────────────────────────
@@ -4046,6 +4048,676 @@ async def export_to_asana_format(request: Request):
         "notes": goal.description,
         "tasks": asana_tasks,
     }
+
+
+# ─── Execution State Machine (WP-01) ─────────────────────────────────────────
+from teb import state_machine  # noqa: E402
+
+
+@app.post("/api/goals/{goal_id}/resume")
+async def resume_goal_execution(goal_id: int, request: Request):
+    """Resume goal execution from the last checkpoint."""
+    uid = _require_user(request)
+    _check_api_rate_limit(request)
+    goal = storage.get_goal(goal_id)
+    if not goal or goal.user_id != uid:
+        raise HTTPException(status_code=404, detail="Goal not found")
+    state = state_machine.resume_execution(goal_id)
+    if not state:
+        raise HTTPException(status_code=404, detail="No active checkpoint to resume from")
+    return {"resumed": True, "state": state.to_dict()}
+
+
+@app.get("/api/goals/{goal_id}/checkpoints")
+async def list_goal_checkpoints(goal_id: int, request: Request):
+    """List execution checkpoints for a goal."""
+    uid = _require_user(request)
+    goal = storage.get_goal(goal_id)
+    if not goal or goal.user_id != uid:
+        raise HTTPException(status_code=404, detail="Goal not found")
+    return state_machine.get_execution_summary(goal_id)
+
+
+# ─── Agent Flows & Schedules (WP-02) ─────────────────────────────────────────
+from teb.models import AgentFlow, AgentSchedule  # noqa: E402
+
+
+@app.post("/api/goals/{goal_id}/flows")
+async def create_agent_flow_endpoint(goal_id: int, request: Request):
+    """Create an event-driven agent flow for a goal."""
+    uid = _require_user(request)
+    _check_api_rate_limit(request)
+    goal = storage.get_goal(goal_id)
+    if not goal or goal.user_id != uid:
+        raise HTTPException(status_code=404, detail="Goal not found")
+    body = await request.json()
+    steps = body.get("steps", [])
+    if not steps:
+        raise HTTPException(status_code=400, detail="Steps are required")
+    flow = AgentFlow(goal_id=goal_id, steps_json=json.dumps(steps), status="pending")
+    flow = storage.create_agent_flow(flow)
+    return flow.to_dict()
+
+
+@app.get("/api/goals/{goal_id}/flows")
+async def list_agent_flows_endpoint(goal_id: int, request: Request):
+    """List agent flows for a goal."""
+    uid = _require_user(request)
+    goal = storage.get_goal(goal_id)
+    if not goal or goal.user_id != uid:
+        raise HTTPException(status_code=404, detail="Goal not found")
+    flows = storage.list_agent_flows(goal_id)
+    return [f.to_dict() for f in flows]
+
+
+@app.post("/api/agents/{agent_type}/schedule")
+async def configure_agent_schedule(agent_type: str, request: Request):
+    """Configure heartbeat schedule for an agent on a goal."""
+    uid = _require_user(request)
+    _check_api_rate_limit(request)
+    body = await request.json()
+    goal_id = body.get("goal_id")
+    if not goal_id:
+        raise HTTPException(status_code=400, detail="goal_id is required")
+    goal = storage.get_goal(goal_id)
+    if not goal or goal.user_id != uid:
+        raise HTTPException(status_code=404, detail="Goal not found")
+    schedule = AgentSchedule(agent_type=agent_type, goal_id=goal_id,
+                             interval_hours=body.get("interval_hours", 8))
+    schedule = storage.create_agent_schedule(schedule)
+    return schedule.to_dict()
+
+
+# ─── Gamification (WP-04) ────────────────────────────────────────────────────
+from teb import gamification  # noqa: E402
+
+
+@app.get("/api/users/me/xp")
+async def get_user_xp(request: Request):
+    """Get current user's XP, level, and streak."""
+    uid = _require_user(request)
+    uxp = storage.get_or_create_user_xp(uid)
+    return uxp.to_dict()
+
+
+@app.get("/api/users/me/achievements")
+async def get_user_achievements(request: Request):
+    """Get current user's achievements."""
+    uid = _require_user(request)
+    return [a.to_dict() for a in storage.list_achievements(uid)]
+
+
+# ─── Semantic Search (WP-05) ─────────────────────────────────────────────────
+from teb import search as teb_search  # noqa: E402
+
+
+@app.get("/api/search")
+async def search_all(request: Request, q: str = "", limit: int = 50):
+    """Search across all entities."""
+    uid = _require_user(request)
+    if not q:
+        raise HTTPException(status_code=400, detail="Query parameter 'q' is required")
+    results = teb_search.quick_search(q, user_id=uid, limit=min(limit, 100))
+    return {"query": q, "count": len(results), "results": results}
+
+
+@app.post("/api/search/reindex")
+async def reindex_search(request: Request):
+    """Rebuild the search index."""
+    uid = _require_user(request)
+    teb_search.init_search_index()
+    counts = teb_search.reindex_all(user_id=uid)
+    return {"status": "reindexed", "counts": counts}
+
+
+# ─── Natural Language Task Input (WP-06) ─────────────────────────────────────
+from teb import nlp_input  # noqa: E402
+
+
+@app.post("/api/tasks/parse")
+async def parse_task_text_endpoint(request: Request):
+    """Parse natural language text into structured task fields."""
+    uid = _require_user(request)
+    body = await request.json()
+    text = body.get("text", "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="Text is required")
+    return {"parsed": nlp_input.parse_task_text(text), "original": text}
+
+
+@app.post("/api/goals/{goal_id}/quick-add")
+async def quick_add_task(goal_id: int, request: Request):
+    """Parse natural language and create a task in one step."""
+    uid = _require_user(request)
+    _check_api_rate_limit(request)
+    goal = storage.get_goal(goal_id)
+    if not goal or goal.user_id != uid:
+        raise HTTPException(status_code=404, detail="Goal not found")
+    body = await request.json()
+    text = body.get("text", "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="Text is required")
+    parsed = nlp_input.parse_task_text(text)
+    task = Task(
+        goal_id=goal_id, title=parsed.get("title", text),
+        description=body.get("description", ""),
+        estimated_minutes=parsed.get("estimated_minutes", 30),
+        due_date=parsed.get("due_date", ""),
+        depends_on=json.dumps(parsed.get("depends_on", [])),
+        tags=",".join(parsed.get("tags", [])),
+    )
+    task = storage.create_task(task)
+    return {"task": task.to_dict(), "parsed_from": parsed}
+
+
+# ─── Goal Cloning / Templates (WP-07) ────────────────────────────────────────
+
+
+@app.post("/api/goals/{goal_id}/clone")
+async def clone_goal(goal_id: int, request: Request):
+    """Clone a goal with all its tasks."""
+    uid = _require_user(request)
+    _check_api_rate_limit(request)
+    goal = storage.get_goal(goal_id)
+    if not goal or goal.user_id != uid:
+        raise HTTPException(status_code=404, detail="Goal not found")
+    body = await request.json() if request.headers.get("content-type", "").startswith("application/json") else {}
+    new_title = body.get("title", f"{goal.title} (Copy)")
+    new_goal = Goal(user_id=uid, title=new_title, description=goal.description,
+                    status="drafting")
+    new_goal = storage.create_goal(new_goal)
+    tasks = storage.list_tasks(goal_id=goal_id)
+    id_map: dict = {}
+    for t in sorted(tasks, key=lambda x: x.order_index):
+        old_id = t.id
+        new_task = Task(goal_id=new_goal.id, title=t.title, description=t.description,
+                        estimated_minutes=t.estimated_minutes, order_index=t.order_index,
+                        due_date=t.due_date, tags=t.tags)
+        if t.parent_id and t.parent_id in id_map:
+            new_task.parent_id = id_map[t.parent_id]
+        new_task = storage.create_task(new_task)
+        id_map[old_id] = new_task.id
+    return {"goal": new_goal.to_dict(), "tasks_cloned": len(id_map)}
+
+
+# ─── Time Tracking (WP-08) ───────────────────────────────────────────────────
+
+
+@app.post("/api/tasks/{task_id}/time")
+async def log_time_entry(task_id: int, request: Request):
+    """Log a time entry for a task."""
+    uid = _require_user(request)
+    _check_api_rate_limit(request)
+    task = storage.get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    body = await request.json()
+    duration = body.get("duration_minutes", 0)
+    if not isinstance(duration, (int, float)) or duration < 0:
+        raise HTTPException(status_code=400, detail="duration_minutes must be non-negative")
+    entry = TimeEntry(task_id=task_id, user_id=uid,
+                      started_at=body.get("started_at", ""),
+                      ended_at=body.get("ended_at", ""),
+                      duration_minutes=int(duration),
+                      note=body.get("note", ""))
+    entry = storage.create_time_entry(entry)
+    return entry.to_dict()
+
+
+@app.get("/api/tasks/{task_id}/time")
+async def get_time_entries(task_id: int, request: Request):
+    """List time entries for a task."""
+    uid = _require_user(request)
+    entries = storage.list_time_entries(task_id)
+    total = storage.get_task_total_time(task_id)
+    return {"entries": [e.to_dict() for e in entries], "total_minutes": total}
+
+
+# ─── Goal Activity Feed (WP-09) ──────────────────────────────────────────────
+
+
+@app.get("/api/goals/{goal_id}/activity")
+async def get_goal_activity(goal_id: int, request: Request):
+    """Get activity feed for a goal from audit events."""
+    uid = _require_user(request)
+    goal = storage.get_goal(goal_id)
+    if not goal or goal.user_id != uid:
+        raise HTTPException(status_code=404, detail="Goal not found")
+    events = storage.list_audit_events(goal_id=goal_id, limit=50)
+    return [e.to_dict() for e in events]
+
+
+# ─── Task Recurrence (WP-10) ─────────────────────────────────────────────────
+
+
+@app.post("/api/tasks/{task_id}/recurrence")
+async def set_task_recurrence(task_id: int, request: Request):
+    """Set or update recurrence rule for a task."""
+    uid = _require_user(request)
+    _check_api_rate_limit(request)
+    task = storage.get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    body = await request.json()
+    freq = body.get("frequency", "weekly")
+    if freq not in ("daily", "weekly", "monthly"):
+        raise HTTPException(status_code=400, detail="frequency must be daily, weekly, or monthly")
+    storage.delete_recurrence_rule(task_id)
+    rule = RecurrenceRule(task_id=task_id, frequency=freq,
+                          interval=body.get("interval", 1),
+                          next_due=body.get("next_due", ""),
+                          end_date=body.get("end_date", ""))
+    rule = storage.create_recurrence_rule(rule)
+    return rule.to_dict()
+
+
+@app.get("/api/tasks/{task_id}/recurrence")
+async def get_task_recurrence(task_id: int, request: Request):
+    """Get recurrence rule for a task."""
+    uid = _require_user(request)
+    rule = storage.get_recurrence_rule(task_id)
+    if not rule:
+        return {"recurrence": None}
+    return rule.to_dict()
+
+
+@app.delete("/api/tasks/{task_id}/recurrence")
+async def delete_task_recurrence(task_id: int, request: Request):
+    """Remove recurrence rule from a task."""
+    uid = _require_user(request)
+    storage.delete_recurrence_rule(task_id)
+    return {"deleted": True}
+
+
+# ─── Goal Collaboration (WP-11) ──────────────────────────────────────────────
+
+
+@app.post("/api/goals/{goal_id}/collaborators")
+async def add_goal_collaborator(goal_id: int, request: Request):
+    """Add a collaborator to a goal."""
+    uid = _require_user(request)
+    _check_api_rate_limit(request)
+    goal = storage.get_goal(goal_id)
+    if not goal or goal.user_id != uid:
+        raise HTTPException(status_code=404, detail="Goal not found")
+    body = await request.json()
+    collab_user_id = body.get("user_id")
+    if not collab_user_id:
+        raise HTTPException(status_code=400, detail="user_id is required")
+    if collab_user_id == uid:
+        raise HTTPException(status_code=400, detail="Cannot add yourself as collaborator")
+    collab = GoalCollaborator(goal_id=goal_id, user_id=collab_user_id,
+                              role=body.get("role", "viewer"))
+    collab = storage.add_collaborator(collab)
+    return collab.to_dict()
+
+
+@app.get("/api/goals/{goal_id}/collaborators")
+async def list_goal_collaborators(goal_id: int, request: Request):
+    """List collaborators for a goal."""
+    uid = _require_user(request)
+    goal = storage.get_goal(goal_id)
+    if not goal or goal.user_id != uid:
+        raise HTTPException(status_code=404, detail="Goal not found")
+    return [c.to_dict() for c in storage.list_collaborators(goal_id)]
+
+
+@app.delete("/api/goals/{goal_id}/collaborators/{collab_user_id}")
+async def remove_goal_collaborator(goal_id: int, collab_user_id: int, request: Request):
+    """Remove a collaborator from a goal."""
+    uid = _require_user(request)
+    goal = storage.get_goal(goal_id)
+    if not goal or goal.user_id != uid:
+        raise HTTPException(status_code=404, detail="Goal not found")
+    storage.remove_collaborator(goal_id, collab_user_id)
+    return {"deleted": True}
+
+
+# ─── Custom Fields (WP-12) ───────────────────────────────────────────────────
+
+
+@app.post("/api/tasks/{task_id}/fields")
+async def add_custom_field(task_id: int, request: Request):
+    """Add a custom field to a task."""
+    uid = _require_user(request)
+    _check_api_rate_limit(request)
+    task = storage.get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    body = await request.json()
+    name = body.get("field_name", "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="field_name is required")
+    cf = CustomField(task_id=task_id, field_name=name,
+                     field_value=body.get("field_value", ""),
+                     field_type=body.get("field_type", "text"))
+    cf = storage.create_custom_field(cf)
+    return cf.to_dict()
+
+
+@app.get("/api/tasks/{task_id}/fields")
+async def list_custom_fields_endpoint(task_id: int, request: Request):
+    """List custom fields for a task."""
+    uid = _require_user(request)
+    return [f.to_dict() for f in storage.list_custom_fields(task_id)]
+
+
+@app.delete("/api/fields/{field_id}")
+async def delete_custom_field_endpoint(field_id: int, request: Request):
+    """Delete a custom field."""
+    uid = _require_user(request)
+    storage.delete_custom_field(field_id)
+    return {"deleted": True}
+
+
+# ─── Bulk Task Operations (WP-13) ────────────────────────────────────────────
+
+
+@app.post("/api/goals/{goal_id}/tasks/bulk")
+async def bulk_task_operations(goal_id: int, request: Request):
+    """Batch update/delete tasks."""
+    uid = _require_user(request)
+    _check_api_rate_limit(request)
+    goal = storage.get_goal(goal_id)
+    if not goal or goal.user_id != uid:
+        raise HTTPException(status_code=404, detail="Goal not found")
+    body = await request.json()
+    task_ids = body.get("task_ids", [])
+    operation = body.get("operation", "")
+    if not task_ids:
+        raise HTTPException(status_code=400, detail="task_ids is required")
+    if operation not in ("update_status", "delete", "move"):
+        raise HTTPException(status_code=400, detail="operation must be update_status, delete, or move")
+    affected = 0
+    for tid in task_ids:
+        task = storage.get_task(tid)
+        if not task or task.goal_id != goal_id:
+            continue
+        if operation == "update_status":
+            new_status = body.get("status", "todo")
+            task.status = new_status
+            storage.update_task(task)
+            affected += 1
+        elif operation == "delete":
+            storage.delete_task(tid)
+            affected += 1
+        elif operation == "move":
+            target_goal_id = body.get("target_goal_id")
+            if target_goal_id:
+                target_goal = storage.get_goal(target_goal_id)
+                if target_goal and target_goal.user_id == uid:
+                    task.goal_id = target_goal_id
+                    storage.update_task(task)
+                    affected += 1
+    return {"operation": operation, "affected": affected}
+
+
+# ─── Goal Progress Snapshots (WP-14) ─────────────────────────────────────────
+
+
+@app.post("/api/goals/{goal_id}/snapshots")
+async def capture_goal_snapshot(goal_id: int, request: Request):
+    """Capture a progress snapshot for a goal."""
+    uid = _require_user(request)
+    goal = storage.get_goal(goal_id)
+    if not goal or goal.user_id != uid:
+        raise HTTPException(status_code=404, detail="Goal not found")
+    snap = storage.capture_progress_snapshot(goal_id)
+    return snap.to_dict()
+
+
+@app.get("/api/goals/{goal_id}/snapshots")
+async def list_goal_snapshots(goal_id: int, request: Request):
+    """List progress snapshots for a goal."""
+    uid = _require_user(request)
+    goal = storage.get_goal(goal_id)
+    if not goal or goal.user_id != uid:
+        raise HTTPException(status_code=404, detail="Goal not found")
+    return [s.to_dict() for s in storage.list_progress_snapshots(goal_id)]
+
+
+# ─── Task Priority Levels (WP-15) ────────────────────────────────────────────
+
+
+@app.put("/api/tasks/{task_id}/priority")
+async def set_task_priority(task_id: int, request: Request):
+    """Set priority on a task (stored as a tag)."""
+    uid = _require_user(request)
+    task = storage.get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    body = await request.json()
+    priority = body.get("priority", "medium")
+    valid = {"critical", "high", "medium", "low"}
+    if priority not in valid:
+        raise HTTPException(status_code=400, detail=f"priority must be one of {valid}")
+    # Store priority as a special tag — remove existing priority tags first
+    existing_tags = [t.strip() for t in task.tags.split(",") if t.strip()] if task.tags else []
+    filtered = [t for t in existing_tags if t not in valid]
+    filtered.append(priority)
+    task.tags = ",".join(filtered)
+    task = storage.update_task(task)
+    return task.to_dict()
+
+
+@app.get("/api/goals/{goal_id}/tasks/by-priority")
+async def list_tasks_by_priority(goal_id: int, request: Request):
+    """List tasks grouped by priority level."""
+    uid = _require_user(request)
+    goal = storage.get_goal(goal_id)
+    if not goal or goal.user_id != uid:
+        raise HTTPException(status_code=404, detail="Goal not found")
+    tasks = storage.list_tasks(goal_id=goal_id)
+    priority_order = {"critical": 0, "high": 1, "medium": 2, "low": 3}
+    result: dict = {"critical": [], "high": [], "medium": [], "low": [], "unset": []}
+    for t in tasks:
+        tags = [tg.strip() for tg in t.tags.split(",") if tg.strip()] if t.tags else []
+        found = False
+        for p in priority_order:
+            if p in tags:
+                result[p].append(t.to_dict())
+                found = True
+                break
+        if not found:
+            result["unset"].append(t.to_dict())
+    return result
+
+
+# ─── Notification Preferences (WP-16) ────────────────────────────────────────
+
+
+@app.get("/api/users/me/notifications/preferences")
+async def get_notification_preferences(request: Request):
+    """Get notification preferences for current user."""
+    uid = _require_user(request)
+    return [p.to_dict() for p in storage.list_notification_preferences(uid)]
+
+
+@app.put("/api/users/me/notifications/preferences")
+async def set_notification_preference_endpoint(request: Request):
+    """Set a notification preference."""
+    uid = _require_user(request)
+    body = await request.json()
+    pref = NotificationPreference(
+        user_id=uid,
+        channel=body.get("channel", "in_app"),
+        event_type=body.get("event_type", "all"),
+        enabled=body.get("enabled", True),
+    )
+    pref = storage.set_notification_preference(pref)
+    return pref.to_dict()
+
+
+# ─── API Key Management (WP-17) ──────────────────────────────────────────────
+
+import hashlib  # noqa: E402
+import secrets  # noqa: E402
+
+
+@app.post("/api/users/me/api-keys")
+async def create_api_key(request: Request):
+    """Create a personal API key."""
+    uid = _require_user(request)
+    _check_api_rate_limit(request)
+    body = await request.json()
+    name = body.get("name", "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="name is required")
+    raw_key = f"teb_{secrets.token_urlsafe(32)}"
+    key_hash = hashlib.sha256(raw_key.encode()).hexdigest()
+    key = PersonalApiKey(user_id=uid, name=name, key_hash=key_hash,
+                         key_prefix=raw_key[:12])
+    key = storage.create_personal_api_key(key)
+    result = key.to_dict()
+    result["key"] = raw_key  # Only returned on creation
+    return result
+
+
+@app.get("/api/users/me/api-keys")
+async def list_api_keys(request: Request):
+    """List personal API keys."""
+    uid = _require_user(request)
+    return [k.to_dict() for k in storage.list_personal_api_keys(uid)]
+
+
+@app.delete("/api/users/me/api-keys/{key_id}")
+async def delete_api_key(key_id: int, request: Request):
+    """Revoke a personal API key."""
+    uid = _require_user(request)
+    storage.delete_personal_api_key(key_id, uid)
+    return {"deleted": True}
+
+
+# ─── Goal Export (WP-18) ─────────────────────────────────────────────────────
+
+
+@app.get("/api/goals/{goal_id}/export")
+async def export_goal(goal_id: int, request: Request, format: str = "markdown"):
+    """Export a goal to markdown or JSON format."""
+    uid = _require_user(request)
+    goal = storage.get_goal(goal_id)
+    if not goal or goal.user_id != uid:
+        raise HTTPException(status_code=404, detail="Goal not found")
+    tasks = storage.list_tasks(goal_id=goal_id)
+    if format == "json":
+        return {
+            "goal": goal.to_dict(),
+            "tasks": [t.to_dict() for t in tasks],
+        }
+    # Default: markdown
+    lines = [f"# {goal.title}", "", goal.description or "_No description_", ""]
+    lines.append("## Tasks\n")
+    status_emoji = {"done": "\u2705", "in_progress": "\U0001F551", "todo": "\u2B1C",
+                    "failed": "\u274C", "skipped": "\u23ED\uFE0F", "executing": "\u26A1"}
+    for t in sorted(tasks, key=lambda x: x.order_index):
+        emoji = status_emoji.get(t.status, "\u2B1C")
+        lines.append(f"- {emoji} **{t.title}** ({t.status}, {t.estimated_minutes}m)")
+        if t.description:
+            lines.append(f"  > {t.description}")
+    lines.append(f"\n---\n_Exported from teb_")
+    md = "\n".join(lines)
+    return JSONResponse(content={"format": "markdown", "content": md})
+
+
+# ─── Task Blockers (WP-19) ───────────────────────────────────────────────────
+
+
+@app.post("/api/tasks/{task_id}/blockers")
+async def add_task_blocker(task_id: int, request: Request):
+    """Add a blocker to a task."""
+    uid = _require_user(request)
+    _check_api_rate_limit(request)
+    task = storage.get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    body = await request.json()
+    desc = body.get("description", "").strip()
+    if not desc:
+        raise HTTPException(status_code=400, detail="description is required")
+    blocker = TaskBlocker(task_id=task_id, description=desc,
+                          blocker_type=body.get("blocker_type", "internal"))
+    blocker = storage.create_task_blocker(blocker)
+    return blocker.to_dict()
+
+
+@app.get("/api/tasks/{task_id}/blockers")
+async def list_task_blockers_endpoint(task_id: int, request: Request, status: Optional[str] = None):
+    """List blockers for a task."""
+    uid = _require_user(request)
+    return [b.to_dict() for b in storage.list_task_blockers(task_id, status=status)]
+
+
+@app.post("/api/blockers/{blocker_id}/resolve")
+async def resolve_blocker(blocker_id: int, request: Request):
+    """Resolve a task blocker."""
+    uid = _require_user(request)
+    blocker = storage.resolve_task_blocker(blocker_id)
+    if not blocker:
+        raise HTTPException(status_code=404, detail="Blocker not found")
+    return blocker.to_dict()
+
+
+# ─── Dashboard Widgets (WP-20) ───────────────────────────────────────────────
+
+
+@app.get("/api/users/me/dashboard")
+async def get_dashboard(request: Request):
+    """Get user's dashboard widget configuration."""
+    uid = _require_user(request)
+    widgets = storage.list_dashboard_widgets(uid)
+    if not widgets:
+        # Return default widgets
+        defaults = [
+            {"widget_type": "progress_chart", "position": 0},
+            {"widget_type": "recent_tasks", "position": 1},
+            {"widget_type": "streak", "position": 2},
+            {"widget_type": "xp_bar", "position": 3},
+        ]
+        return {"widgets": defaults, "is_default": True}
+    return {"widgets": [w.to_dict() for w in widgets], "is_default": False}
+
+
+@app.post("/api/users/me/dashboard/widgets")
+async def add_dashboard_widget(request: Request):
+    """Add a widget to user's dashboard."""
+    uid = _require_user(request)
+    body = await request.json()
+    wtype = body.get("widget_type", "").strip()
+    valid_types = {"progress_chart", "recent_tasks", "streak", "xp_bar",
+                   "activity_feed", "calendar", "blockers", "priority_board"}
+    if wtype not in valid_types:
+        raise HTTPException(status_code=400, detail=f"widget_type must be one of {valid_types}")
+    widget = DashboardWidget(user_id=uid, widget_type=wtype,
+                             position=body.get("position", 0),
+                             config_json=json.dumps(body.get("config", {})))
+    widget = storage.create_dashboard_widget(widget)
+    return widget.to_dict()
+
+
+@app.put("/api/users/me/dashboard/widgets/{widget_id}")
+async def update_widget(widget_id: int, request: Request):
+    """Update a dashboard widget."""
+    uid = _require_user(request)
+    body = await request.json()
+    kwargs: dict = {}
+    if "position" in body:
+        kwargs["position"] = body["position"]
+    if "config" in body:
+        kwargs["config_json"] = json.dumps(body["config"])
+    if "enabled" in body:
+        kwargs["enabled"] = body["enabled"]
+    widget = storage.update_dashboard_widget(widget_id, uid, **kwargs)
+    if not widget:
+        raise HTTPException(status_code=404, detail="Widget not found")
+    return widget.to_dict()
+
+
+@app.delete("/api/users/me/dashboard/widgets/{widget_id}")
+async def delete_widget(widget_id: int, request: Request):
+    """Delete a dashboard widget."""
+    uid = _require_user(request)
+    storage.delete_dashboard_widget(widget_id, uid)
+    return {"deleted": True}
 
 
 # ─── ASGI app for deployment ──────────────────────────────────────────────────

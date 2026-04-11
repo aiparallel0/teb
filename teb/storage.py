@@ -1,37 +1,51 @@
 import json
 import sqlite3
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Generator, List, Optional, Set
 
 from teb.config import get_db_path
 from teb.models import (
+    Achievement,
+    AgentFlow,
     AgentGoalMemory,
     AgentHandoff,
     AgentMessage,
+    AgentSchedule,
     ApiCredential,
     AuditEvent,
     BrowserAction,
     CheckIn,
+    CustomField,
+    DashboardWidget,
+    ExecutionCheckpoint,
     ExecutionContext,
     ExecutionLog,
     Goal,
+    GoalCollaborator,
     GoalTemplate,
     Integration,
     MessagingConfig,
     Milestone,
+    NotificationPreference,
     NudgeEvent,
     OutcomeMetric,
+    PersonalApiKey,
     PluginManifest,
     ProactiveSuggestion,
+    ProgressSnapshot,
+    RecurrenceRule,
     SpendingBudget,
     SpendingRequest,
     SuccessPath,
     Task,
     TaskArtifact,
+    TaskBlocker,
     TaskComment,
+    TimeEntry,
     User,
     UserProfile,
+    UserXP,
     WebhookConfig,
 )
 
@@ -685,6 +699,202 @@ def _run_migrations(con: sqlite3.Connection) -> None:
         )
     """)
     con.execute("CREATE INDEX IF NOT EXISTS idx_webhook_configs_user ON webhook_configs(user_id)")
+
+    # ─── MEGA Enhancement: Execution Checkpoints (WP-01) ─────────────────
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS execution_checkpoints (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            goal_id         INTEGER NOT NULL REFERENCES goals(id) ON DELETE CASCADE,
+            task_id         INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+            step_index      INTEGER NOT NULL DEFAULT 0,
+            state_json      TEXT    NOT NULL DEFAULT '{}',
+            status          TEXT    NOT NULL DEFAULT 'active',
+            created_at      TEXT    NOT NULL
+        )
+    """)
+    con.execute("CREATE INDEX IF NOT EXISTS idx_checkpoints_goal ON execution_checkpoints(goal_id)")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_checkpoints_task ON execution_checkpoints(task_id)")
+
+    # ─── MEGA Enhancement: Agent Schedules & Flows (WP-02) ───────────────
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS agent_schedules (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            agent_type      TEXT    NOT NULL,
+            goal_id         INTEGER NOT NULL REFERENCES goals(id) ON DELETE CASCADE,
+            interval_hours  INTEGER NOT NULL DEFAULT 8,
+            next_run_at     TEXT    NOT NULL DEFAULT '',
+            paused          INTEGER NOT NULL DEFAULT 0,
+            created_at      TEXT    NOT NULL
+        )
+    """)
+    con.execute("CREATE INDEX IF NOT EXISTS idx_agent_schedules_goal ON agent_schedules(goal_id)")
+    con.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_schedules_unique ON agent_schedules(agent_type, goal_id)")
+
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS agent_flows (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            goal_id         INTEGER NOT NULL REFERENCES goals(id) ON DELETE CASCADE,
+            steps_json      TEXT    NOT NULL DEFAULT '[]',
+            current_step    INTEGER NOT NULL DEFAULT 0,
+            status          TEXT    NOT NULL DEFAULT 'pending',
+            created_at      TEXT    NOT NULL
+        )
+    """)
+    con.execute("CREATE INDEX IF NOT EXISTS idx_agent_flows_goal ON agent_flows(goal_id)")
+
+    # ─── MEGA Enhancement: Gamification (WP-04) ─────────────────────────
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS user_xp (
+            id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id             INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            total_xp            INTEGER NOT NULL DEFAULT 0,
+            level               INTEGER NOT NULL DEFAULT 1,
+            current_streak      INTEGER NOT NULL DEFAULT 0,
+            longest_streak      INTEGER NOT NULL DEFAULT 0,
+            last_activity_date  TEXT    NOT NULL DEFAULT '',
+            created_at          TEXT    NOT NULL,
+            updated_at          TEXT    NOT NULL
+        )
+    """)
+    con.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_user_xp_user ON user_xp(user_id)")
+
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS achievements (
+            id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id             INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            achievement_type    TEXT    NOT NULL,
+            title               TEXT    NOT NULL DEFAULT '',
+            description         TEXT    NOT NULL DEFAULT '',
+            earned_at           TEXT    NOT NULL
+        )
+    """)
+    con.execute("CREATE INDEX IF NOT EXISTS idx_achievements_user ON achievements(user_id)")
+    con.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_achievements_unique ON achievements(user_id, achievement_type)")
+
+    # ─── MEGA Enhancement: Time Tracking (WP-08) ─────────────────────────
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS time_entries (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            task_id         INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+            user_id         INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            started_at      TEXT    NOT NULL DEFAULT '',
+            ended_at        TEXT    NOT NULL DEFAULT '',
+            duration_minutes INTEGER NOT NULL DEFAULT 0,
+            note            TEXT    NOT NULL DEFAULT '',
+            created_at      TEXT    NOT NULL
+        )
+    """)
+    con.execute("CREATE INDEX IF NOT EXISTS idx_time_entries_task ON time_entries(task_id)")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_time_entries_user ON time_entries(user_id)")
+
+    # ─── MEGA Enhancement: Recurrence Rules (WP-10) ──────────────────────
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS recurrence_rules (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            task_id         INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+            frequency       TEXT    NOT NULL DEFAULT 'weekly',
+            interval_val    INTEGER NOT NULL DEFAULT 1,
+            next_due        TEXT    NOT NULL DEFAULT '',
+            end_date        TEXT    NOT NULL DEFAULT '',
+            created_at      TEXT    NOT NULL
+        )
+    """)
+    con.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_recurrence_task ON recurrence_rules(task_id)")
+
+    # ─── MEGA Enhancement: Goal Collaborators (WP-11) ────────────────────
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS goal_collaborators (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            goal_id         INTEGER NOT NULL REFERENCES goals(id) ON DELETE CASCADE,
+            user_id         INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            role            TEXT    NOT NULL DEFAULT 'viewer',
+            created_at      TEXT    NOT NULL
+        )
+    """)
+    con.execute("CREATE INDEX IF NOT EXISTS idx_collaborators_goal ON goal_collaborators(goal_id)")
+    con.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_collaborators_unique ON goal_collaborators(goal_id, user_id)")
+
+    # ─── MEGA Enhancement: Custom Fields (WP-12) ────────────────────────
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS custom_fields (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            task_id         INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+            field_name      TEXT    NOT NULL,
+            field_value     TEXT    NOT NULL DEFAULT '',
+            field_type      TEXT    NOT NULL DEFAULT 'text',
+            created_at      TEXT    NOT NULL
+        )
+    """)
+    con.execute("CREATE INDEX IF NOT EXISTS idx_custom_fields_task ON custom_fields(task_id)")
+
+    # ─── MEGA Enhancement: Progress Snapshots (WP-14) ───────────────────
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS progress_snapshots (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            goal_id         INTEGER NOT NULL REFERENCES goals(id) ON DELETE CASCADE,
+            total_tasks     INTEGER NOT NULL DEFAULT 0,
+            completed_tasks INTEGER NOT NULL DEFAULT 0,
+            percentage      REAL    NOT NULL DEFAULT 0.0,
+            captured_at     TEXT    NOT NULL
+        )
+    """)
+    con.execute("CREATE INDEX IF NOT EXISTS idx_snapshots_goal ON progress_snapshots(goal_id)")
+
+    # ─── MEGA Enhancement: Notification Preferences (WP-16) ─────────────
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS notification_preferences (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id         INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            channel         TEXT    NOT NULL DEFAULT 'in_app',
+            event_type      TEXT    NOT NULL DEFAULT 'all',
+            enabled         INTEGER NOT NULL DEFAULT 1,
+            created_at      TEXT    NOT NULL
+        )
+    """)
+    con.execute("CREATE INDEX IF NOT EXISTS idx_notif_prefs_user ON notification_preferences(user_id)")
+
+    # ─── MEGA Enhancement: Personal API Keys (WP-17) ────────────────────
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS personal_api_keys (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id         INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            name            TEXT    NOT NULL,
+            key_hash        TEXT    NOT NULL,
+            key_prefix      TEXT    NOT NULL DEFAULT '',
+            last_used_at    TEXT    NOT NULL DEFAULT '',
+            created_at      TEXT    NOT NULL
+        )
+    """)
+    con.execute("CREATE INDEX IF NOT EXISTS idx_api_keys_user ON personal_api_keys(user_id)")
+    con.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_api_keys_hash ON personal_api_keys(key_hash)")
+
+    # ─── MEGA Enhancement: Task Blockers (WP-19) ────────────────────────
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS task_blockers (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            task_id         INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+            description     TEXT    NOT NULL,
+            blocker_type    TEXT    NOT NULL DEFAULT 'internal',
+            status          TEXT    NOT NULL DEFAULT 'open',
+            resolved_at     TEXT    NOT NULL DEFAULT '',
+            created_at      TEXT    NOT NULL
+        )
+    """)
+    con.execute("CREATE INDEX IF NOT EXISTS idx_blockers_task ON task_blockers(task_id)")
+
+    # ─── MEGA Enhancement: Dashboard Widgets (WP-20) ────────────────────
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS dashboard_widgets (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id         INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            widget_type     TEXT    NOT NULL,
+            position        INTEGER NOT NULL DEFAULT 0,
+            config_json     TEXT    NOT NULL DEFAULT '{}',
+            enabled         INTEGER NOT NULL DEFAULT 1,
+            created_at      TEXT    NOT NULL
+        )
+    """)
+    con.execute("CREATE INDEX IF NOT EXISTS idx_widgets_user ON dashboard_widgets(user_id)")
 
 
 # ─── Credential Encryption ───────────────────────────────────────────────────
@@ -3459,3 +3669,665 @@ def validate_no_cycles(goal_id: int) -> Optional[str]:
         if _dfs(tid):
             return f"Dependency cycle detected involving task {tid}"
     return None
+
+
+# ─── Execution Checkpoints (WP-01) ──────────────────────────────────────────
+
+@_with_retry
+def create_checkpoint(cp: ExecutionCheckpoint) -> ExecutionCheckpoint:
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        cur = con.execute(
+            """INSERT INTO execution_checkpoints
+               (goal_id, task_id, step_index, state_json, status, created_at)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (cp.goal_id, cp.task_id, cp.step_index, cp.state_json, cp.status, now),
+        )
+        cp.id = cur.lastrowid
+        cp.created_at = datetime.fromisoformat(now)
+    return cp
+
+
+@_with_retry
+def get_checkpoint(checkpoint_id: int) -> Optional[ExecutionCheckpoint]:
+    with _conn() as con:
+        row = con.execute("SELECT * FROM execution_checkpoints WHERE id = ?", (checkpoint_id,)).fetchone()
+    return _row_to_checkpoint(row) if row else None
+
+
+@_with_retry
+def list_checkpoints(goal_id: int) -> List[ExecutionCheckpoint]:
+    with _conn() as con:
+        rows = con.execute(
+            "SELECT * FROM execution_checkpoints WHERE goal_id = ? ORDER BY created_at DESC",
+            (goal_id,),
+        ).fetchall()
+    return [_row_to_checkpoint(r) for r in rows]
+
+
+@_with_retry
+def get_active_checkpoint(goal_id: int) -> Optional[ExecutionCheckpoint]:
+    """Get the most recent active checkpoint for a goal."""
+    with _conn() as con:
+        row = con.execute(
+            "SELECT * FROM execution_checkpoints WHERE goal_id = ? AND status = 'active' ORDER BY created_at DESC LIMIT 1",
+            (goal_id,),
+        ).fetchone()
+    return _row_to_checkpoint(row) if row else None
+
+
+@_with_retry
+def update_checkpoint(checkpoint_id: int, **kwargs) -> Optional[ExecutionCheckpoint]:
+    allowed = {"step_index", "state_json", "status"}
+    updates = {k: v for k, v in kwargs.items() if k in allowed}
+    if not updates:
+        return get_checkpoint(checkpoint_id)
+    set_clause = ", ".join(f"{k} = ?" for k in updates)
+    params = list(updates.values()) + [checkpoint_id]
+    with _conn() as con:
+        con.execute(f"UPDATE execution_checkpoints SET {set_clause} WHERE id = ?", params)
+    return get_checkpoint(checkpoint_id)
+
+
+def _row_to_checkpoint(row: sqlite3.Row) -> ExecutionCheckpoint:
+    return ExecutionCheckpoint(
+        id=row["id"],
+        goal_id=row["goal_id"],
+        task_id=row["task_id"],
+        step_index=row["step_index"],
+        state_json=row["state_json"],
+        status=row["status"],
+        created_at=datetime.fromisoformat(row["created_at"]),
+    )
+
+
+# ─── Agent Schedules & Flows (WP-02) ────────────────────────────────────────
+
+@_with_retry
+def create_agent_schedule(schedule: AgentSchedule) -> AgentSchedule:
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        cur = con.execute(
+            """INSERT INTO agent_schedules
+               (agent_type, goal_id, interval_hours, next_run_at, paused, created_at)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (schedule.agent_type, schedule.goal_id, schedule.interval_hours,
+             schedule.next_run_at, int(schedule.paused), now),
+        )
+        schedule.id = cur.lastrowid
+        schedule.created_at = datetime.fromisoformat(now)
+    return schedule
+
+
+@_with_retry
+def list_agent_schedules(goal_id: int) -> List[AgentSchedule]:
+    with _conn() as con:
+        rows = con.execute(
+            "SELECT * FROM agent_schedules WHERE goal_id = ? ORDER BY agent_type ASC",
+            (goal_id,),
+        ).fetchall()
+    return [_row_to_agent_schedule(r) for r in rows]
+
+
+def _row_to_agent_schedule(row: sqlite3.Row) -> AgentSchedule:
+    return AgentSchedule(
+        id=row["id"],
+        agent_type=row["agent_type"],
+        goal_id=row["goal_id"],
+        interval_hours=row["interval_hours"],
+        next_run_at=row["next_run_at"],
+        paused=bool(row["paused"]),
+        created_at=datetime.fromisoformat(row["created_at"]),
+    )
+
+
+@_with_retry
+def create_agent_flow(flow: AgentFlow) -> AgentFlow:
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        cur = con.execute(
+            """INSERT INTO agent_flows
+               (goal_id, steps_json, current_step, status, created_at)
+               VALUES (?, ?, ?, ?, ?)""",
+            (flow.goal_id, flow.steps_json, flow.current_step, flow.status, now),
+        )
+        flow.id = cur.lastrowid
+        flow.created_at = datetime.fromisoformat(now)
+    return flow
+
+
+@_with_retry
+def list_agent_flows(goal_id: int) -> List[AgentFlow]:
+    with _conn() as con:
+        rows = con.execute(
+            "SELECT * FROM agent_flows WHERE goal_id = ? ORDER BY created_at DESC",
+            (goal_id,),
+        ).fetchall()
+    return [_row_to_agent_flow(r) for r in rows]
+
+
+def _row_to_agent_flow(row: sqlite3.Row) -> AgentFlow:
+    return AgentFlow(
+        id=row["id"],
+        goal_id=row["goal_id"],
+        steps_json=row["steps_json"],
+        current_step=row["current_step"],
+        status=row["status"],
+        created_at=datetime.fromisoformat(row["created_at"]),
+    )
+
+
+# ─── Gamification (WP-04) ───────────────────────────────────────────────────
+
+@_with_retry
+def get_or_create_user_xp(user_id: int) -> UserXP:
+    with _conn() as con:
+        row = con.execute("SELECT * FROM user_xp WHERE user_id = ?", (user_id,)).fetchone()
+        if row:
+            return _row_to_user_xp(row)
+        now = datetime.now(timezone.utc).isoformat()
+        cur = con.execute(
+            """INSERT INTO user_xp (user_id, total_xp, level, current_streak, longest_streak, last_activity_date, created_at, updated_at)
+               VALUES (?, 0, 1, 0, 0, '', ?, ?)""",
+            (user_id, now, now),
+        )
+        return UserXP(id=cur.lastrowid, user_id=user_id, created_at=datetime.fromisoformat(now), updated_at=datetime.fromisoformat(now))
+
+
+@_with_retry
+def update_user_xp(user_id: int, xp_delta: int) -> UserXP:
+    now = datetime.now(timezone.utc)
+    now_iso = now.isoformat()
+    today_str = now.strftime("%Y-%m-%d")
+    uxp = get_or_create_user_xp(user_id)
+    new_xp = uxp.total_xp + xp_delta
+    new_level = max(1, new_xp // 100 + 1)
+    new_streak = uxp.current_streak
+    new_longest = uxp.longest_streak
+    if uxp.last_activity_date:
+        last_date = date.fromisoformat(uxp.last_activity_date)
+        today_date = date.fromisoformat(today_str)
+        delta_days = (today_date - last_date).days
+        if delta_days == 1:
+            new_streak += 1
+        elif delta_days > 1:
+            new_streak = 1
+    else:
+        new_streak = 1
+    new_longest = max(new_longest, new_streak)
+    with _conn() as con:
+        con.execute(
+            """UPDATE user_xp SET total_xp = ?, level = ?, current_streak = ?,
+               longest_streak = ?, last_activity_date = ?, updated_at = ?
+               WHERE user_id = ?""",
+            (new_xp, new_level, new_streak, new_longest, today_str, now_iso, user_id),
+        )
+    return get_or_create_user_xp(user_id)
+
+
+@_with_retry
+def create_achievement(ach: Achievement) -> Achievement:
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        existing = con.execute(
+            "SELECT id FROM achievements WHERE user_id = ? AND achievement_type = ?",
+            (ach.user_id, ach.achievement_type),
+        ).fetchone()
+        if existing:
+            ach.id = existing["id"]
+            ach.earned_at = datetime.fromisoformat(now)
+            return ach
+        cur = con.execute(
+            """INSERT INTO achievements (user_id, achievement_type, title, description, earned_at)
+               VALUES (?, ?, ?, ?, ?)""",
+            (ach.user_id, ach.achievement_type, ach.title, ach.description, now),
+        )
+        ach.id = cur.lastrowid
+        ach.earned_at = datetime.fromisoformat(now)
+    return ach
+
+
+@_with_retry
+def list_achievements(user_id: int) -> List[Achievement]:
+    with _conn() as con:
+        rows = con.execute(
+            "SELECT * FROM achievements WHERE user_id = ? ORDER BY earned_at DESC",
+            (user_id,),
+        ).fetchall()
+    return [_row_to_achievement(r) for r in rows]
+
+
+def _row_to_user_xp(row: sqlite3.Row) -> UserXP:
+    return UserXP(
+        id=row["id"],
+        user_id=row["user_id"],
+        total_xp=row["total_xp"],
+        level=row["level"],
+        current_streak=row["current_streak"],
+        longest_streak=row["longest_streak"],
+        last_activity_date=row["last_activity_date"],
+        created_at=datetime.fromisoformat(row["created_at"]),
+        updated_at=datetime.fromisoformat(row["updated_at"]),
+    )
+
+
+def _row_to_achievement(row: sqlite3.Row) -> Achievement:
+    return Achievement(
+        id=row["id"],
+        user_id=row["user_id"],
+        achievement_type=row["achievement_type"],
+        title=row["title"],
+        description=row["description"],
+        earned_at=datetime.fromisoformat(row["earned_at"]),
+    )
+
+
+# ─── Time Tracking (WP-08) ──────────────────────────────────────────────────
+
+@_with_retry
+def create_time_entry(entry: TimeEntry) -> TimeEntry:
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        cur = con.execute(
+            """INSERT INTO time_entries (task_id, user_id, started_at, ended_at, duration_minutes, note, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (entry.task_id, entry.user_id, entry.started_at, entry.ended_at,
+             entry.duration_minutes, entry.note, now),
+        )
+        entry.id = cur.lastrowid
+        entry.created_at = datetime.fromisoformat(now)
+    return entry
+
+
+@_with_retry
+def list_time_entries(task_id: int) -> List[TimeEntry]:
+    with _conn() as con:
+        rows = con.execute(
+            "SELECT * FROM time_entries WHERE task_id = ? ORDER BY created_at DESC", (task_id,),
+        ).fetchall()
+    return [_row_to_time_entry(r) for r in rows]
+
+
+@_with_retry
+def get_task_total_time(task_id: int) -> int:
+    """Return total tracked minutes for a task."""
+    with _conn() as con:
+        row = con.execute(
+            "SELECT COALESCE(SUM(duration_minutes), 0) as total FROM time_entries WHERE task_id = ?",
+            (task_id,),
+        ).fetchone()
+    return row["total"] if row else 0
+
+
+def _row_to_time_entry(row: sqlite3.Row) -> TimeEntry:
+    return TimeEntry(
+        id=row["id"], task_id=row["task_id"], user_id=row["user_id"],
+        started_at=row["started_at"], ended_at=row["ended_at"],
+        duration_minutes=row["duration_minutes"], note=row["note"],
+        created_at=datetime.fromisoformat(row["created_at"]),
+    )
+
+
+# ─── Recurrence Rules (WP-10) ───────────────────────────────────────────────
+
+@_with_retry
+def create_recurrence_rule(rule: RecurrenceRule) -> RecurrenceRule:
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        cur = con.execute(
+            """INSERT INTO recurrence_rules (task_id, frequency, interval_val, next_due, end_date, created_at)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (rule.task_id, rule.frequency, rule.interval, rule.next_due, rule.end_date, now),
+        )
+        rule.id = cur.lastrowid
+        rule.created_at = datetime.fromisoformat(now)
+    return rule
+
+
+@_with_retry
+def get_recurrence_rule(task_id: int) -> Optional[RecurrenceRule]:
+    with _conn() as con:
+        row = con.execute("SELECT * FROM recurrence_rules WHERE task_id = ?", (task_id,)).fetchone()
+    return _row_to_recurrence(row) if row else None
+
+
+@_with_retry
+def delete_recurrence_rule(task_id: int) -> None:
+    with _conn() as con:
+        con.execute("DELETE FROM recurrence_rules WHERE task_id = ?", (task_id,))
+
+
+def _row_to_recurrence(row: sqlite3.Row) -> RecurrenceRule:
+    return RecurrenceRule(
+        id=row["id"], task_id=row["task_id"], frequency=row["frequency"],
+        interval=row["interval_val"], next_due=row["next_due"],
+        end_date=row["end_date"], created_at=datetime.fromisoformat(row["created_at"]),
+    )
+
+
+# ─── Goal Collaborators (WP-11) ─────────────────────────────────────────────
+
+@_with_retry
+def add_collaborator(collab: GoalCollaborator) -> GoalCollaborator:
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        cur = con.execute(
+            """INSERT OR REPLACE INTO goal_collaborators (goal_id, user_id, role, created_at)
+               VALUES (?, ?, ?, ?)""",
+            (collab.goal_id, collab.user_id, collab.role, now),
+        )
+        collab.id = cur.lastrowid
+        collab.created_at = datetime.fromisoformat(now)
+    return collab
+
+
+@_with_retry
+def list_collaborators(goal_id: int) -> List[GoalCollaborator]:
+    with _conn() as con:
+        rows = con.execute(
+            "SELECT * FROM goal_collaborators WHERE goal_id = ? ORDER BY created_at ASC",
+            (goal_id,),
+        ).fetchall()
+    return [_row_to_collaborator(r) for r in rows]
+
+
+@_with_retry
+def remove_collaborator(goal_id: int, user_id: int) -> None:
+    with _conn() as con:
+        con.execute("DELETE FROM goal_collaborators WHERE goal_id = ? AND user_id = ?",
+                     (goal_id, user_id))
+
+
+def _row_to_collaborator(row: sqlite3.Row) -> GoalCollaborator:
+    return GoalCollaborator(
+        id=row["id"], goal_id=row["goal_id"], user_id=row["user_id"],
+        role=row["role"], created_at=datetime.fromisoformat(row["created_at"]),
+    )
+
+
+# ─── Custom Fields (WP-12) ──────────────────────────────────────────────────
+
+@_with_retry
+def create_custom_field(cf: CustomField) -> CustomField:
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        cur = con.execute(
+            """INSERT INTO custom_fields (task_id, field_name, field_value, field_type, created_at)
+               VALUES (?, ?, ?, ?, ?)""",
+            (cf.task_id, cf.field_name, cf.field_value, cf.field_type, now),
+        )
+        cf.id = cur.lastrowid
+        cf.created_at = datetime.fromisoformat(now)
+    return cf
+
+
+@_with_retry
+def list_custom_fields(task_id: int) -> List[CustomField]:
+    with _conn() as con:
+        rows = con.execute(
+            "SELECT * FROM custom_fields WHERE task_id = ? ORDER BY field_name ASC",
+            (task_id,),
+        ).fetchall()
+    return [_row_to_custom_field(r) for r in rows]
+
+
+@_with_retry
+def delete_custom_field(field_id: int) -> None:
+    with _conn() as con:
+        con.execute("DELETE FROM custom_fields WHERE id = ?", (field_id,))
+
+
+def _row_to_custom_field(row: sqlite3.Row) -> CustomField:
+    return CustomField(
+        id=row["id"], task_id=row["task_id"], field_name=row["field_name"],
+        field_value=row["field_value"], field_type=row["field_type"],
+        created_at=datetime.fromisoformat(row["created_at"]),
+    )
+
+
+# ─── Progress Snapshots (WP-14) ─────────────────────────────────────────────
+
+@_with_retry
+def capture_progress_snapshot(goal_id: int) -> ProgressSnapshot:
+    now = datetime.now(timezone.utc).isoformat()
+    tasks = list_tasks(goal_id=goal_id)
+    total = len(tasks)
+    completed = sum(1 for t in tasks if t.status in ("done", "skipped"))
+    pct = round((completed / total * 100) if total > 0 else 0, 2)
+    snap = ProgressSnapshot(goal_id=goal_id, total_tasks=total,
+                            completed_tasks=completed, percentage=pct)
+    with _conn() as con:
+        cur = con.execute(
+            """INSERT INTO progress_snapshots (goal_id, total_tasks, completed_tasks, percentage, captured_at)
+               VALUES (?, ?, ?, ?, ?)""",
+            (goal_id, total, completed, pct, now),
+        )
+        snap.id = cur.lastrowid
+        snap.captured_at = datetime.fromisoformat(now)
+    return snap
+
+
+@_with_retry
+def list_progress_snapshots(goal_id: int) -> List[ProgressSnapshot]:
+    with _conn() as con:
+        rows = con.execute(
+            "SELECT * FROM progress_snapshots WHERE goal_id = ? ORDER BY captured_at DESC",
+            (goal_id,),
+        ).fetchall()
+    return [_row_to_snapshot(r) for r in rows]
+
+
+def _row_to_snapshot(row: sqlite3.Row) -> ProgressSnapshot:
+    return ProgressSnapshot(
+        id=row["id"], goal_id=row["goal_id"], total_tasks=row["total_tasks"],
+        completed_tasks=row["completed_tasks"], percentage=row["percentage"],
+        captured_at=datetime.fromisoformat(row["captured_at"]),
+    )
+
+
+# ─── Notification Preferences (WP-16) ───────────────────────────────────────
+
+@_with_retry
+def set_notification_preference(pref: NotificationPreference) -> NotificationPreference:
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        existing = con.execute(
+            "SELECT id FROM notification_preferences WHERE user_id = ? AND channel = ? AND event_type = ?",
+            (pref.user_id, pref.channel, pref.event_type),
+        ).fetchone()
+        if existing:
+            con.execute("UPDATE notification_preferences SET enabled = ? WHERE id = ?",
+                         (int(pref.enabled), existing["id"]))
+            pref.id = existing["id"]
+        else:
+            cur = con.execute(
+                """INSERT INTO notification_preferences (user_id, channel, event_type, enabled, created_at)
+                   VALUES (?, ?, ?, ?, ?)""",
+                (pref.user_id, pref.channel, pref.event_type, int(pref.enabled), now),
+            )
+            pref.id = cur.lastrowid
+        pref.created_at = datetime.fromisoformat(now)
+    return pref
+
+
+@_with_retry
+def list_notification_preferences(user_id: int) -> List[NotificationPreference]:
+    with _conn() as con:
+        rows = con.execute(
+            "SELECT * FROM notification_preferences WHERE user_id = ? ORDER BY channel, event_type",
+            (user_id,),
+        ).fetchall()
+    return [_row_to_notif_pref(r) for r in rows]
+
+
+def _row_to_notif_pref(row: sqlite3.Row) -> NotificationPreference:
+    return NotificationPreference(
+        id=row["id"], user_id=row["user_id"], channel=row["channel"],
+        event_type=row["event_type"], enabled=bool(row["enabled"]),
+        created_at=datetime.fromisoformat(row["created_at"]),
+    )
+
+
+# ─── Personal API Keys (WP-17) ──────────────────────────────────────────────
+
+@_with_retry
+def create_personal_api_key(key: PersonalApiKey) -> PersonalApiKey:
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        cur = con.execute(
+            """INSERT INTO personal_api_keys (user_id, name, key_hash, key_prefix, last_used_at, created_at)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (key.user_id, key.name, key.key_hash, key.key_prefix, key.last_used_at, now),
+        )
+        key.id = cur.lastrowid
+        key.created_at = datetime.fromisoformat(now)
+    return key
+
+
+@_with_retry
+def list_personal_api_keys(user_id: int) -> List[PersonalApiKey]:
+    with _conn() as con:
+        rows = con.execute(
+            "SELECT * FROM personal_api_keys WHERE user_id = ? ORDER BY created_at DESC",
+            (user_id,),
+        ).fetchall()
+    return [_row_to_api_key(r) for r in rows]
+
+
+@_with_retry
+def get_api_key_by_hash(key_hash: str) -> Optional[PersonalApiKey]:
+    with _conn() as con:
+        row = con.execute("SELECT * FROM personal_api_keys WHERE key_hash = ?", (key_hash,)).fetchone()
+    return _row_to_api_key(row) if row else None
+
+
+@_with_retry
+def delete_personal_api_key(key_id: int, user_id: int) -> None:
+    with _conn() as con:
+        con.execute("DELETE FROM personal_api_keys WHERE id = ? AND user_id = ?", (key_id, user_id))
+
+
+def _row_to_api_key(row: sqlite3.Row) -> PersonalApiKey:
+    return PersonalApiKey(
+        id=row["id"], user_id=row["user_id"], name=row["name"],
+        key_hash=row["key_hash"], key_prefix=row["key_prefix"],
+        last_used_at=row["last_used_at"],
+        created_at=datetime.fromisoformat(row["created_at"]),
+    )
+
+
+# ─── Task Blockers (WP-19) ──────────────────────────────────────────────────
+
+@_with_retry
+def create_task_blocker(blocker: TaskBlocker) -> TaskBlocker:
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        cur = con.execute(
+            """INSERT INTO task_blockers (task_id, description, blocker_type, status, resolved_at, created_at)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (blocker.task_id, blocker.description, blocker.blocker_type,
+             blocker.status, blocker.resolved_at, now),
+        )
+        blocker.id = cur.lastrowid
+        blocker.created_at = datetime.fromisoformat(now)
+    return blocker
+
+
+@_with_retry
+def list_task_blockers(task_id: int, status: Optional[str] = None) -> List[TaskBlocker]:
+    query = "SELECT * FROM task_blockers WHERE task_id = ?"
+    params: list = [task_id]
+    if status:
+        query += " AND status = ?"
+        params.append(status)
+    query += " ORDER BY created_at DESC"
+    with _conn() as con:
+        rows = con.execute(query, params).fetchall()
+    return [_row_to_blocker(r) for r in rows]
+
+
+@_with_retry
+def resolve_task_blocker(blocker_id: int) -> Optional[TaskBlocker]:
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        con.execute("UPDATE task_blockers SET status = 'resolved', resolved_at = ? WHERE id = ?",
+                     (now, blocker_id))
+        row = con.execute("SELECT * FROM task_blockers WHERE id = ?", (blocker_id,)).fetchone()
+    return _row_to_blocker(row) if row else None
+
+
+def _row_to_blocker(row: sqlite3.Row) -> TaskBlocker:
+    return TaskBlocker(
+        id=row["id"], task_id=row["task_id"], description=row["description"],
+        blocker_type=row["blocker_type"], status=row["status"],
+        resolved_at=row["resolved_at"],
+        created_at=datetime.fromisoformat(row["created_at"]),
+    )
+
+
+# ─── Dashboard Widgets (WP-20) ──────────────────────────────────────────────
+
+@_with_retry
+def create_dashboard_widget(widget: DashboardWidget) -> DashboardWidget:
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        cur = con.execute(
+            """INSERT INTO dashboard_widgets (user_id, widget_type, position, config_json, enabled, created_at)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (widget.user_id, widget.widget_type, widget.position,
+             widget.config_json, int(widget.enabled), now),
+        )
+        widget.id = cur.lastrowid
+        widget.created_at = datetime.fromisoformat(now)
+    return widget
+
+
+@_with_retry
+def list_dashboard_widgets(user_id: int) -> List[DashboardWidget]:
+    with _conn() as con:
+        rows = con.execute(
+            "SELECT * FROM dashboard_widgets WHERE user_id = ? ORDER BY position ASC",
+            (user_id,),
+        ).fetchall()
+    return [_row_to_widget(r) for r in rows]
+
+
+@_with_retry
+def update_dashboard_widget(widget_id: int, user_id: int, **kwargs) -> Optional[DashboardWidget]:
+    _ALLOWED_COLS = {"position", "config_json", "enabled", "widget_type"}
+    updates = {k: v for k, v in kwargs.items() if k in _ALLOWED_COLS}
+    if "enabled" in updates:
+        updates["enabled"] = int(updates["enabled"])
+    if not updates:
+        return None
+    # Build SET clause safely — column names come from a hardcoded allowlist
+    col_map = {col: updates[col] for col in _ALLOWED_COLS if col in updates}
+    set_parts = []
+    params: list = []
+    for col_name in ("position", "config_json", "enabled", "widget_type"):
+        if col_name in col_map:
+            set_parts.append(f"{col_name} = ?")
+            params.append(col_map[col_name])
+    if not set_parts:
+        return None
+    params.extend([widget_id, user_id])
+    query = "UPDATE dashboard_widgets SET " + ", ".join(set_parts) + " WHERE id = ? AND user_id = ?"
+    with _conn() as con:
+        con.execute(query, params)
+        row = con.execute("SELECT * FROM dashboard_widgets WHERE id = ?", (widget_id,)).fetchone()
+    return _row_to_widget(row) if row else None
+
+
+@_with_retry
+def delete_dashboard_widget(widget_id: int, user_id: int) -> None:
+    with _conn() as con:
+        con.execute("DELETE FROM dashboard_widgets WHERE id = ? AND user_id = ?", (widget_id, user_id))
+
+
+def _row_to_widget(row: sqlite3.Row) -> DashboardWidget:
+    return DashboardWidget(
+        id=row["id"], user_id=row["user_id"], widget_type=row["widget_type"],
+        position=row["position"], config_json=row["config_json"],
+        enabled=bool(row["enabled"]),
+        created_at=datetime.fromisoformat(row["created_at"]),
+    )

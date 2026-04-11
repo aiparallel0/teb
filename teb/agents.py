@@ -46,6 +46,7 @@ class AgentSpec:
     expertise: List[str]     # keywords this agent handles
     system_prompt: str       # AI system prompt for this agent
     can_delegate_to: List[str]  # agent types this agent can delegate to
+    backstory: str = ""              # rich narrative backstory for better AI outputs
 
     def to_dict(self) -> dict:
         return {
@@ -54,6 +55,7 @@ class AgentSpec:
             "description": self.description,
             "expertise": self.expertise,
             "can_delegate_to": self.can_delegate_to,
+            "backstory": self.backstory,
         }
 
 
@@ -142,6 +144,11 @@ _register(AgentSpec(
         "- Focus on the fastest path to a concrete result"
     ),
     can_delegate_to=["marketing", "web_dev", "outreach", "research", "finance"],
+    backstory=(
+        "A seasoned strategist who has orchestrated hundreds of successful product launches. "
+        "Known for breaking complex goals into clear, actionable plans and ensuring every "
+        "specialist stays aligned toward the shared objective."
+    ),
 ))
 
 _register(AgentSpec(
@@ -170,6 +177,11 @@ _register(AgentSpec(
         "- Focus on low-cost, high-impact strategies first"
     ),
     can_delegate_to=["web_dev", "outreach"],
+    backstory=(
+        "A growth-marketing veteran who built brands from zero to millions of users. "
+        "Obsessed with data-driven positioning and low-cost, high-impact campaigns "
+        "that deliver measurable results."
+    ),
 ))
 
 _register(AgentSpec(
@@ -198,6 +210,11 @@ _register(AgentSpec(
         "- Reference specific technologies (nginx, Cloudflare, etc.)"
     ),
     can_delegate_to=[],
+    backstory=(
+        "A full-stack engineer who has shipped dozens of production web applications. "
+        "Believes in pragmatic technology choices, clear deployment pipelines, "
+        "and documentation that a beginner can follow."
+    ),
 ))
 
 _register(AgentSpec(
@@ -224,6 +241,10 @@ _register(AgentSpec(
         "- Focus on personalized, high-response approaches"
     ),
     can_delegate_to=[],
+    backstory=(
+        "A relationship-builder who landed enterprise deals through thoughtful, personalized "
+        "outreach. Champions empathy-driven messaging over spray-and-pray tactics."
+    ),
 ))
 
 _register(AgentSpec(
@@ -251,6 +272,10 @@ _register(AgentSpec(
         "- You can delegate findings to marketing or finance agents"
     ),
     can_delegate_to=["marketing", "finance"],
+    backstory=(
+        "A meticulous analyst who turns ambiguous questions into data-backed insights. "
+        "Skilled at synthesizing information from diverse sources into actionable intelligence."
+    ),
 ))
 
 _register(AgentSpec(
@@ -276,6 +301,10 @@ _register(AgentSpec(
         "- Include pricing analysis methodology"
     ),
     can_delegate_to=[],
+    backstory=(
+        "A pragmatic CFO-type who has bootstrapped startups and managed seven-figure budgets. "
+        "Focuses on unit economics, sustainable pricing, and clear financial projections."
+    ),
 ))
 
 
