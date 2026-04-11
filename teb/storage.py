@@ -4294,16 +4294,26 @@ def list_dashboard_widgets(user_id: int) -> List[DashboardWidget]:
 
 @_with_retry
 def update_dashboard_widget(widget_id: int, user_id: int, **kwargs) -> Optional[DashboardWidget]:
-    allowed = {"position", "config_json", "enabled", "widget_type"}
-    updates = {k: v for k, v in kwargs.items() if k in allowed}
+    _ALLOWED_COLS = {"position", "config_json", "enabled", "widget_type"}
+    updates = {k: v for k, v in kwargs.items() if k in _ALLOWED_COLS}
     if "enabled" in updates:
         updates["enabled"] = int(updates["enabled"])
     if not updates:
         return None
-    set_clause = ", ".join(f"{k} = ?" for k in updates)
-    params = list(updates.values()) + [widget_id, user_id]
+    # Build SET clause safely — column names come from a hardcoded allowlist
+    col_map = {col: updates[col] for col in _ALLOWED_COLS if col in updates}
+    set_parts = []
+    params: list = []
+    for col_name in ("position", "config_json", "enabled", "widget_type"):
+        if col_name in col_map:
+            set_parts.append(f"{col_name} = ?")
+            params.append(col_map[col_name])
+    if not set_parts:
+        return None
+    params.extend([widget_id, user_id])
+    query = "UPDATE dashboard_widgets SET " + ", ".join(set_parts) + " WHERE id = ? AND user_id = ?"
     with _conn() as con:
-        con.execute(f"UPDATE dashboard_widgets SET {set_clause} WHERE id = ? AND user_id = ?", params)
+        con.execute(query, params)
         row = con.execute("SELECT * FROM dashboard_widgets WHERE id = ?", (widget_id,)).fetchone()
     return _row_to_widget(row) if row else None
 

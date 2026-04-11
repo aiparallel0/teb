@@ -37,7 +37,7 @@ const KanbanView = {
           card.className = 'kanban-card';
           card.dataset.taskId = task.id;
           const tags = (task.tags || []).map(t => `<span class="tag">${t}</span>`).join('');
-          const dueDate = task.due_date ? `<span class="due-date">\u{1F4C5} ${task.due_date}</span>` : '';
+          const dueDate = task.due_date ? `<span class="due-date">\uD83D\uDCC5 ${task.due_date}</span>` : '';
           card.innerHTML = `
             <div class="kanban-card-title">${task.title}</div>
             <div class="kanban-card-meta">
