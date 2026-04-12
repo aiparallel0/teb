@@ -3564,3 +3564,24 @@ img[loading="lazy"] { content-visibility: auto; }
 
 /* ── Responsive images ───────────────────────────────────────────── */
 picture img { width: 100%; height: auto; }
+
+/* ─── Gamification ─────────────────────────────────────────────── */
+.xp-summary { display: flex; align-items: center; gap: var(--space-md); flex-wrap: wrap; }
+.xp-level-badge { background: var(--accent); color: #fff; font-weight: var(--font-weight-bold); padding: .35rem .75rem; border-radius: var(--radius-full); font-size: var(--text-sm); white-space: nowrap; }
+.xp-bar-wrap { flex: 1; min-width: 150px; }
+.xp-bar-bg { background: var(--bg-alt); border-radius: var(--radius-full); height: 10px; overflow: hidden; }
+.xp-bar-fill { background: linear-gradient(90deg, var(--accent), var(--gold-300)); height: 100%; border-radius: var(--radius-full); transition: width .4s ease; }
+.xp-bar-label { font-size: var(--text-xs); color: var(--muted); margin-top: .25rem; display: block; }
+.streak-badge { display: inline-flex; align-items: center; gap: .35rem; background: var(--surface); border: 1px solid var(--border-subtle); padding: .35rem .75rem; border-radius: var(--radius-full); font-size: var(--text-sm); margin-top: var(--space-sm); }
+.streak-icon { font-size: 1.1rem; }
+.streak-count { font-weight: var(--font-weight-bold); color: var(--accent); }
+.streak-display { margin-top: var(--space-sm); }
+.achievements-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: var(--space-sm); margin-top: var(--space-md); }
+.achievement-card { display: flex; align-items: center; gap: var(--space-sm); padding: var(--space-sm) var(--space-md); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); background: var(--surface); opacity: .5; }
+.achievement-card.unlocked { opacity: 1; border-color: var(--accent); }
+.achievement-icon { font-size: 1.5rem; }
+.achievement-info { flex: 1; min-width: 0; }
+.achievement-name { font-weight: var(--font-weight-semibold); font-size: var(--text-sm); }
+.achievement-desc { font-size: var(--text-xs); color: var(--text-secondary); }
+.achievement-date { font-size: var(--text-xs); color: var(--muted); margin-top: .15rem; }
+.gamification-content { padding: var(--space-md); }

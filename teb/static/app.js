@@ -1179,6 +1179,7 @@ async function showTasksScreen(goal, freshDecompose) {
   loadAutopilotStatus();
   loadRoiDashboard();
   loadPlatformInsights();
+  loadGamification();
   loadAgentActivity();
   showScreen('screen-tasks');
   updateBreadcrumbs([{text:'Home', href:'#/home'}, {text: goal.title}]);
@@ -1485,20 +1486,20 @@ function buildTaskCard(task, subtasks, byParent, depth) {
   // Sub-task checkboxes
   card.querySelectorAll('.subtask-cb').forEach(cb => {
     cb.addEventListener('click', () => {
-      const tid = parseInt(cb.dataset.id, 10);
-      const sub = currentTasks.find(t => t.id === tid);
+      const tid = cb.dataset.id;
+      const sub = currentTasks.find(t => String(t.id) === String(tid));
       if (sub) toggleTaskDone(sub);
     });
   });
 
   // Sub-task break-down buttons
   card.querySelectorAll('.btn-break-down-sub').forEach(btn => {
-    btn.addEventListener('click', () => decomposeTask(parseInt(btn.dataset.id, 10)));
+    btn.addEventListener('click', () => decomposeTask(btn.dataset.id));
   });
 
   // Sub-task delete buttons
   card.querySelectorAll('.btn-delete-sub').forEach(btn => {
-    btn.addEventListener('click', () => deleteTask(parseInt(btn.dataset.id, 10)));
+    btn.addEventListener('click', () => deleteTask(btn.dataset.id));
   });
 
   return card;
@@ -1530,6 +1531,9 @@ async function toggleTaskDone(task) {
   const newStatus = task.status === 'done' ? 'todo' : 'done';
   await patchTaskStatus(task.id, newStatus);
   if (newStatus === 'done') {
+    // Award XP for task completion
+    if (typeof LevelUp !== 'undefined') LevelUp.addXP(10);
+    if (typeof SoundFX !== 'undefined') SoundFX.play('complete');
     // Check if all tasks are done → celebration
     const goal = await api.get(`/api/goals/${currentGoalId}`).catch(() => null);
     if (goal) {
@@ -1843,10 +1847,9 @@ on('btn-orchestrate', 'click', async () => {
   const panel = document.getElementById('agent-activity-panel');
   const content = document.getElementById('agent-activity-content');
 
-  btn.disabled = true;
-  btn.textContent = 'Orchestrating…';
-  panel.style.display = 'block';
-  content.innerHTML = '<div class="agent-loading"><div class="loading-spinner-sm"></div><span>Dispatching agents…</span></div>';
+  if (btn) { btn.disabled = true; btn.textContent = 'Orchestrating…'; }
+  if (panel) panel.style.display = 'block';
+  if (content) content.innerHTML = '<div class="agent-loading"><div class="loading-spinner-sm"></div><span>Dispatching agents…</span></div>';
 
   try {
     const result = await api.post(`/api/goals/${currentGoalId}/orchestrate`, {});
@@ -1916,8 +1919,7 @@ on('btn-orchestrate', 'click', async () => {
   } catch (e) {
     content.innerHTML = `<p class="error">${escHtml(e.message)}</p>`;
   } finally {
-    btn.disabled = false;
-    btn.textContent = 'Orchestrate';
+    if (btn) { btn.disabled = false; btn.textContent = 'Orchestrate'; }
   }
 });
 
@@ -2593,6 +2595,84 @@ on('btn-add-outcome', 'click', async () => {
     showError('error-tasks', e.message);
   }
 });
+
+// ─── Gamification: XP & Achievements ──────────────────────────────────────────
+
+async function loadGamification() {
+  const panel = document.getElementById('gamification-panel');
+  if (!panel) return;
+
+  try {
+    const xpData = await api.get('/api/users/me/xp');
+    const xpDisplay = document.getElementById('xp-display');
+    if (xpDisplay && xpData) {
+      const level = xpData.level || 1;
+      const xp = xpData.total_xp || 0;
+      const streak = xpData.streak_days || 0;
+      const nextLevelXP = (level) * 100;
+      const currentLevelXP = xp % 100;
+      const pct = Math.min(100, Math.round((currentLevelXP / 100) * 100));
+      xpDisplay.innerHTML = `
+        <div class="xp-summary">
+          <div class="xp-level-badge">Level ${level}</div>
+          <div class="xp-bar-wrap">
+            <div class="xp-bar-bg">
+              <div class="xp-bar-fill" style="width:${pct}%"></div>
+            </div>
+            <span class="xp-bar-label">${xp} XP total · ${currentLevelXP}/100 to next level</span>
+          </div>
+        </div>`;
+
+      // Update local LevelUp state to match server
+      if (typeof LevelUp !== 'undefined') {
+        LevelUp._currentLevel = level;
+        LevelUp._currentXP = currentLevelXP;
+        localStorage.setItem('teb_level', level);
+        localStorage.setItem('teb_xp', currentLevelXP);
+      }
+    }
+
+    // Streak display
+    const streakDisplay = document.getElementById('streak-display');
+    if (streakDisplay && xpData) {
+      const streak = xpData.streak_days || 0;
+      if (streak > 0) {
+        streakDisplay.innerHTML = `<div class="streak-badge"><span class="streak-icon">🔥</span><span class="streak-count">${streak}</span> day streak</div>`;
+      } else {
+        streakDisplay.innerHTML = `<div class="streak-badge"><span class="streak-icon">🔥</span>Start a streak by completing tasks daily!</div>`;
+      }
+    }
+
+    panel.style.display = 'block';
+  } catch (e) {
+    // Hide panel if user not logged in or API fails
+    if (panel) panel.style.display = 'none';
+  }
+
+  // Load achievements
+  try {
+    const achievements = await api.get('/api/users/me/achievements');
+    const list = document.getElementById('achievements-list');
+    if (list) {
+      if (!achievements || !achievements.length) {
+        list.innerHTML = '<div class="empty-state" style="padding:var(--space-md)"><div class="empty-state-icon">🏆</div><div class="empty-state-desc">No achievements yet. Keep completing tasks!</div></div>';
+      } else {
+        list.innerHTML = achievements.map(a => `
+          <div class="achievement-card${a.unlocked_at ? ' unlocked' : ''}">
+            <span class="achievement-icon">${a.icon || '🏆'}</span>
+            <div class="achievement-info">
+              <div class="achievement-name">${escHtml(a.name)}</div>
+              <div class="achievement-desc">${escHtml(a.description || '')}</div>
+              ${a.unlocked_at ? `<div class="achievement-date">Unlocked ${timeAgo(a.unlocked_at)}</div>` : ''}
+            </div>
+          </div>
+        `).join('');
+      }
+    }
+  } catch (e) {
+    // Silent fail — achievements are optional
+  }
+}
 
 // ─── ROI Dashboard ────────────────────────────────────────────────────────────
 
