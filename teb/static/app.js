@@ -196,8 +196,16 @@ function _switchToView(viewKey) {
   if (allTasksSection) allTasksSection.style.display = 'block';
   _currentViewType = viewKey;
   localStorage.setItem('teb_view_type', viewKey);
-  ViewSwitcher.init();
-  ViewSwitcher.loadView(viewKey);
+  // ViewSwitcher is declared as `const` at line ~3407, after this function and
+  // after the Router whose init() fires immediately at page load. Accessing
+  // ViewSwitcher synchronously here hits the temporal dead zone (TDZ) and
+  // throws "Cannot access 'ViewSwitcher' before initialization". Deferring to
+  // the next event-loop turn (setTimeout 0) ensures the entire script —
+  // including the ViewSwitcher declaration — has been fully evaluated first.
+  setTimeout(() => {
+    ViewSwitcher.init();
+    ViewSwitcher.loadView(viewKey);
+  }, 0);
 }
 
 const Router = {
@@ -1797,7 +1805,15 @@ async function loadAutopilotStatus() {
 }
 
 on('autopilot-toggle', 'change', async (e) => {
-  const enabled = e.target.checked;
+  const toggle = e.target;                 // capture before any catch block can shadow `e`
+  const enabled = toggle.checked;
+  // Bug guard: currentGoalId is null when no goal has been opened yet; without
+  // this check the fetch URL becomes /api/goals/null/auto-execute → 422.
+  if (!currentGoalId) {
+    if (toggle) toggle.checked = !enabled; // revert the UI change
+    showError('error-tasks', 'No goal selected. Open a goal before using autopilot.');
+    return;
+  }
   const status = document.getElementById('autopilot-status');
   try {
     if (enabled) {
@@ -1814,9 +1830,13 @@ on('autopilot-toggle', 'change', async (e) => {
       const bp = document.getElementById('budget-prompt');
       if (bp) bp.style.display = 'none';
     }
-  } catch (e) {
-    e.target.checked = !enabled;
-    showError('error-tasks', e.message);
+  } catch (err) {
+    // Renamed from `e` to `err` so the outer `e` (the change event) is not
+    // shadowed. Previously `e.target` inside the catch referred to the Error
+    // object, which has no `.target`, causing:
+    //   TypeError: Cannot set properties of undefined (setting 'checked')
+    if (toggle) toggle.checked = !enabled;
+    showError('error-tasks', err.message);
   }
 });
 
