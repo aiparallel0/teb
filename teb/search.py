@@ -68,7 +68,7 @@ def reindex_all(user_id: Optional[int] = None) -> Dict[str, int]:
     return counts
 
 
-def quick_search(query: str, user_id: Optional[int] = None, limit: int = 20) -> List[Dict[str, Any]]:
+def quick_search(query: str, user_id: Optional[int] = None, limit: int = 20, semantic: bool = False) -> List[Dict[str, Any]]:
     if not query or not query.strip():
         return []
     # Fallback: LIKE search across goals and tasks
@@ -94,4 +94,52 @@ def quick_search(query: str, user_id: Optional[int] = None, limit: int = 20) -> 
                             "snippet": (row["description"] or "")[:200], "rank": 0})
     finally:
         con.close()
-    return results[:limit]
+
+    results = results[:limit]
+
+    # If semantic=True, try AI-based re-ranking
+    if semantic and results:
+        results = _semantic_rerank(query, results)
+
+    return results
+
+
+def _semantic_rerank(query: str, results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Re-rank search results using AI for semantic relevance."""
+    try:
+        from teb import config
+        if not config.get_ai_provider():
+            return results
+
+        from teb.ai_client import ai_chat
+        import json
+
+        items = [{"title": r["title"], "snippet": r["snippet"][:100]} for r in results[:20]]
+        system_prompt = """You are a search relevance ranker. Given a query and search results,
+return a JSON array of indices (0-based) ordered by semantic relevance to the query.
+Only return the JSON array of integers, nothing else."""
+
+        user_prompt = f"Query: {query}\nResults: {json.dumps(items)}"
+        response = ai_chat(system_prompt, user_prompt, json_mode=True)
+        indices = json.loads(response)
+
+        if isinstance(indices, list) and all(isinstance(i, int) for i in indices):
+            reranked = []
+            seen = set()
+            for idx in indices:
+                if 0 <= idx < len(results) and idx not in seen:
+                    r = results[idx].copy()
+                    r["rank"] = len(reranked)
+                    reranked.append(r)
+                    seen.add(idx)
+            # Add any results not in the reranked list
+            for i, r in enumerate(results):
+                if i not in seen:
+                    r_copy = r.copy()
+                    r_copy["rank"] = len(reranked)
+                    reranked.append(r_copy)
+            return reranked
+    except Exception:
+        pass
+
+    return results

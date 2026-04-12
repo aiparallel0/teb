@@ -4216,13 +4216,13 @@ from teb import search as teb_search  # noqa: E402
 
 
 @app.get("/api/search")
-async def search_all(request: Request, q: str = "", limit: int = 50):
-    """Search across all entities."""
+async def search_all(request: Request, q: str = "", limit: int = 50, semantic: bool = False):
+    """Search across all entities. Use ?semantic=true for AI-powered re-ranking."""
     uid = _require_user(request)
     if not q:
         raise HTTPException(status_code=400, detail="Query parameter 'q' is required")
-    results = teb_search.quick_search(q, user_id=uid, limit=min(limit, 100))
-    return {"query": q, "count": len(results), "results": results}
+    results = teb_search.quick_search(q, user_id=uid, limit=min(limit, 100), semantic=semantic)
+    return {"query": q, "count": len(results), "results": results, "semantic": semantic}
 
 
 @app.post("/api/search/reindex")
@@ -6982,6 +6982,199 @@ async def unvote_roadmap_endpoint(item_id: int, request: Request):
     uid = _require_user(request)
     ok = storage.remove_feature_vote(uid, item_id)
     return {"removed": ok}
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Bridging Plan: Risk, Scheduling, Reporting, Workload, Gamification Social
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+# ─── Phase 1: Risk Assessment & Triage ───────────────────────────────────────
+
+@app.get("/api/tasks/{task_id}/risk", tags=["risk"])
+async def get_task_risk(task_id: int, request: Request):
+    """Get risk assessment for a specific task."""
+    _check_api_rate_limit(request)
+    uid = _require_user(request)
+    _get_task_for_user(task_id, uid)
+    result = decomposer.estimate_risk(task_id)
+    if "error" in result:
+        raise HTTPException(status_code=404, detail=result["error"])
+    return result
+
+
+@app.post("/api/goals/{goal_id}/triage", tags=["risk"])
+async def triage_goal_tasks(goal_id: int, request: Request):
+    """Auto-prioritize all tasks in a goal using AI (with template fallback)."""
+    _check_api_rate_limit(request)
+    uid = _require_user(request)
+    _get_goal_for_user(goal_id, uid)
+    results = decomposer.triage_tasks(goal_id)
+    return {"goal_id": goal_id, "triage": results, "count": len(results)}
+
+
+# ─── Phase 2: Persistent Auto-Scheduling ────────────────────────────────────
+
+@app.post("/api/goals/{goal_id}/auto-schedule", tags=["scheduling"])
+async def auto_schedule_goal(goal_id: int, request: Request):
+    """Auto-schedule tasks into time blocks and persist the schedule."""
+    _check_api_rate_limit(request)
+    uid = _require_user(request)
+    _get_goal_for_user(goal_id, uid)
+    tasks = storage.list_tasks(goal_id=goal_id)
+    if not tasks:
+        return {"goal_id": goal_id, "schedules": [], "count": 0}
+
+    # Clear existing schedule for this goal
+    storage.delete_task_schedules(goal_id)
+
+    # Generate schedule using existing scheduler
+    schedule_data = scheduler.auto_schedule_tasks(tasks)
+
+    # Persist each schedule entry
+    from teb.models import TaskSchedule
+    persisted = []
+    for entry in schedule_data:
+        sched = TaskSchedule(
+            task_id=entry["task_id"],
+            goal_id=goal_id,
+            user_id=uid,
+            scheduled_start=entry["scheduled_start"],
+            scheduled_end=entry["scheduled_end"],
+            calendar_slot=entry.get("day_slot", 1),
+        )
+        saved = storage.create_task_schedule(sched)
+        persisted.append(saved.to_dict())
+
+    return {"goal_id": goal_id, "schedules": persisted, "count": len(persisted)}
+
+
+@app.get("/api/users/me/schedule", tags=["scheduling"])
+async def get_user_schedule(request: Request):
+    """Get all scheduled tasks for the current user."""
+    _check_api_rate_limit(request)
+    uid = _require_user(request)
+    schedules = storage.list_task_schedules(user_id=uid)
+    return {"schedules": [s.to_dict() for s in schedules], "count": len(schedules)}
+
+
+# ─── Phase 3: Automated Progress Reporting ───────────────────────────────────
+from teb import reporting  # noqa: E402
+
+
+@app.post("/api/goals/{goal_id}/report", tags=["reporting"])
+async def generate_report(goal_id: int, request: Request):
+    """Generate a progress report for a goal."""
+    _check_api_rate_limit(request)
+    uid = _require_user(request)
+    _get_goal_for_user(goal_id, uid)
+    try:
+        report = reporting.generate_progress_report(goal_id, uid)
+        # Emit SSE event
+        from teb import events
+        events.emit_report_generated(uid, goal_id, report.id or 0, report.summary)
+        return report.to_dict()
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@app.get("/api/goals/{goal_id}/reports", tags=["reporting"])
+async def list_reports(goal_id: int, request: Request):
+    """List all progress reports for a goal."""
+    _check_api_rate_limit(request)
+    uid = _require_user(request)
+    _get_goal_for_user(goal_id, uid)
+    reports = storage.list_progress_reports(goal_id)
+    return {"reports": [r.to_dict() for r in reports], "count": len(reports)}
+
+
+# ─── Phase 4: Workload Balancing ─────────────────────────────────────────────
+from teb import workload  # noqa: E402
+
+
+@app.get("/api/users/me/workload", tags=["workload"])
+async def get_workload(request: Request):
+    """Get workload analysis for the current user."""
+    _check_api_rate_limit(request)
+    uid = _require_user(request)
+    return workload.get_user_capacity(uid)
+
+
+@app.post("/api/goals/{goal_id}/rebalance", tags=["workload"])
+async def rebalance_goal(goal_id: int, request: Request):
+    """Analyze and suggest workload rebalancing for a goal."""
+    _check_api_rate_limit(request)
+    uid = _require_user(request)
+    _get_goal_for_user(goal_id, uid)
+    return workload.balance_workload(goal_id, uid)
+
+
+# ─── Phase 6: Social Gamification ────────────────────────────────────────────
+
+@app.get("/api/users/me/streak", tags=["gamification"])
+async def get_user_streak(request: Request):
+    """Get the current user's streak."""
+    _check_api_rate_limit(request)
+    uid = _require_user(request)
+    streak = storage.get_or_create_streak(uid)
+    return streak.to_dict()
+
+
+@app.get("/api/leaderboard", tags=["gamification"])
+async def get_leaderboard(request: Request, period: str = "weekly", limit: int = 20):
+    """Get the leaderboard for a given period."""
+    _check_api_rate_limit(request)
+    _require_user(request)
+    if period not in ("weekly", "monthly", "all_time"):
+        raise HTTPException(status_code=400, detail="period must be weekly, monthly, or all_time")
+    entries = storage.get_leaderboard(period=period, limit=min(limit, 100))
+    return {"period": period, "entries": [e.to_dict() for e in entries], "count": len(entries)}
+
+
+@app.post("/api/challenges", status_code=201, tags=["gamification"])
+async def create_challenge(request: Request):
+    """Create a team challenge."""
+    _check_api_rate_limit(request)
+    uid = _require_user(request)
+    body = await request.json()
+    title = body.get("title", "").strip()
+    if not title:
+        raise HTTPException(status_code=400, detail="Title is required")
+    from teb.models import TeamChallenge as TC
+    challenge = TC(
+        title=title,
+        description=body.get("description", ""),
+        goal_type=body.get("goal_type", "tasks_completed"),
+        target_value=body.get("target_value", 10),
+        creator_id=uid,
+        participants_json=json.dumps(body.get("participants", [uid])),
+        start_date=body.get("start_date", ""),
+        end_date=body.get("end_date", ""),
+    )
+    saved = storage.create_team_challenge(challenge)
+    return saved.to_dict()
+
+
+@app.get("/api/challenges", tags=["gamification"])
+async def list_challenges(request: Request, status: str = ""):
+    """List team challenges."""
+    _check_api_rate_limit(request)
+    _require_user(request)
+    challenges = storage.list_team_challenges(status=status if status else None)
+    return {"challenges": [c.to_dict() for c in challenges], "count": len(challenges)}
+
+
+@app.post("/api/challenges/{challenge_id}/progress", tags=["gamification"])
+async def update_challenge_progress(challenge_id: int, request: Request):
+    """Increment progress on a team challenge."""
+    _check_api_rate_limit(request)
+    _require_user(request)
+    body = await request.json()
+    increment = body.get("increment", 1)
+    updated = storage.update_team_challenge_progress(challenge_id, increment=increment)
+    if not updated:
+        raise HTTPException(status_code=404, detail="Challenge not found")
+    return updated.to_dict()
 
 
 if config.BASE_PATH:
