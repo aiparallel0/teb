@@ -18,7 +18,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from teb import agents, auth, browser, config, decomposer, deployer, executor, integrations, messaging, provisioning, storage, transcribe
+from teb import agents, auth, browser, config, decomposer, deployer, executor, integrations, messaging, provisioning, scheduler, storage, transcribe
 from teb.models import (
     ActivityFeedEntry, AgentGoalMemory, ApiCredential, AuditEvent, BrowserAction, CheckIn,
     CommentReaction, CustomField, DashboardWidget, ExecutionLog, Goal, GoalCollaborator,
@@ -248,7 +248,26 @@ async def lifespan(app: FastAPI):
             pass
 
 
-app = FastAPI(title="teb — Task Execution Bridge", lifespan=lifespan)
+tags_metadata = [
+    {"name": "auth", "description": "Authentication and user management"},
+    {"name": "goals", "description": "Goal CRUD and decomposition"},
+    {"name": "tasks", "description": "Task management and execution"},
+    {"name": "intelligence", "description": "AI scheduling, prioritization, and risk detection"},
+    {"name": "collaboration", "description": "Workspaces, notifications, activity feed"},
+    {"name": "views", "description": "Kanban, Gantt, calendar, timeline views"},
+    {"name": "integrations", "description": "External service integrations"},
+    {"name": "admin", "description": "Admin panel and platform management"},
+]
+
+app = FastAPI(
+    title="teb API",
+    description="Task Execution Bridge — AI-powered goal decomposition and autonomous execution",
+    version="2.0.0",
+    docs_url="/docs",
+    redoc_url="/redoc",
+    lifespan=lifespan,
+    openapi_tags=tags_metadata,
+)
 
 # ─── CORS ─────────────────────────────────────────────────────────────────────
 app.add_middleware(
@@ -4952,6 +4971,79 @@ async def list_comment_reactions_endpoint(comment_id: int, request: Request):
     uid = _require_user(request)
     _check_api_rate_limit(request)
     return [r.to_dict() for r in storage.list_comment_reactions(comment_id)]
+
+
+# ── Phase 4: Intelligence ─────────────────────────────────────────────
+
+
+@app.get("/api/goals/{goal_id}/schedule", tags=["intelligence"])
+async def get_ai_schedule(goal_id: int, request: Request):
+    """Auto-schedule tasks into time blocks respecting dependencies and capacity."""
+    uid = _require_user(request)
+    _get_goal_for_user(goal_id, uid)
+    tasks = storage.list_tasks(goal_id=goal_id)
+    return scheduler.auto_schedule_tasks(tasks)
+
+
+@app.get("/api/goals/{goal_id}/smart-priority", tags=["intelligence"])
+async def get_smart_priority(goal_id: int, request: Request):
+    """ML-based priority ranking of tasks."""
+    uid = _require_user(request)
+    _get_goal_for_user(goal_id, uid)
+    tasks = storage.list_tasks(goal_id=goal_id)
+    return scheduler.smart_prioritize(tasks)
+
+
+@app.get("/api/goals/{goal_id}/completion-estimate", tags=["intelligence"])
+async def get_completion_estimate(goal_id: int, request: Request):
+    """Predict goal completion date based on remaining work and velocity."""
+    uid = _require_user(request)
+    _get_goal_for_user(goal_id, uid)
+    tasks = storage.list_tasks(goal_id=goal_id)
+    return scheduler.estimate_completion(tasks)
+
+
+@app.get("/api/goals/{goal_id}/risks", tags=["intelligence"])
+async def get_risks(goal_id: int, request: Request):
+    """Detect at-risk tasks: overdue, blocked, stagnant, overloaded."""
+    uid = _require_user(request)
+    _get_goal_for_user(goal_id, uid)
+    tasks = storage.list_tasks(goal_id=goal_id)
+    return scheduler.detect_risks(tasks)
+
+
+@app.get("/api/goals/{goal_id}/focus-blocks", tags=["intelligence"])
+async def get_focus_blocks(goal_id: int, request: Request, available_hours: int = 4):
+    """Suggest optimal focus work blocks grouped by tags and task size."""
+    uid = _require_user(request)
+    _get_goal_for_user(goal_id, uid)
+    tasks = storage.list_tasks(goal_id=goal_id)
+    return scheduler.suggest_focus_blocks(tasks, available_hours=available_hours)
+
+
+@app.get("/api/goals/{goal_id}/duplicates", tags=["intelligence"])
+async def get_duplicates(goal_id: int, request: Request):
+    """Detect potential duplicate tasks using word overlap similarity."""
+    uid = _require_user(request)
+    _get_goal_for_user(goal_id, uid)
+    tasks = storage.list_tasks(goal_id=goal_id)
+    return scheduler.detect_duplicates(tasks)
+
+
+@app.post("/api/goals/{goal_id}/auto-prioritize", tags=["intelligence"])
+async def auto_prioritize(goal_id: int, request: Request):
+    """Apply smart prioritization to all tasks and update their order_index."""
+    uid = _require_user(request)
+    _get_goal_for_user(goal_id, uid)
+    tasks = storage.list_tasks(goal_id=goal_id)
+    ranked = scheduler.smart_prioritize(tasks)
+    task_map = {t.id: t for t in tasks}
+    for idx, entry in enumerate(ranked):
+        task = task_map.get(entry["task_id"])
+        if task:
+            task.order_index = idx
+            storage.update_task(task)
+    return {"updated": len(ranked), "ranking": ranked}
 
 
 # ─── ASGI app for deployment ──────────────────────────────────────────────────
