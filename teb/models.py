@@ -1382,3 +1382,79 @@ class TwoFactorConfig:
             "is_enabled": self.is_enabled,
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }
+
+
+# ─── Phase 3: Saved Views ───────────────────────────────────────────────────
+
+@dataclass
+class SavedView:
+    """User-saved view configuration (filters, sort, group-by)."""
+    user_id: int
+    name: str
+    view_type: str = "list"            # list | kanban | table | gantt | workload | timeline | calendar | mindmap
+    filters_json: str = "{}"
+    sort_json: str = "{}"
+    group_by: str = ""
+    id: Optional[int] = None
+    created_at: Optional[datetime] = None
+
+    def to_dict(self) -> dict:
+        import json as _json
+        return {
+            "id": self.id,
+            "user_id": self.user_id,
+            "name": self.name,
+            "view_type": self.view_type,
+            "filters": _json.loads(self.filters_json) if self.filters_json else {},
+            "sort": _json.loads(self.sort_json) if self.sort_json else {},
+            "group_by": self.group_by or None,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+# ─── Phase 3: Dashboard Layouts ─────────────────────────────────────────────
+
+@dataclass
+class DashboardLayout:
+    """User-configurable dashboard layout with positioned widgets."""
+    user_id: int
+    name: str
+    widgets_json: str = "[]"
+    id: Optional[int] = None
+    created_at: Optional[datetime] = None
+
+    def to_dict(self) -> dict:
+        import json as _json
+        return {
+            "id": self.id,
+            "user_id": self.user_id,
+            "name": self.name,
+            "widgets": _json.loads(self.widgets_json) if self.widgets_json else [],
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+# ─── Phase 3: Scheduled Reports ─────────────────────────────────────────────
+
+@dataclass
+class ScheduledReport:
+    """Configuration for a scheduled report delivery."""
+    user_id: int
+    report_type: str = "progress"      # progress | burndown | time_tracking
+    frequency: str = "weekly"           # daily | weekly | monthly
+    recipients_json: str = "[]"
+    id: Optional[int] = None
+    created_at: Optional[datetime] = None
+    last_sent_at: Optional[datetime] = None
+
+    def to_dict(self) -> dict:
+        import json as _json
+        return {
+            "id": self.id,
+            "user_id": self.user_id,
+            "report_type": self.report_type,
+            "frequency": self.frequency,
+            "recipients": _json.loads(self.recipients_json) if self.recipients_json else [],
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "last_sent_at": self.last_sent_at.isoformat() if self.last_sent_at else None,
+        }

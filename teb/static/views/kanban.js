@@ -1,6 +1,7 @@
 /**
  * Kanban Board View (WP-03)
  * Renders tasks as cards in status columns with drag-and-drop.
+ * Enhancements: swimlanes, WIP limits, card aging.
  */
 const KanbanView = {
   COLUMNS: [
@@ -15,86 +16,152 @@ const KanbanView = {
   _onStatusChange: null,
   _onCardClick: null,
 
+  _getCardAgingClass(task) {
+    if (!task.updated_at && !task.created_at) return '';
+    const ref = task.updated_at || task.created_at;
+    const date = typeof ref === 'string' ? new Date(ref) : ref;
+    const days = (Date.now() - date.getTime()) / (1000 * 60 * 60 * 24);
+    if (days > 14) return 'kanban-card-aging-orange';
+    if (days > 7) return 'kanban-card-aging-yellow';
+    return '';
+  },
+
   render(tasks, container, options = {}) {
     this._onStatusChange = options.onStatusChange || null;
     this._onCardClick = options.onCardClick || null;
+    const swimlaneField = options.swimlaneField || null;
+    const wipLimits = options.wipLimits || {};
     container.innerHTML = '';
-    const board = document.createElement('div');
-    board.className = 'kanban-board';
 
-    this.COLUMNS.forEach(col => {
-      const column = document.createElement('div');
-      column.className = 'kanban-column';
-      column.innerHTML = `
-        <div class="kanban-column-header" style="border-top: 3px solid ${col.color}">
-          <span class="kanban-column-title">${col.label}</span>
-          <span class="kanban-column-count">${tasks.filter(t => t.status === col.key).length}</span>
-        </div>
-        <div class="kanban-cards" data-status="${col.key}"></div>
-      `;
-
-      const cardsContainer = column.querySelector('.kanban-cards');
-
-      // Drag-and-drop: allow drops on column
-      cardsContainer.addEventListener('dragover', (e) => {
-        e.preventDefault();
-        e.dataTransfer.dropEffect = 'move';
-        cardsContainer.classList.add('drag-over');
-      });
-      cardsContainer.addEventListener('dragleave', () => {
-        cardsContainer.classList.remove('drag-over');
-      });
-      cardsContainer.addEventListener('drop', (e) => {
-        e.preventDefault();
-        cardsContainer.classList.remove('drag-over');
-        const taskId = e.dataTransfer.getData('text/plain');
-        if (taskId && this._onStatusChange) {
-          this._onStatusChange(taskId, col.key);
+    // Swimlane grouping
+    let lanes = [{ key: '__all__', label: '', tasks }];
+    if (swimlaneField) {
+      const groups = {};
+      tasks.forEach(t => {
+        let val = '';
+        if (swimlaneField === 'assigned_to') {
+          val = t.assigned_to ? String(t.assigned_to) : 'Unassigned';
+        } else if (swimlaneField === 'tags') {
+          const tags = Array.isArray(t.tags) ? t.tags : [];
+          val = tags.length ? tags[0] : 'No Tag';
+        } else {
+          val = t[swimlaneField] || 'None';
         }
+        (groups[val] = groups[val] || []).push(t);
       });
+      lanes = Object.entries(groups).map(([key, tasks]) => ({
+        key, label: key, tasks,
+      }));
+    }
 
-      tasks
-        .filter(t => t.status === col.key)
-        .sort((a, b) => a.order_index - b.order_index)
-        .forEach(task => {
-          const card = document.createElement('div');
-          card.className = 'kanban-card';
-          card.dataset.taskId = task.id;
-          card.draggable = true;
+    // Toolbar for swimlane and WIP config
+    const toolbar = document.createElement('div');
+    toolbar.className = 'kanban-toolbar';
+    toolbar.innerHTML = `
+      <label class="kanban-toolbar-label">Swimlanes:
+        <select class="kanban-swimlane-select">
+          <option value="">None</option>
+          <option value="assigned_to" ${swimlaneField === 'assigned_to' ? 'selected' : ''}>Assignee</option>
+          <option value="tags" ${swimlaneField === 'tags' ? 'selected' : ''}>Tags</option>
+        </select>
+      </label>
+    `;
+    container.appendChild(toolbar);
 
-          // Drag-and-drop: make card draggable
-          card.addEventListener('dragstart', (e) => {
-            e.dataTransfer.setData('text/plain', task.id);
-            e.dataTransfer.effectAllowed = 'move';
-            card.classList.add('dragging');
-          });
-          card.addEventListener('dragend', () => {
-            card.classList.remove('dragging');
-            document.querySelectorAll('.kanban-cards.drag-over').forEach(el => el.classList.remove('drag-over'));
-          });
-
-          // Click to open task detail
-          card.addEventListener('click', () => {
-            if (this._onCardClick) this._onCardClick(task);
-          });
-
-          const tags = (task.tags || []).map(t => `<span class="tag">${escHtml(t)}</span>`).join('');
-          const dueDate = task.due_date ? `<span class="due-date">\uD83D\uDCC5 ${escHtml(task.due_date)}</span>` : '';
-          card.innerHTML = `
-            <div class="kanban-card-title">${escHtml(task.title)}</div>
-            <div class="kanban-card-meta">
-              <span class="est-time">\u{23F1} ${task.estimated_minutes || 0}m</span>
-              ${dueDate}
-            </div>
-            ${tags ? `<div class="kanban-card-tags">${tags}</div>` : ''}
-          `;
-          cardsContainer.appendChild(card);
-        });
-
-      board.appendChild(column);
+    const selectEl = toolbar.querySelector('.kanban-swimlane-select');
+    selectEl.addEventListener('change', () => {
+      this.render(tasks, container, {
+        ...options,
+        swimlaneField: selectEl.value || null,
+      });
     });
 
-    container.appendChild(board);
+    lanes.forEach(lane => {
+      if (swimlaneField) {
+        const laneHeader = document.createElement('div');
+        laneHeader.className = 'kanban-swimlane-header';
+        laneHeader.textContent = lane.label;
+        container.appendChild(laneHeader);
+      }
+
+      const board = document.createElement('div');
+      board.className = 'kanban-board';
+
+      this.COLUMNS.forEach(col => {
+        const colTasks = lane.tasks.filter(t => t.status === col.key);
+        const wipLimit = wipLimits[col.key] || 0;
+        const overWip = wipLimit > 0 && colTasks.length > wipLimit;
+
+        const column = document.createElement('div');
+        column.className = 'kanban-column' + (overWip ? ' kanban-wip-exceeded' : '');
+        column.innerHTML = `
+          <div class="kanban-column-header" style="border-top: 3px solid ${col.color}">
+            <span class="kanban-column-title">${col.label}</span>
+            <span class="kanban-column-count">${colTasks.length}${wipLimit ? '/' + wipLimit : ''}</span>
+          </div>
+          <div class="kanban-cards" data-status="${col.key}"></div>
+        `;
+
+        const cardsContainer = column.querySelector('.kanban-cards');
+
+        cardsContainer.addEventListener('dragover', (e) => {
+          e.preventDefault();
+          e.dataTransfer.dropEffect = 'move';
+          cardsContainer.classList.add('drag-over');
+        });
+        cardsContainer.addEventListener('dragleave', () => {
+          cardsContainer.classList.remove('drag-over');
+        });
+        cardsContainer.addEventListener('drop', (e) => {
+          e.preventDefault();
+          cardsContainer.classList.remove('drag-over');
+          const taskId = e.dataTransfer.getData('text/plain');
+          if (taskId && this._onStatusChange) {
+            this._onStatusChange(taskId, col.key);
+          }
+        });
+
+        colTasks
+          .sort((a, b) => a.order_index - b.order_index)
+          .forEach(task => {
+            const agingClass = this._getCardAgingClass(task);
+            const card = document.createElement('div');
+            card.className = 'kanban-card' + (agingClass ? ' ' + agingClass : '');
+            card.dataset.taskId = task.id;
+            card.draggable = true;
+
+            card.addEventListener('dragstart', (e) => {
+              e.dataTransfer.setData('text/plain', task.id);
+              e.dataTransfer.effectAllowed = 'move';
+              card.classList.add('dragging');
+            });
+            card.addEventListener('dragend', () => {
+              card.classList.remove('dragging');
+              document.querySelectorAll('.kanban-cards.drag-over').forEach(el => el.classList.remove('drag-over'));
+            });
+
+            card.addEventListener('click', () => {
+              if (this._onCardClick) this._onCardClick(task);
+            });
+
+            const tags = (task.tags || []).map(t => `<span class="tag">${escHtml(t)}</span>`).join('');
+            const dueDate = task.due_date ? `<span class="due-date">\uD83D\uDCC5 ${escHtml(task.due_date)}</span>` : '';
+            card.innerHTML = `
+              <div class="kanban-card-title">${escHtml(task.title)}</div>
+              <div class="kanban-card-meta">
+                <span class="est-time">\u{23F1} ${task.estimated_minutes || 0}m</span>
+                ${dueDate}
+              </div>
+              ${tags ? `<div class="kanban-card-tags">${tags}</div>` : ''}
+            `;
+            cardsContainer.appendChild(card);
+          });
+
+        board.appendChild(column);
+      });
+
+      container.appendChild(board);
+    });
   }
 };
 

@@ -65,6 +65,7 @@ let authMode = 'login'; // 'login' or 'register'
 let autopilotEnabled = false;
 let _pendingOutcomeSuggestions = null;
 let _adminUsersCache = [];
+let _currentViewType = localStorage.getItem('teb_view_type') || 'list';
 
 // ─── Toast notification system ────────────────────────────────────────────────
 
@@ -211,9 +212,20 @@ const Router = {
       showScreen('screen-tasks');
       updateBreadcrumbs([{text:'Home', href:'#/home'}, {text: currentGoalTitle || 'Goal', href: currentGoalId ? `#/goal/${currentGoalId}` : '#/home'}, {text:'Workload'}]);
     },
+    '/mindmap': () => {
+      showScreen('screen-tasks');
+      updateBreadcrumbs([{text:'Home', href:'#/home'}, {text: currentGoalTitle || 'Goal', href: currentGoalId ? `#/goal/${currentGoalId}` : '#/home'}, {text:'Mind Map'}]);
+    },
     '/dashboard': () => {
       showScreen('screen-tasks');
       updateBreadcrumbs([{text:'Home', href:'#/home'}, {text:'Dashboard'}]);
+      // Initialize dashboard builder in the all-tasks-section area
+      const section = document.getElementById('all-tasks-section');
+      if (section) {
+        section.style.display = 'block';
+        document.getElementById('drip-section') && (document.getElementById('drip-section').style.display = 'none');
+        DashboardBuilder.init('all-tasks-section');
+      }
     },
     '/settings': () => {
       showSettingsModal();
@@ -1137,6 +1149,12 @@ async function showTasksScreen(goal, freshDecompose) {
 
   // Load proactive suggestions and service discovery in background
   loadProactiveSuggestions();
+
+  // Initialize view switcher toolbar
+  ViewSwitcher.init();
+  if (_currentViewType !== 'list') {
+    ViewSwitcher.loadView(_currentViewType);
+  }
 }
 
 // ─── Drip Mode ────────────────────────────────────────────────────────────────
@@ -3170,3 +3188,382 @@ function renderStreak(container, tasks) {
     '<span class="streak-icon">🔥</span>' +
     '<span class="streak-count">' + streak + '</span> day streak</div>';
 }
+
+// ─── View Switching Toolbar (Phase 3, Item 4) ────────────────────────────────
+
+const ViewSwitcher = {
+  _views: [
+    { key: 'list', label: 'List', icon: '📋' },
+    { key: 'kanban', label: 'Kanban', icon: '📊' },
+    { key: 'table', label: 'Table', icon: '📄' },
+    { key: 'gantt', label: 'Gantt', icon: '📈' },
+    { key: 'workload', label: 'Workload', icon: '⚖️' },
+    { key: 'timeline', label: 'Timeline', icon: '🕐' },
+    { key: 'calendar', label: 'Calendar', icon: '📅' },
+    { key: 'mindmap', label: 'Mind Map', icon: '🧠' },
+  ],
+
+  render(containerId) {
+    const container = document.getElementById(containerId);
+    if (!container) return;
+    let existing = container.querySelector('.view-switcher-toolbar');
+    if (existing) existing.remove();
+
+    const toolbar = document.createElement('div');
+    toolbar.className = 'view-switcher-toolbar';
+
+    this._views.forEach(v => {
+      const btn = document.createElement('button');
+      btn.className = 'view-switcher-btn' + (_currentViewType === v.key ? ' active' : '');
+      btn.title = v.label;
+      btn.innerHTML = `<span class="view-switcher-icon">${v.icon}</span><span class="view-switcher-label">${v.label}</span>`;
+      btn.addEventListener('click', () => {
+        _currentViewType = v.key;
+        localStorage.setItem('teb_view_type', v.key);
+        this.render(containerId);
+        this.loadView(v.key);
+      });
+      toolbar.appendChild(btn);
+    });
+
+    // Save View button
+    const saveBtn = document.createElement('button');
+    saveBtn.className = 'view-switcher-btn view-save-btn';
+    saveBtn.title = 'Save View';
+    saveBtn.innerHTML = '<span class="view-switcher-icon">💾</span><span class="view-switcher-label">Save</span>';
+    saveBtn.addEventListener('click', () => SavedViews.showSaveDialog());
+    toolbar.appendChild(saveBtn);
+
+    // Load Saved View dropdown
+    const loadSelect = document.createElement('select');
+    loadSelect.className = 'view-saved-select';
+    loadSelect.innerHTML = '<option value="">Load saved view…</option>';
+    loadSelect.addEventListener('change', async () => {
+      if (loadSelect.value) {
+        await SavedViews.loadView(loadSelect.value);
+        loadSelect.value = '';
+      }
+    });
+    toolbar.appendChild(loadSelect);
+    SavedViews.populateDropdown(loadSelect);
+
+    container.prepend(toolbar);
+  },
+
+  loadView(viewType) {
+    const viewContainer = document.getElementById('view-render-area');
+    if (!viewContainer) return;
+    viewContainer.innerHTML = '';
+
+    const tasks = currentTasks || [];
+
+    switch (viewType) {
+      case 'list':
+        viewContainer.style.display = 'none';
+        document.getElementById('task-list')?.style && (document.getElementById('task-list').style.display = '');
+        return;
+      case 'kanban':
+        if (typeof KanbanView !== 'undefined') {
+          KanbanView.render(tasks, viewContainer, {
+            onStatusChange: async (taskId, status) => {
+              try { await api.patch(`/api/tasks/${taskId}`, { status }); await refreshGoalView(); } catch(e) {}
+            },
+            onCardClick: (task) => { if (typeof TaskDetailPanel !== 'undefined') TaskDetailPanel.open(task); }
+          });
+        }
+        break;
+      case 'table':
+        if (typeof TableView !== 'undefined') TableView.render(tasks, viewContainer);
+        break;
+      case 'gantt':
+        if (typeof GanttView !== 'undefined') GanttView.render(tasks, viewContainer);
+        break;
+      case 'workload':
+        if (typeof WorkloadView !== 'undefined') WorkloadView.render(tasks, viewContainer);
+        break;
+      case 'timeline':
+        if (typeof TimelineView !== 'undefined') TimelineView.render(tasks, viewContainer);
+        break;
+      case 'calendar':
+        if (typeof CalendarView !== 'undefined') CalendarView.render(tasks, viewContainer);
+        break;
+      case 'mindmap':
+        if (typeof renderMindMap !== 'undefined' && currentGoalId) {
+          viewContainer.id = 'mindmap-container';
+          viewContainer.style.minHeight = '400px';
+          api.get('/api/goals').then(goals => {
+            renderMindMap('mindmap-container', goals);
+          }).catch(() => {});
+        }
+        break;
+    }
+
+    // Hide default task list, show view container
+    if (viewType !== 'list') {
+      viewContainer.style.display = '';
+      const taskList = document.getElementById('task-list');
+      if (taskList) taskList.style.display = 'none';
+    }
+  },
+
+  init() {
+    // Insert view render area if not present
+    const allTasksSection = document.getElementById('all-tasks-section');
+    if (allTasksSection && !document.getElementById('view-render-area')) {
+      const area = document.createElement('div');
+      area.id = 'view-render-area';
+      area.style.display = 'none';
+      allTasksSection.insertBefore(area, allTasksSection.querySelector('#task-list'));
+    }
+    // Render toolbar into all-tasks-section
+    if (allTasksSection) {
+      this.render('all-tasks-section');
+    }
+  }
+};
+
+// ─── Saved Views (Phase 3, Item 3) ──────────────────────────────────────────
+
+const SavedViews = {
+  async populateDropdown(selectEl) {
+    try {
+      const views = await api.get('/api/views');
+      views.forEach(v => {
+        const opt = document.createElement('option');
+        opt.value = v.id;
+        opt.textContent = `${v.name} (${v.view_type})`;
+        selectEl.appendChild(opt);
+      });
+    } catch (e) { /* not logged in or no views */ }
+  },
+
+  async showSaveDialog() {
+    const name = prompt('View name:');
+    if (!name) return;
+    try {
+      await api.post('/api/views', {
+        name,
+        view_type: _currentViewType,
+        filters: {},
+        sort: {},
+        group_by: '',
+      });
+      toast.success('View Saved', `"${name}" has been saved.`);
+    } catch (e) {
+      toast.error('Error', e.message);
+    }
+  },
+
+  async loadView(viewId) {
+    try {
+      const view = await api.get(`/api/views/${viewId}`);
+      _currentViewType = view.view_type || 'list';
+      localStorage.setItem('teb_view_type', _currentViewType);
+      ViewSwitcher.render('all-tasks-section');
+      ViewSwitcher.loadView(_currentViewType);
+    } catch (e) {
+      toast.error('Error', e.message);
+    }
+  },
+
+  async deleteView(viewId) {
+    try {
+      await api.del(`/api/views/${viewId}`);
+      toast.success('View Deleted', 'Saved view removed.');
+    } catch (e) {
+      toast.error('Error', e.message);
+    }
+  }
+};
+
+// ─── Custom Dashboard Builder (Phase 3, Item 5) ─────────────────────────────
+
+const DashboardBuilder = {
+  _widgets: [],
+  _dashboardId: null,
+
+  async init(containerId) {
+    const container = document.getElementById(containerId);
+    if (!container) return;
+
+    container.innerHTML = `
+      <div class="dashboard-builder">
+        <div class="dashboard-builder-header">
+          <h3>Dashboard</h3>
+          <div class="dashboard-builder-actions">
+            <select class="dashboard-load-select">
+              <option value="">Load dashboard…</option>
+            </select>
+            <button class="btn btn-secondary btn-sm dashboard-add-widget-btn">+ Add Widget</button>
+            <button class="btn btn-primary btn-sm dashboard-save-btn">Save Dashboard</button>
+          </div>
+        </div>
+        <div class="dashboard-grid" id="dashboard-grid"></div>
+      </div>
+    `;
+
+    // Populate saved dashboards
+    try {
+      const dashboards = await api.get('/api/dashboards');
+      const select = container.querySelector('.dashboard-load-select');
+      dashboards.forEach(d => {
+        const opt = document.createElement('option');
+        opt.value = d.id;
+        opt.textContent = d.name;
+        select.appendChild(opt);
+      });
+      select.addEventListener('change', async () => {
+        if (select.value) await this.load(parseInt(select.value, 10), containerId);
+      });
+    } catch (e) { /* ignore */ }
+
+    container.querySelector('.dashboard-add-widget-btn').addEventListener('click', () => {
+      this.addWidget(containerId);
+    });
+
+    container.querySelector('.dashboard-save-btn').addEventListener('click', () => {
+      this.save();
+    });
+
+    this.renderGrid();
+  },
+
+  addWidget(containerId) {
+    const types = ['progress_chart', 'burndown', 'time_report', 'status_pie', 'task_bar'];
+    const type = prompt('Widget type:\n' + types.join(', '));
+    if (!type || !types.includes(type)) return;
+    this._widgets.push({
+      type,
+      position: this._widgets.length,
+      config: {},
+    });
+    this.renderGrid();
+  },
+
+  removeWidget(index) {
+    this._widgets.splice(index, 1);
+    this.renderGrid();
+  },
+
+  async renderGrid() {
+    const grid = document.getElementById('dashboard-grid');
+    if (!grid) return;
+    grid.innerHTML = '';
+
+    if (!this._widgets.length) {
+      grid.innerHTML = '<div class="empty-state"><div class="empty-state-icon">📊</div><div class="empty-state-title">No widgets</div><div class="empty-state-desc">Click "+ Add Widget" to get started.</div></div>';
+      return;
+    }
+
+    for (let i = 0; i < this._widgets.length; i++) {
+      const w = this._widgets[i];
+      const cell = document.createElement('div');
+      cell.className = 'dashboard-widget-cell';
+      cell.innerHTML = `<div class="dashboard-widget-header"><span>${w.type.replace(/_/g, ' ')}</span><button class="dashboard-widget-remove" data-idx="${i}">✕</button></div><div class="dashboard-widget-body" id="dw-body-${i}"></div>`;
+      grid.appendChild(cell);
+
+      cell.querySelector('.dashboard-widget-remove').addEventListener('click', () => this.removeWidget(i));
+
+      // Render widget content
+      await this.renderWidgetContent(w, `dw-body-${i}`);
+    }
+  },
+
+  async renderWidgetContent(widget, bodyId) {
+    const body = document.getElementById(bodyId);
+    if (!body || !currentGoalId) return;
+
+    try {
+      switch (widget.type) {
+        case 'progress_chart': {
+          const data = await api.get(`/api/goals/${currentGoalId}/timeline`);
+          if (data.length && typeof Charts !== 'undefined') {
+            Charts.renderLineChart(body, data.map(s => ({
+              label: (s.captured_at || '').slice(5, 10),
+              value: s.percentage,
+            })), { title: 'Progress %', height: 200 });
+          } else {
+            body.textContent = 'No progress data yet.';
+          }
+          break;
+        }
+        case 'burndown': {
+          const data = await api.get(`/api/goals/${currentGoalId}/burndown`);
+          if (data.length && typeof Charts !== 'undefined') {
+            Charts.renderLineChart(body, data.map(d => ({
+              label: d.date.slice(5),
+              value: d.remaining,
+            })), { title: 'Burndown', height: 200 });
+          } else {
+            body.textContent = 'No burndown data.';
+          }
+          break;
+        }
+        case 'time_report': {
+          const data = await api.get(`/api/goals/${currentGoalId}/time-report`);
+          if (data.by_task && data.by_task.length && typeof Charts !== 'undefined') {
+            Charts.renderBarChart(body, data.by_task.map(t => ({
+              label: (t.title || '').substring(0, 12),
+              value: t.total_minutes,
+            })), { title: 'Time by Task (min)', height: 200 });
+          } else {
+            body.textContent = 'No time data.';
+          }
+          break;
+        }
+        case 'status_pie': {
+          const counts = {};
+          (currentTasks || []).forEach(t => { counts[t.status] = (counts[t.status] || 0) + 1; });
+          const pieData = Object.entries(counts).map(([label, value]) => ({ label, value }));
+          if (pieData.length && typeof Charts !== 'undefined') {
+            Charts.renderPieChart(body, pieData, { title: 'Status Distribution', height: 250 });
+          } else {
+            body.textContent = 'No tasks.';
+          }
+          break;
+        }
+        case 'task_bar': {
+          const barData = (currentTasks || []).slice(0, 10).map(t => ({
+            label: (t.title || '').substring(0, 12),
+            value: t.estimated_minutes || 0,
+          }));
+          if (barData.length && typeof Charts !== 'undefined') {
+            Charts.renderBarChart(body, barData, { title: 'Task Estimates (min)', height: 200 });
+          } else {
+            body.textContent = 'No tasks.';
+          }
+          break;
+        }
+      }
+    } catch (e) {
+      body.textContent = 'Error loading widget.';
+    }
+  },
+
+  async save() {
+    const name = prompt('Dashboard name:', 'My Dashboard');
+    if (!name) return;
+    try {
+      if (this._dashboardId) {
+        await api.patch(`/api/dashboards/${this._dashboardId}`, { name, widgets: this._widgets });
+      } else {
+        const result = await api.post('/api/dashboards', { name, widgets: this._widgets });
+        this._dashboardId = result.id;
+      }
+      toast.success('Dashboard Saved', `"${name}" saved.`);
+    } catch (e) {
+      toast.error('Error', e.message);
+    }
+  },
+
+  async load(dashboardId, containerId) {
+    try {
+      const d = await api.get(`/api/dashboards/${dashboardId}`);
+      this._dashboardId = d.id;
+      this._widgets = d.widgets || [];
+      this.renderGrid();
+    } catch (e) {
+      toast.error('Error', e.message);
+    }
+  }
+};

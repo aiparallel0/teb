@@ -3231,3 +3231,221 @@ body.sidebar-collapsed .batch-bar { left: 60px; }
 
 html.font-lg { font-size: 18px; }
 html.font-xl { font-size: 20px; }
+
+/* ─── Phase 3: View Switcher Toolbar ────────────────────────────────────────── */
+
+.view-switcher-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 12px;
+  margin-bottom: 12px;
+  background: var(--surface, #fff);
+  border: 1px solid var(--border, #e5e7eb);
+  border-radius: 8px;
+  overflow-x: auto;
+  flex-wrap: wrap;
+}
+
+.view-switcher-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 10px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary, #666);
+  cursor: pointer;
+  font-size: var(--text-xs, 0.75rem);
+  transition: all 0.15s ease;
+  white-space: nowrap;
+}
+
+.view-switcher-btn:hover {
+  background: var(--primary-soft, rgba(108, 99, 255, .08));
+  color: var(--text, #333);
+}
+
+.view-switcher-btn.active {
+  background: var(--primary, #1e3a5f);
+  color: #fff;
+  border-color: var(--primary, #1e3a5f);
+}
+
+.view-switcher-icon { font-size: 14px; }
+
+.view-switcher-label {
+  font-weight: 500;
+}
+
+.view-save-btn {
+  margin-left: 8px;
+  border-left: 1px solid var(--border, #e5e7eb);
+  padding-left: 12px;
+}
+
+.view-saved-select {
+  padding: 5px 8px;
+  border: 1px solid var(--border, #e5e7eb);
+  border-radius: 6px;
+  font-size: var(--text-xs, 0.75rem);
+  background: var(--surface, #fff);
+  color: var(--text, #333);
+  cursor: pointer;
+  max-width: 180px;
+}
+
+@media (max-width: 640px) {
+  .view-switcher-label { display: none; }
+  .view-switcher-btn { padding: 6px 8px; }
+}
+
+/* ─── Phase 3: Kanban Enhancements ──────────────────────────────────────────── */
+
+.kanban-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 12px;
+  margin-bottom: 8px;
+  font-size: var(--text-sm, 0.875rem);
+}
+
+.kanban-toolbar-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-secondary, #666);
+  font-size: var(--text-xs, 0.75rem);
+}
+
+.kanban-swimlane-select {
+  padding: 4px 8px;
+  border: 1px solid var(--border, #e5e7eb);
+  border-radius: 4px;
+  font-size: var(--text-xs, 0.75rem);
+  background: var(--surface, #fff);
+  color: var(--text, #333);
+}
+
+.kanban-swimlane-header {
+  padding: 8px 12px;
+  margin: 12px 0 4px;
+  font-weight: 600;
+  font-size: var(--text-sm, 0.875rem);
+  color: var(--text, #333);
+  border-bottom: 2px solid var(--border, #e5e7eb);
+}
+
+.kanban-wip-exceeded {
+  border: 2px solid var(--red-500, #ef4444) !important;
+  border-radius: 8px;
+}
+
+.kanban-wip-exceeded .kanban-column-header {
+  background: var(--red-50, #fef2f2);
+}
+
+.kanban-card-aging-yellow {
+  background: rgba(250, 204, 21, 0.12) !important;
+  border-left: 3px solid var(--amber-400, #fbbf24);
+}
+
+.kanban-card-aging-orange {
+  background: rgba(249, 115, 22, 0.15) !important;
+  border-left: 3px solid var(--amber-600, #d97706);
+}
+
+/* ─── Phase 3: Dashboard Builder ────────────────────────────────────────────── */
+
+.dashboard-builder {
+  padding: 0;
+}
+
+.dashboard-builder-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.dashboard-builder-header h3 {
+  margin: 0;
+  font-family: var(--font-display, serif);
+  font-size: var(--text-xl, 1.25rem);
+}
+
+.dashboard-builder-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.dashboard-load-select {
+  padding: 6px 10px;
+  border: 1px solid var(--border, #e5e7eb);
+  border-radius: 6px;
+  font-size: var(--text-sm, 0.875rem);
+  background: var(--surface, #fff);
+  color: var(--text, #333);
+}
+
+.dashboard-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 16px;
+}
+
+.dashboard-widget-cell {
+  background: var(--surface, #fff);
+  border: 1px solid var(--border, #e5e7eb);
+  border-radius: 10px;
+  overflow: hidden;
+  box-shadow: var(--shadow-sm, 0 1px 2px rgba(0,0,0,.05));
+}
+
+.dashboard-widget-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  background: var(--bg-alt, #f9fafb);
+  border-bottom: 1px solid var(--border, #e5e7eb);
+  font-size: var(--text-sm, 0.875rem);
+  font-weight: 600;
+  text-transform: capitalize;
+}
+
+.dashboard-widget-remove {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--muted, #999);
+  font-size: 14px;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+
+.dashboard-widget-remove:hover {
+  background: var(--red-50, #fef2f2);
+  color: var(--red-600, #dc2626);
+}
+
+.dashboard-widget-body {
+  padding: 12px;
+  min-height: 100px;
+}
+
+/* ─── Phase 3: Mind Map View ────────────────────────────────────────────────── */
+
+#mindmap-container {
+  min-height: 400px;
+  border: 1px solid var(--border, #e5e7eb);
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--surface, #fff);
+}

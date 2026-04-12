@@ -21,11 +21,12 @@ from pydantic import BaseModel
 from teb import agents, auth, browser, config, decomposer, deployer, executor, integrations, messaging, provisioning, scheduler, storage, transcribe
 from teb.models import (
     ActivityFeedEntry, AgentGoalMemory, ApiCredential, AuditEvent, BrowserAction, CheckIn,
-    CommentReaction, CustomField, DashboardWidget, DirectMessage, EmailNotificationConfig,
+    CommentReaction, CustomField, DashboardLayout, DashboardWidget, DirectMessage, EmailNotificationConfig,
     ExecutionLog, Goal, GoalChatMessage, GoalCollaborator,
     GoalTemplate, MessagingConfig, Milestone, Notification, NotificationPreference,
     NudgeEvent, OutcomeMetric, PersonalApiKey, PluginManifest,
-    ProgressSnapshot, PushSubscription, RecurrenceRule, SpendingBudget, SpendingRequest,
+    ProgressSnapshot, PushSubscription, RecurrenceRule, SavedView, ScheduledReport,
+    SpendingBudget, SpendingRequest,
     Task, TaskArtifact, TaskBlocker, TaskComment, TimeEntry, WebhookConfig,
     Workspace, WorkspaceMember,
 )
@@ -5482,6 +5483,212 @@ async def push_unsubscribe(request: Request):
     if not removed:
         raise HTTPException(status_code=404, detail="Subscription not found")
     return {"removed": True}
+
+
+# ─── Phase 3: Saved Views ────────────────────────────────────────────────────
+
+@app.post("/api/views", status_code=201)
+async def create_saved_view(request: Request):
+    _check_api_rate_limit(request)
+    uid = _require_user(request)
+    body = await request.json()
+    view = SavedView(
+        user_id=uid,
+        name=body.get("name", "Untitled View"),
+        view_type=body.get("view_type", "list"),
+        filters_json=json.dumps(body.get("filters", {})),
+        sort_json=json.dumps(body.get("sort", {})),
+        group_by=body.get("group_by", ""),
+    )
+    view = storage.save_view(view)
+    return view.to_dict()
+
+
+@app.get("/api/views")
+async def list_views_endpoint(request: Request):
+    _check_api_rate_limit(request)
+    uid = _require_user(request)
+    views = storage.list_saved_views(uid)
+    return [v.to_dict() for v in views]
+
+
+@app.get("/api/views/{view_id}")
+async def get_view_endpoint(view_id: int, request: Request):
+    _check_api_rate_limit(request)
+    _require_user(request)
+    view = storage.get_saved_view(view_id)
+    if not view:
+        raise HTTPException(status_code=404, detail="View not found")
+    return view.to_dict()
+
+
+@app.delete("/api/views/{view_id}")
+async def delete_view_endpoint(view_id: int, request: Request):
+    _check_api_rate_limit(request)
+    uid = _require_user(request)
+    storage.delete_saved_view(view_id, uid)
+    return {"deleted": True}
+
+
+# ─── Phase 3: Dashboard Layouts ──────────────────────────────────────────────
+
+@app.post("/api/dashboards", status_code=201)
+async def create_dashboard_endpoint(request: Request):
+    _check_api_rate_limit(request)
+    uid = _require_user(request)
+    body = await request.json()
+    layout = DashboardLayout(
+        user_id=uid,
+        name=body.get("name", "My Dashboard"),
+        widgets_json=json.dumps(body.get("widgets", [])),
+    )
+    layout = storage.save_dashboard(layout)
+    return layout.to_dict()
+
+
+@app.get("/api/dashboards")
+async def list_dashboards_endpoint(request: Request):
+    _check_api_rate_limit(request)
+    uid = _require_user(request)
+    dashboards = storage.list_dashboards(uid)
+    return [d.to_dict() for d in dashboards]
+
+
+@app.get("/api/dashboards/{dashboard_id}")
+async def get_dashboard_endpoint(dashboard_id: int, request: Request):
+    _check_api_rate_limit(request)
+    _require_user(request)
+    dashboard = storage.get_dashboard(dashboard_id)
+    if not dashboard:
+        raise HTTPException(status_code=404, detail="Dashboard not found")
+    return dashboard.to_dict()
+
+
+@app.put("/api/dashboards/{dashboard_id}")
+async def update_dashboard_endpoint(dashboard_id: int, request: Request):
+    _check_api_rate_limit(request)
+    uid = _require_user(request)
+    body = await request.json()
+    kwargs = {}
+    if "name" in body:
+        kwargs["name"] = body["name"]
+    if "widgets" in body:
+        kwargs["widgets_json"] = json.dumps(body["widgets"])
+    dashboard = storage.update_dashboard(dashboard_id, uid, **kwargs)
+    if not dashboard:
+        raise HTTPException(status_code=404, detail="Dashboard not found")
+    return dashboard.to_dict()
+
+
+@app.delete("/api/dashboards/{dashboard_id}")
+async def delete_dashboard_endpoint(dashboard_id: int, request: Request):
+    _check_api_rate_limit(request)
+    uid = _require_user(request)
+    storage.delete_dashboard(dashboard_id, uid)
+    return {"deleted": True}
+
+
+# ─── Phase 3: Goal Progress Timeline ────────────────────────────────────────
+
+@app.get("/api/goals/{goal_id}/timeline")
+async def get_goal_timeline_endpoint(goal_id: int, request: Request):
+    _check_api_rate_limit(request)
+    _require_user(request)
+    snapshots = storage.get_goal_progress_timeline(goal_id)
+    return [s.to_dict() for s in snapshots]
+
+
+# ─── Phase 3: Export Reports ─────────────────────────────────────────────────
+
+@app.get("/api/goals/{goal_id}/export")
+async def export_goal_endpoint(goal_id: int, request: Request, format: str = Query("json")):
+    _check_api_rate_limit(request)
+    _require_user(request)
+    goal = storage.get_goal(goal_id)
+    if not goal:
+        raise HTTPException(status_code=404, detail="Goal not found")
+    tasks = storage.list_tasks(goal_id=goal_id)
+
+    if format == "csv":
+        import csv
+        import io
+        output = io.StringIO()
+        writer = csv.writer(output)
+        writer.writerow(["id", "title", "description", "status", "estimated_minutes",
+                         "due_date", "assigned_to", "order_index", "tags", "created_at"])
+        for t in tasks:
+            td = t.to_dict()
+            writer.writerow([
+                td["id"], td["title"], td["description"], td["status"],
+                td["estimated_minutes"], td.get("due_date", ""),
+                td.get("assigned_to", ""), td["order_index"],
+                ",".join(td.get("tags", [])),
+                td.get("created_at", ""),
+            ])
+        csv_content = output.getvalue()
+        return StreamingResponse(
+            iter([csv_content]),
+            media_type="text/csv",
+            headers={"Content-Disposition": f'attachment; filename="goal_{goal_id}_tasks.csv"'},
+        )
+    else:
+        return {
+            "goal": goal.to_dict(),
+            "tasks": [t.to_dict() for t in tasks],
+        }
+
+
+# ─── Phase 3: Scheduled Reports ─────────────────────────────────────────────
+
+@app.post("/api/reports/scheduled", status_code=201)
+async def create_scheduled_report_endpoint(request: Request):
+    _check_api_rate_limit(request)
+    uid = _require_user(request)
+    body = await request.json()
+    report = ScheduledReport(
+        user_id=uid,
+        report_type=body.get("report_type", "progress"),
+        frequency=body.get("frequency", "weekly"),
+        recipients_json=json.dumps(body.get("recipients", [])),
+    )
+    report = storage.create_scheduled_report(report)
+    return report.to_dict()
+
+
+@app.get("/api/reports/scheduled")
+async def list_scheduled_reports_endpoint(request: Request):
+    _check_api_rate_limit(request)
+    uid = _require_user(request)
+    reports = storage.list_scheduled_reports(uid)
+    return [r.to_dict() for r in reports]
+
+
+@app.delete("/api/reports/scheduled/{report_id}")
+async def delete_scheduled_report_endpoint(report_id: int, request: Request):
+    _check_api_rate_limit(request)
+    uid = _require_user(request)
+    storage.delete_scheduled_report(report_id, uid)
+    return {"deleted": True}
+
+
+# ─── Phase 3: Burndown / Burnup Chart Data ──────────────────────────────────
+
+@app.get("/api/goals/{goal_id}/burndown")
+async def get_burndown_endpoint(goal_id: int, request: Request):
+    _check_api_rate_limit(request)
+    _require_user(request)
+    data = storage.get_burndown_data(goal_id)
+    return data
+
+
+# ─── Phase 3: Time Tracking Reports ─────────────────────────────────────────
+
+@app.get("/api/goals/{goal_id}/time-report")
+async def get_time_report_endpoint(goal_id: int, request: Request):
+    _check_api_rate_limit(request)
+    _require_user(request)
+    report = storage.get_time_tracking_report(goal_id)
+    return report
 
 
 if config.BASE_PATH:

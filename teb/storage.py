@@ -20,6 +20,7 @@ from teb.models import (
     CheckIn,
     CommentReaction,
     CustomField,
+    DashboardLayout,
     DashboardWidget,
     DirectMessage,
     EmailNotificationConfig,
@@ -43,6 +44,8 @@ from teb.models import (
     ProgressSnapshot,
     PushSubscription,
     RecurrenceRule,
+    SavedView,
+    ScheduledReport,
     SpendingBudget,
     SpendingRequest,
     SuccessPath,
@@ -1047,6 +1050,47 @@ def _run_migrations(con: sqlite3.Connection) -> None:
         )
     """)
     con.execute("CREATE INDEX IF NOT EXISTS idx_2fa_user ON two_factor_config(user_id)")
+
+    # ─── Phase 3: Saved Views ────────────────────────────────────────────
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS saved_views (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            name         TEXT    NOT NULL,
+            view_type    TEXT    NOT NULL DEFAULT 'list',
+            filters_json TEXT    NOT NULL DEFAULT '{}',
+            sort_json    TEXT    NOT NULL DEFAULT '{}',
+            group_by     TEXT    NOT NULL DEFAULT '',
+            created_at   TEXT    NOT NULL
+        )
+    """)
+    con.execute("CREATE INDEX IF NOT EXISTS idx_saved_views_user ON saved_views(user_id)")
+
+    # ─── Phase 3: Dashboard Layouts ──────────────────────────────────────
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS dashboard_layouts (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            name         TEXT    NOT NULL,
+            widgets_json TEXT    NOT NULL DEFAULT '[]',
+            created_at   TEXT    NOT NULL
+        )
+    """)
+    con.execute("CREATE INDEX IF NOT EXISTS idx_dashboard_layouts_user ON dashboard_layouts(user_id)")
+
+    # ─── Phase 3: Scheduled Reports ──────────────────────────────────────
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS scheduled_reports (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id         INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            report_type     TEXT    NOT NULL DEFAULT 'progress',
+            frequency       TEXT    NOT NULL DEFAULT 'weekly',
+            recipients_json TEXT    NOT NULL DEFAULT '[]',
+            created_at      TEXT    NOT NULL,
+            last_sent_at    TEXT    NOT NULL DEFAULT ''
+        )
+    """)
+    con.execute("CREATE INDEX IF NOT EXISTS idx_scheduled_reports_user ON scheduled_reports(user_id)")
 
     # ─── Safe column migrations (version, assigned_to) ───────────────────
     _safe_add_column(con, "goals", "version", "INTEGER NOT NULL DEFAULT 1")
@@ -5164,4 +5208,253 @@ def _row_to_push_subscription(row: sqlite3.Row) -> PushSubscription:
         p256dh=row["p256dh"],
         auth=row["auth"],
         created_at=datetime.fromisoformat(row["created_at"]),
+    )
+
+
+# ─── Saved Views (Phase 3) ──────────────────────────────────────────────────
+
+@_with_retry
+def save_view(view: SavedView) -> SavedView:
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        cur = con.execute(
+            """INSERT INTO saved_views (user_id, name, view_type, filters_json, sort_json, group_by, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (view.user_id, view.name, view.view_type, view.filters_json,
+             view.sort_json, view.group_by, now),
+        )
+        view.id = cur.lastrowid
+        view.created_at = datetime.fromisoformat(now)
+    return view
+
+
+@_with_retry
+def list_saved_views(user_id: int) -> List[SavedView]:
+    with _conn() as con:
+        rows = con.execute(
+            "SELECT * FROM saved_views WHERE user_id = ? ORDER BY created_at DESC",
+            (user_id,),
+        ).fetchall()
+    return [_row_to_saved_view(r) for r in rows]
+
+
+@_with_retry
+def get_saved_view(view_id: int) -> Optional[SavedView]:
+    with _conn() as con:
+        row = con.execute("SELECT * FROM saved_views WHERE id = ?", (view_id,)).fetchone()
+    return _row_to_saved_view(row) if row else None
+
+
+@_with_retry
+def delete_saved_view(view_id: int, user_id: int) -> None:
+    with _conn() as con:
+        con.execute("DELETE FROM saved_views WHERE id = ? AND user_id = ?", (view_id, user_id))
+
+
+def _row_to_saved_view(row: sqlite3.Row) -> SavedView:
+    return SavedView(
+        id=row["id"], user_id=row["user_id"], name=row["name"],
+        view_type=row["view_type"], filters_json=row["filters_json"],
+        sort_json=row["sort_json"], group_by=row["group_by"],
+        created_at=datetime.fromisoformat(row["created_at"]),
+    )
+
+
+# ─── Dashboard Layouts (Phase 3) ────────────────────────────────────────────
+
+@_with_retry
+def save_dashboard(layout: DashboardLayout) -> DashboardLayout:
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        cur = con.execute(
+            """INSERT INTO dashboard_layouts (user_id, name, widgets_json, created_at)
+               VALUES (?, ?, ?, ?)""",
+            (layout.user_id, layout.name, layout.widgets_json, now),
+        )
+        layout.id = cur.lastrowid
+        layout.created_at = datetime.fromisoformat(now)
+    return layout
+
+
+@_with_retry
+def list_dashboards(user_id: int) -> List[DashboardLayout]:
+    with _conn() as con:
+        rows = con.execute(
+            "SELECT * FROM dashboard_layouts WHERE user_id = ? ORDER BY created_at DESC",
+            (user_id,),
+        ).fetchall()
+    return [_row_to_dashboard_layout(r) for r in rows]
+
+
+@_with_retry
+def get_dashboard(dashboard_id: int) -> Optional[DashboardLayout]:
+    with _conn() as con:
+        row = con.execute("SELECT * FROM dashboard_layouts WHERE id = ?", (dashboard_id,)).fetchone()
+    return _row_to_dashboard_layout(row) if row else None
+
+
+@_with_retry
+def update_dashboard(dashboard_id: int, user_id: int, **kwargs) -> Optional[DashboardLayout]:
+    set_parts = []
+    values = []
+    for key in ("name", "widgets_json"):
+        if key in kwargs:
+            set_parts.append(f"{key} = ?")
+            values.append(kwargs[key])
+    if not set_parts:
+        return get_dashboard(dashboard_id)
+    values.extend([dashboard_id, user_id])
+    query = "UPDATE dashboard_layouts SET " + ", ".join(set_parts) + " WHERE id = ? AND user_id = ?"
+    with _conn() as con:
+        con.execute(query, values)
+        row = con.execute("SELECT * FROM dashboard_layouts WHERE id = ?", (dashboard_id,)).fetchone()
+    return _row_to_dashboard_layout(row) if row else None
+
+
+@_with_retry
+def delete_dashboard(dashboard_id: int, user_id: int) -> None:
+    with _conn() as con:
+        con.execute("DELETE FROM dashboard_layouts WHERE id = ? AND user_id = ?", (dashboard_id, user_id))
+
+
+def _row_to_dashboard_layout(row: sqlite3.Row) -> DashboardLayout:
+    return DashboardLayout(
+        id=row["id"], user_id=row["user_id"], name=row["name"],
+        widgets_json=row["widgets_json"],
+        created_at=datetime.fromisoformat(row["created_at"]),
+    )
+
+
+# ─── Goal Progress Timeline (Phase 3, Item 7) ───────────────────────────────
+
+@_with_retry
+def get_goal_progress_timeline(goal_id: int) -> List[ProgressSnapshot]:
+    """Return progress snapshots ordered by date (ascending) for timeline chart."""
+    with _conn() as con:
+        rows = con.execute(
+            "SELECT * FROM progress_snapshots WHERE goal_id = ? ORDER BY captured_at ASC",
+            (goal_id,),
+        ).fetchall()
+    return [_row_to_snapshot(r) for r in rows]
+
+
+# ─── Burndown / Burnup Data (Phase 3, Item 10) ──────────────────────────────
+
+@_with_retry
+def get_burndown_data(goal_id: int) -> list:
+    """Return daily counts of completed vs remaining tasks for burndown chart."""
+    with _conn() as con:
+        tasks = con.execute(
+            "SELECT status, updated_at FROM tasks WHERE goal_id = ?", (goal_id,),
+        ).fetchall()
+
+    total = len(tasks)
+    if not total:
+        return []
+
+    # Build daily cumulative completed count
+    completed_dates: dict = {}
+    for t in tasks:
+        if t["status"] in ("done", "skipped") and t["updated_at"]:
+            day = t["updated_at"][:10]
+            completed_dates[day] = completed_dates.get(day, 0) + 1
+
+    if not completed_dates:
+        today = date.today().isoformat()
+        return [{"date": today, "completed": 0, "remaining": total, "total": total}]
+
+    sorted_days = sorted(completed_dates.keys())
+    result = []
+    cumulative = 0
+    for day in sorted_days:
+        cumulative += completed_dates[day]
+        result.append({
+            "date": day,
+            "completed": cumulative,
+            "remaining": total - cumulative,
+            "total": total,
+        })
+    return result
+
+
+# ─── Time Tracking Reports (Phase 3, Item 11) ───────────────────────────────
+
+@_with_retry
+def get_time_tracking_report(goal_id: int) -> dict:
+    """Aggregate TimeEntry data by task and user for a goal."""
+    with _conn() as con:
+        rows = con.execute(
+            """SELECT te.task_id, te.user_id, t.title as task_title,
+                      SUM(te.duration_minutes) as total_minutes
+               FROM time_entries te
+               JOIN tasks t ON t.id = te.task_id
+               WHERE t.goal_id = ?
+               GROUP BY te.task_id, te.user_id""",
+            (goal_id,),
+        ).fetchall()
+
+    by_task: dict = {}
+    by_user: dict = {}
+    for r in rows:
+        tid = r["task_id"]
+        uid = r["user_id"]
+        mins = r["total_minutes"]
+        title = r["task_title"]
+        by_task.setdefault(tid, {"task_id": tid, "title": title, "total_minutes": 0})
+        by_task[tid]["total_minutes"] += mins
+        by_user.setdefault(uid, {"user_id": uid, "total_minutes": 0})
+        by_user[uid]["total_minutes"] += mins
+
+    return {
+        "by_task": list(by_task.values()),
+        "by_user": list(by_user.values()),
+    }
+
+
+# ─── Scheduled Reports (Phase 3, Item 9) ────────────────────────────────────
+
+@_with_retry
+def create_scheduled_report(report: ScheduledReport) -> ScheduledReport:
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        cur = con.execute(
+            """INSERT INTO scheduled_reports (user_id, report_type, frequency, recipients_json, created_at, last_sent_at)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (report.user_id, report.report_type, report.frequency,
+             report.recipients_json, now, ""),
+        )
+        report.id = cur.lastrowid
+        report.created_at = datetime.fromisoformat(now)
+    return report
+
+
+@_with_retry
+def list_scheduled_reports(user_id: int) -> List[ScheduledReport]:
+    with _conn() as con:
+        rows = con.execute(
+            "SELECT * FROM scheduled_reports WHERE user_id = ? ORDER BY created_at DESC",
+            (user_id,),
+        ).fetchall()
+    return [_row_to_scheduled_report(r) for r in rows]
+
+
+@_with_retry
+def get_scheduled_report(report_id: int) -> Optional[ScheduledReport]:
+    with _conn() as con:
+        row = con.execute("SELECT * FROM scheduled_reports WHERE id = ?", (report_id,)).fetchone()
+    return _row_to_scheduled_report(row) if row else None
+
+
+@_with_retry
+def delete_scheduled_report(report_id: int, user_id: int) -> None:
+    with _conn() as con:
+        con.execute("DELETE FROM scheduled_reports WHERE id = ? AND user_id = ?", (report_id, user_id))
+
+
+def _row_to_scheduled_report(row: sqlite3.Row) -> ScheduledReport:
+    return ScheduledReport(
+        id=row["id"], user_id=row["user_id"], report_type=row["report_type"],
+        frequency=row["frequency"], recipients_json=row["recipients_json"],
+        created_at=datetime.fromisoformat(row["created_at"]),
+        last_sent_at=datetime.fromisoformat(row["last_sent_at"]) if row["last_sent_at"] else None,
     )
