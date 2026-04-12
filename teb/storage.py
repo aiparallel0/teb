@@ -16,6 +16,7 @@ from teb.models import (
     AgentSchedule,
     ApiCredential,
     AuditEvent,
+    BrandingConfig,
     BrowserAction,
     CheckIn,
     CommentReaction,
@@ -32,6 +33,7 @@ from teb.models import (
     GoalChatMessage,
     GoalCollaborator,
     GoalTemplate,
+    IPAllowlist,
     Integration,
     IntegrationListing,
     IntegrationTemplate,
@@ -41,6 +43,7 @@ from teb.models import (
     NotificationPreference,
     NudgeEvent,
     OAuthConnection,
+    Organization,
     OutcomeMetric,
     PersonalApiKey,
     PluginListing,
@@ -50,6 +53,7 @@ from teb.models import (
     ProgressSnapshot,
     PushSubscription,
     RecurrenceRule,
+    SSOConfig,
     SavedView,
     ScheduledReport,
     SpendingBudget,
@@ -1163,6 +1167,73 @@ def _run_migrations(con: sqlite3.Connection) -> None:
         )
     """)
     con.execute("CREATE INDEX IF NOT EXISTS idx_2fa_user ON two_factor_config(user_id)")
+
+    # ── Phase 6: SSO Config ──
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS sso_configs (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            org_id      INTEGER NOT NULL,
+            provider    TEXT    NOT NULL DEFAULT '',
+            entity_id   TEXT    NOT NULL DEFAULT '',
+            sso_url     TEXT    NOT NULL DEFAULT '',
+            certificate TEXT    NOT NULL DEFAULT '',
+            created_at  TEXT    NOT NULL DEFAULT (datetime('now'))
+        )
+    """)
+    con.execute("CREATE INDEX IF NOT EXISTS idx_sso_org ON sso_configs(org_id)")
+
+    # ── Phase 6: IP Allowlist ──
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS ip_allowlist (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            org_id      INTEGER NOT NULL,
+            cidr_range  TEXT    NOT NULL DEFAULT '',
+            description TEXT    NOT NULL DEFAULT '',
+            created_at  TEXT    NOT NULL DEFAULT (datetime('now'))
+        )
+    """)
+    con.execute("CREATE INDEX IF NOT EXISTS idx_ip_allowlist_org ON ip_allowlist(org_id)")
+
+    # ── Phase 6: Organizations ──
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS organizations (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            name          TEXT    NOT NULL,
+            slug          TEXT    NOT NULL UNIQUE,
+            owner_id      INTEGER,
+            settings_json TEXT    NOT NULL DEFAULT '{}',
+            created_at    TEXT    NOT NULL DEFAULT (datetime('now'))
+        )
+    """)
+    con.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_org_slug ON organizations(slug)")
+
+    # ── Phase 6: Organization Members ──
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS org_members (
+            id      INTEGER PRIMARY KEY AUTOINCREMENT,
+            org_id  INTEGER NOT NULL,
+            user_id INTEGER NOT NULL,
+            role    TEXT    NOT NULL DEFAULT 'member',
+            UNIQUE(org_id, user_id)
+        )
+    """)
+    con.execute("CREATE INDEX IF NOT EXISTS idx_org_members_org ON org_members(org_id)")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_org_members_user ON org_members(user_id)")
+
+    # ── Phase 6: Branding Config ──
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS branding_configs (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            org_id          INTEGER NOT NULL UNIQUE,
+            logo_url        TEXT    NOT NULL DEFAULT '',
+            primary_color   TEXT    NOT NULL DEFAULT '#1a1a2e',
+            secondary_color TEXT    NOT NULL DEFAULT '#16213e',
+            app_name        TEXT    NOT NULL DEFAULT 'teb',
+            favicon_url     TEXT    NOT NULL DEFAULT '',
+            created_at      TEXT    NOT NULL DEFAULT (datetime('now'))
+        )
+    """)
+    con.execute("CREATE INDEX IF NOT EXISTS idx_branding_org ON branding_configs(org_id)")
 
     # ─── Phase 3: Saved Views ────────────────────────────────────────────
     con.execute("""
@@ -6056,4 +6127,396 @@ def export_project(goal_id: int) -> dict:
         "tasks": [t.to_dict() for t in tasks],
         "comments": comments,
         "artifacts": artifacts,
+    }
+
+
+# ─── Phase 6: Enterprise — SSO Config ───────────────────────────────────────
+
+@_with_retry
+def create_sso_config(cfg: SSOConfig) -> SSOConfig:
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        cur = con.execute(
+            "INSERT INTO sso_configs (org_id, provider, entity_id, sso_url, certificate, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (cfg.org_id, cfg.provider, cfg.entity_id, cfg.sso_url, cfg.certificate, now),
+        )
+        cfg.id = cur.lastrowid
+        cfg.created_at = datetime.fromisoformat(now)
+    return cfg
+
+
+@_with_retry
+def get_sso_config(org_id: int) -> Optional[SSOConfig]:
+    with _conn() as con:
+        row = con.execute("SELECT * FROM sso_configs WHERE org_id = ? ORDER BY id DESC LIMIT 1", (org_id,)).fetchone()
+    if not row:
+        return None
+    return SSOConfig(
+        id=row["id"], org_id=row["org_id"], provider=row["provider"],
+        entity_id=row["entity_id"], sso_url=row["sso_url"], certificate=row["certificate"],
+        created_at=datetime.fromisoformat(row["created_at"]),
+    )
+
+
+@_with_retry
+def update_sso_config(cfg: SSOConfig) -> SSOConfig:
+    with _conn() as con:
+        con.execute(
+            "UPDATE sso_configs SET provider=?, entity_id=?, sso_url=?, certificate=? WHERE id=?",
+            (cfg.provider, cfg.entity_id, cfg.sso_url, cfg.certificate, cfg.id),
+        )
+    return cfg
+
+
+# ─── Phase 6: Enterprise — IP Allowlist ─────────────────────────────────────
+
+@_with_retry
+def create_ip_allowlist_entry(entry: IPAllowlist) -> IPAllowlist:
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        cur = con.execute(
+            "INSERT INTO ip_allowlist (org_id, cidr_range, description, created_at) VALUES (?, ?, ?, ?)",
+            (entry.org_id, entry.cidr_range, entry.description, now),
+        )
+        entry.id = cur.lastrowid
+        entry.created_at = datetime.fromisoformat(now)
+    return entry
+
+
+@_with_retry
+def list_ip_allowlist(org_id: int) -> list[IPAllowlist]:
+    with _conn() as con:
+        rows = con.execute("SELECT * FROM ip_allowlist WHERE org_id = ? ORDER BY id", (org_id,)).fetchall()
+    return [
+        IPAllowlist(id=r["id"], org_id=r["org_id"], cidr_range=r["cidr_range"],
+                    description=r["description"], created_at=datetime.fromisoformat(r["created_at"]))
+        for r in rows
+    ]
+
+
+@_with_retry
+def delete_ip_allowlist_entry(entry_id: int, org_id: int) -> bool:
+    with _conn() as con:
+        cur = con.execute("DELETE FROM ip_allowlist WHERE id = ? AND org_id = ?", (entry_id, org_id))
+    return cur.rowcount > 0
+
+
+def check_ip_allowed(ip: str, org_id: int) -> bool:
+    """Check if an IP address is allowed for the given org.
+
+    Returns True if there are no allowlist entries (open access)
+    or if the IP matches any CIDR range in the allowlist.
+    """
+    import ipaddress
+    entries = list_ip_allowlist(org_id)
+    if not entries:
+        return True  # No allowlist = open access
+    try:
+        addr = ipaddress.ip_address(ip)
+    except ValueError:
+        return False
+    for entry in entries:
+        try:
+            network = ipaddress.ip_network(entry.cidr_range, strict=False)
+            if addr in network:
+                return True
+        except ValueError:
+            continue
+    return False
+
+
+# ─── Phase 6: Enterprise — Data Encryption at Rest ──────────────────────────
+
+def encrypt_field(value: str) -> str:
+    """Encrypt a field value using TEB_ENCRYPTION_KEY if set, passthrough otherwise."""
+    from teb import config as _cfg
+    key = _cfg.TEB_ENCRYPTION_KEY
+    if not key or not value:
+        return value
+    try:
+        from cryptography.fernet import Fernet
+        f = Fernet(key.encode() if isinstance(key, str) else key)
+        return f.encrypt(value.encode()).decode()
+    except Exception:
+        return value
+
+
+def decrypt_field(value: str) -> str:
+    """Decrypt a field value using TEB_ENCRYPTION_KEY if set, passthrough otherwise."""
+    from teb import config as _cfg
+    key = _cfg.TEB_ENCRYPTION_KEY
+    if not key or not value:
+        return value
+    try:
+        from cryptography.fernet import Fernet
+        f = Fernet(key.encode() if isinstance(key, str) else key)
+        return f.decrypt(value.encode()).decode()
+    except Exception:
+        return value
+
+
+# ─── Phase 6: Enterprise — Audit Log Search ─────────────────────────────────
+
+@_with_retry
+def search_audit_events(
+    user_id: Optional[str] = None,
+    event_type: Optional[str] = None,
+    since: Optional[str] = None,
+    until: Optional[str] = None,
+    limit: int = 100,
+) -> list[AuditEvent]:
+    """Search audit events with flexible filtering."""
+    clauses: list[str] = []
+    params: list = []
+    if user_id is not None:
+        clauses.append("actor_id = ?")
+        params.append(str(user_id))
+    if event_type:
+        clauses.append("event_type = ?")
+        params.append(event_type)
+    if since:
+        clauses.append("created_at >= ?")
+        params.append(since)
+    if until:
+        clauses.append("created_at <= ?")
+        params.append(until)
+    where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+    with _conn() as con:
+        rows = con.execute(
+            f"SELECT * FROM audit_events {where} ORDER BY created_at DESC LIMIT ?",
+            params + [limit],
+        ).fetchall()
+    return [
+        AuditEvent(
+            id=r["id"], goal_id=r["goal_id"], event_type=r["event_type"],
+            actor_type=r["actor_type"], actor_id=r["actor_id"],
+            context_json=r["context_json"],
+            created_at=datetime.fromisoformat(r["created_at"]),
+        )
+        for r in rows
+    ]
+
+
+# ─── Phase 6: Enterprise — Organization Management ──────────────────────────
+
+@_with_retry
+def create_org(org: Organization) -> Organization:
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        cur = con.execute(
+            "INSERT INTO organizations (name, slug, owner_id, settings_json, created_at) VALUES (?, ?, ?, ?, ?)",
+            (org.name, org.slug, org.owner_id, org.settings_json, now),
+        )
+        org.id = cur.lastrowid
+        org.created_at = datetime.fromisoformat(now)
+    return org
+
+
+@_with_retry
+def get_org(org_id: int) -> Optional[Organization]:
+    with _conn() as con:
+        row = con.execute("SELECT * FROM organizations WHERE id = ?", (org_id,)).fetchone()
+    if not row:
+        return None
+    return Organization(
+        id=row["id"], name=row["name"], slug=row["slug"],
+        owner_id=row["owner_id"], settings_json=row["settings_json"],
+        created_at=datetime.fromisoformat(row["created_at"]),
+    )
+
+
+@_with_retry
+def update_org(org: Organization) -> Organization:
+    with _conn() as con:
+        con.execute(
+            "UPDATE organizations SET name=?, slug=?, settings_json=? WHERE id=?",
+            (org.name, org.slug, org.settings_json, org.id),
+        )
+    return org
+
+
+@_with_retry
+def list_orgs() -> list[Organization]:
+    with _conn() as con:
+        rows = con.execute("SELECT * FROM organizations ORDER BY name").fetchall()
+    return [
+        Organization(id=r["id"], name=r["name"], slug=r["slug"],
+                     owner_id=r["owner_id"], settings_json=r["settings_json"],
+                     created_at=datetime.fromisoformat(r["created_at"]))
+        for r in rows
+    ]
+
+
+@_with_retry
+def add_org_member(org_id: int, user_id: int, role: str = "member") -> dict:
+    with _conn() as con:
+        con.execute(
+            "INSERT OR REPLACE INTO org_members (org_id, user_id, role) VALUES (?, ?, ?)",
+            (org_id, user_id, role),
+        )
+    return {"org_id": org_id, "user_id": user_id, "role": role}
+
+
+@_with_retry
+def list_org_members(org_id: int) -> list[dict]:
+    with _conn() as con:
+        rows = con.execute(
+            "SELECT om.user_id, om.role, u.email FROM org_members om "
+            "LEFT JOIN users u ON om.user_id = u.id WHERE om.org_id = ?",
+            (org_id,),
+        ).fetchall()
+    return [{"user_id": r["user_id"], "role": r["role"], "email": r["email"]} for r in rows]
+
+
+# ─── Phase 6: Enterprise — Usage Analytics ──────────────────────────────────
+
+@_with_retry
+def get_usage_analytics(org_id: Optional[int] = None, since: Optional[str] = None) -> dict:
+    """Aggregate usage analytics across the platform."""
+    with _conn() as con:
+        since_clause = f"AND created_at >= '{since}'" if since else ""
+
+        active_users = con.execute(
+            f"SELECT COUNT(DISTINCT user_id) as cnt FROM goals WHERE user_id IS NOT NULL {since_clause}"
+        ).fetchone()["cnt"]
+
+        goals_created = con.execute(
+            f"SELECT COUNT(*) as cnt FROM goals WHERE 1=1 {since_clause}"
+        ).fetchone()["cnt"]
+
+        tasks_completed = con.execute(
+            f"SELECT COUNT(*) as cnt FROM tasks WHERE status = 'done' {('AND updated_at >= ' + repr(since)) if since else ''}"
+        ).fetchone()["cnt"]
+
+        api_calls = con.execute(
+            f"SELECT COUNT(*) as cnt FROM api_usage_log WHERE 1=1 {since_clause}"
+        ).fetchone()["cnt"]
+
+    return {
+        "active_users": active_users,
+        "goals_created": goals_created,
+        "tasks_completed": tasks_completed,
+        "api_calls": api_calls,
+    }
+
+
+# ─── Phase 6: Enterprise — Branding Config ──────────────────────────────────
+
+@_with_retry
+def get_branding_config(org_id: int) -> Optional[BrandingConfig]:
+    with _conn() as con:
+        row = con.execute("SELECT * FROM branding_configs WHERE org_id = ?", (org_id,)).fetchone()
+    if not row:
+        return None
+    return BrandingConfig(
+        id=row["id"], org_id=row["org_id"], logo_url=row["logo_url"],
+        primary_color=row["primary_color"], secondary_color=row["secondary_color"],
+        app_name=row["app_name"], favicon_url=row["favicon_url"],
+        created_at=datetime.fromisoformat(row["created_at"]),
+    )
+
+
+@_with_retry
+def upsert_branding_config(cfg: BrandingConfig) -> BrandingConfig:
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        existing = con.execute("SELECT id FROM branding_configs WHERE org_id = ?", (cfg.org_id,)).fetchone()
+        if existing:
+            con.execute(
+                "UPDATE branding_configs SET logo_url=?, primary_color=?, secondary_color=?, "
+                "app_name=?, favicon_url=? WHERE org_id=?",
+                (cfg.logo_url, cfg.primary_color, cfg.secondary_color, cfg.app_name, cfg.favicon_url, cfg.org_id),
+            )
+            cfg.id = existing["id"]
+        else:
+            cur = con.execute(
+                "INSERT INTO branding_configs (org_id, logo_url, primary_color, secondary_color, app_name, favicon_url, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (cfg.org_id, cfg.logo_url, cfg.primary_color, cfg.secondary_color, cfg.app_name, cfg.favicon_url, now),
+            )
+            cfg.id = cur.lastrowid
+            cfg.created_at = datetime.fromisoformat(now)
+    return cfg
+
+
+# ─── Phase 6: Enterprise — Database Status ──────────────────────────────────
+
+@_with_retry
+def get_database_status() -> dict:
+    """Return current database status including type, size, and table counts."""
+    import os as _os
+    db = _db_path()
+    db_size = 0
+    try:
+        db_size = _os.path.getsize(db)
+    except OSError:
+        pass
+
+    with _conn() as con:
+        tables = con.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+        ).fetchall()
+        table_counts = {}
+        for t in tables:
+            name = t["name"]
+            cnt = con.execute(f"SELECT COUNT(*) as cnt FROM [{name}]").fetchone()["cnt"]
+            table_counts[name] = cnt
+
+    return {
+        "database_type": "sqlite",
+        "database_path": db,
+        "size_bytes": db_size,
+        "size_mb": round(db_size / (1024 * 1024), 2),
+        "table_count": len(table_counts),
+        "tables": table_counts,
+    }
+
+
+# ─── Phase 6: Enterprise — Compliance Report ────────────────────────────────
+
+@_with_retry
+def get_compliance_report() -> dict:
+    """Generate a compliance report with security settings and audit summary."""
+    from teb import config as _cfg
+
+    with _conn() as con:
+        total_users = con.execute("SELECT COUNT(*) as cnt FROM users").fetchone()["cnt"]
+        admin_users = con.execute("SELECT COUNT(*) as cnt FROM users WHERE role = 'admin'").fetchone()["cnt"]
+        locked_users = con.execute(
+            "SELECT COUNT(*) as cnt FROM users WHERE locked_until IS NOT NULL AND locked_until > datetime('now')"
+        ).fetchone()["cnt"]
+        two_fa_enabled = con.execute(
+            "SELECT COUNT(*) as cnt FROM two_factor_config WHERE is_enabled = 1"
+        ).fetchone()["cnt"]
+        recent_audit = con.execute(
+            "SELECT COUNT(*) as cnt FROM audit_events WHERE created_at >= datetime('now', '-30 days')"
+        ).fetchone()["cnt"]
+        audit_types = con.execute(
+            "SELECT event_type, COUNT(*) as cnt FROM audit_events GROUP BY event_type ORDER BY cnt DESC LIMIT 10"
+        ).fetchall()
+
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "security_settings": {
+            "jwt_algorithm": _cfg.JWT_ALGORITHM,
+            "jwt_expire_hours": _cfg.JWT_EXPIRE_HOURS,
+            "encryption_at_rest": bool(_cfg.TEB_ENCRYPTION_KEY),
+            "cors_origins": _cfg.CORS_ORIGINS,
+        },
+        "user_access": {
+            "total_users": total_users,
+            "admin_users": admin_users,
+            "locked_users": locked_users,
+            "two_factor_enabled": two_fa_enabled,
+            "two_factor_coverage": round(two_fa_enabled / max(total_users, 1) * 100, 1),
+        },
+        "audit_summary": {
+            "events_last_30_days": recent_audit,
+            "top_event_types": [{"type": r["event_type"], "count": r["cnt"]} for r in audit_types],
+        },
+        "data_retention": {
+            "policy": "indefinite",
+            "audit_events_retained": True,
+        },
     }

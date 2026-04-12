@@ -5,14 +5,14 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>teb</title>
   <base href="{{BASE_PATH}}/" />
-  <link rel="manifest" href="static/manifest.json" />
+  <link rel="manifest" href="{{CDN_PREFIX}}static/manifest.json" />
   <meta name="theme-color" content="#1a1a2e" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;0,700;1,300;1,400;1,500&family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="static/style.css" />
+  <link rel="stylesheet" href="{{CDN_PREFIX}}static/style.css" />
   <script>window.__BASE_PATH__ = "{{BASE_PATH}}";</script>
 </head>
 <body>
@@ -581,15 +581,15 @@
     </div><!-- end #app -->
   </div><!-- end .app-layout -->
 
-  <script src="static/views/kanban.js"></script>
-  <script src="static/views/calendar.js"></script>
-  <script src="static/views/timeline.js"></script>
-  <script src="static/views/gantt.js"></script>
-  <script src="static/views/table.js"></script>
-  <script src="static/views/workload.js"></script>
-  <script src="static/views/mindmap.js"></script>
-  <script src="static/views/charts.js"></script>
-  <script src="static/app.js"></script>
+  <script src="{{CDN_PREFIX}}static/views/kanban.js"></script>
+  <script src="{{CDN_PREFIX}}static/views/calendar.js"></script>
+  <script src="{{CDN_PREFIX}}static/views/timeline.js"></script>
+  <script src="{{CDN_PREFIX}}static/views/gantt.js"></script>
+  <script src="{{CDN_PREFIX}}static/views/table.js"></script>
+  <script src="{{CDN_PREFIX}}static/views/workload.js"></script>
+  <script src="{{CDN_PREFIX}}static/views/mindmap.js"></script>
+  <script src="{{CDN_PREFIX}}static/views/charts.js"></script>
+  <script src="{{CDN_PREFIX}}static/app.js"></script>
   <script>
     // Register service worker for PWA support
     if ('serviceWorker' in navigator) {

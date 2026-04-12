@@ -1342,6 +1342,95 @@ class PushSubscription:
 # ─── Phase 6: Enterprise Security ──────────────────────────────────────────
 
 @dataclass
+class SSOConfig:
+    """SSO/SAML configuration for an organization."""
+    org_id: int
+    provider: str = ""                 # okta | azure_ad | google | onelogin | custom
+    entity_id: str = ""
+    sso_url: str = ""
+    certificate: str = ""
+    id: Optional[int] = None
+    created_at: Optional[datetime] = None
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "org_id": self.org_id,
+            "provider": self.provider,
+            "entity_id": self.entity_id,
+            "sso_url": self.sso_url,
+            "certificate_set": bool(self.certificate),
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+@dataclass
+class IPAllowlist:
+    """IP allowlist entry for an organization."""
+    org_id: int
+    cidr_range: str = ""
+    description: str = ""
+    id: Optional[int] = None
+    created_at: Optional[datetime] = None
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "org_id": self.org_id,
+            "cidr_range": self.cidr_range,
+            "description": self.description,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+@dataclass
+class Organization:
+    """Organization / tenant for multi-org enterprise support."""
+    name: str
+    slug: str = ""
+    owner_id: Optional[int] = None
+    settings_json: str = "{}"
+    id: Optional[int] = None
+    created_at: Optional[datetime] = None
+
+    def to_dict(self) -> dict:
+        import json as _json
+        return {
+            "id": self.id,
+            "name": self.name,
+            "slug": self.slug,
+            "owner_id": self.owner_id,
+            "settings": _json.loads(self.settings_json) if self.settings_json else {},
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+@dataclass
+class BrandingConfig:
+    """Custom branding configuration for an organization."""
+    org_id: int
+    logo_url: str = ""
+    primary_color: str = "#1a1a2e"
+    secondary_color: str = "#16213e"
+    app_name: str = "teb"
+    favicon_url: str = ""
+    id: Optional[int] = None
+    created_at: Optional[datetime] = None
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "org_id": self.org_id,
+            "logo_url": self.logo_url,
+            "primary_color": self.primary_color,
+            "secondary_color": self.secondary_color,
+            "app_name": self.app_name,
+            "favicon_url": self.favicon_url,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+@dataclass
 class UserSession:
     """Active user session tracking."""
     user_id: int
