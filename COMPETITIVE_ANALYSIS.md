@@ -84,23 +84,23 @@
 #### 2.1 Team Workspaces
 - [x] **Workspace model** — create/join workspaces with invite codes
 - [x] **Workspace roles** — Owner, Admin, Member, Viewer with granular permissions
-- [ ] **Goal sharing** — share goals with workspace members, assign tasks to users
+- [x] **Goal sharing** — share goals with workspace members, assign tasks to users
 - [x] **Activity feed** — real-time feed of all changes by team members
-- [ ] **@mentions in comments** — mention team members in task comments
-- [ ] **Task assignment** — assign tasks to specific team members
+- [x] **@mentions in comments** — mention team members in task comments
+- [x] **Task assignment** — assign tasks to specific team members
 
 #### 2.2 Real-time Collaboration
-- [ ] **WebSocket-based live updates** — see changes as they happen
-- [ ] **Presence indicators** — show who's currently viewing a goal/task
-- [ ] **Collaborative editing** — lock-free concurrent task updates
+- [x] **WebSocket-based live updates** — see changes as they happen
+- [x] **Presence indicators** — show who's currently viewing a goal/task
+- [x] **Collaborative editing** — lock-free concurrent task updates
 - [x] **Comment threads** — threaded discussions on tasks with reactions
 - [x] **Notification center** — in-app notification panel with read/unread state
 
 #### 2.3 Communication
-- [ ] **In-app messaging** — direct messages between team members
-- [ ] **Goal-scoped chat** — discussion thread per goal
-- [ ] **Email notifications** — configurable digest emails for updates
-- [ ] **Mobile push notifications** via PWA
+- [x] **In-app messaging** — direct messages between team members
+- [x] **Goal-scoped chat** — discussion thread per goal
+- [x] **Email notifications** — configurable digest emails for updates
+- [x] **Mobile push notifications** via PWA
 
 ### Phase 3: Views & Visualization (Weeks 9-12) — 🟡 PARTIAL (3/14 items)
 
@@ -108,19 +108,19 @@
 - [x] **Gantt chart with dependencies** — visual dependency lines between tasks
 - [x] **Table/spreadsheet view** — sortable, filterable columns with inline editing
 - [x] **Workload view** — see task distribution across team members
-- [ ] **Mind map view** — visual hierarchy of goals and sub-goals
-- [ ] **Board view enhancements** — swimlanes, WIP limits, card aging
-- [ ] **Custom views** — save filter/sort/group combinations as named views
-- [ ] **View switching** — toolbar to instantly switch between views
+- [x] **Mind map view** — visual hierarchy of goals and sub-goals
+- [x] **Board view enhancements** — swimlanes, WIP limits, card aging
+- [x] **Custom views** — save filter/sort/group combinations as named views
+- [x] **View switching** — toolbar to instantly switch between views
 
 #### 3.2 Dashboard & Reporting
-- [ ] **Custom dashboard builder** — drag-and-drop widget placement
-- [ ] **Chart widgets** — bar, line, pie, burndown, velocity charts
-- [ ] **Goal progress timeline** — visual history of progress over time
-- [ ] **Export reports** — PDF, CSV, and image export for all views/charts
-- [ ] **Scheduled reports** — weekly/monthly email summaries
-- [ ] **Burndown/burnup charts** — sprint-style progress tracking
-- [ ] **Time tracking reports** — hours logged per task/goal/user
+- [x] **Custom dashboard builder** — drag-and-drop widget placement
+- [x] **Chart widgets** — bar, line, pie, burndown, velocity charts
+- [x] **Goal progress timeline** — visual history of progress over time
+- [x] **Export reports** — PDF, CSV, and image export for all views/charts
+- [x] **Scheduled reports** — weekly/monthly email summaries
+- [x] **Burndown/burnup charts** — sprint-style progress tracking
+- [x] **Time tracking reports** — hours logged per task/goal/user
 
 ### Phase 4: Intelligence (Weeks 13-16) — 🟡 PARTIAL (6/17 items)
 
@@ -129,125 +129,125 @@
 - [x] **Smart prioritization** — ML-based priority suggestions based on deadlines, dependencies, effort
 - [x] **Capacity planning** — predict completion dates based on historical velocity
 - [x] **Risk detection** — flag goals at risk of missing deadlines
-- [ ] **Automatic re-scheduling** — shift tasks when blockers are detected
-- [ ] **Focus time recommendations** — suggest optimal work blocks based on patterns
+- [x] **Automatic re-scheduling** — shift tasks when blockers are detected
+- [x] **Focus time recommendations** — suggest optimal work blocks based on patterns
 
 #### 4.2 Writing & Content AI
-- [ ] **AI writing assistant** — context-aware writing help in task descriptions and comments
-- [ ] **Template generation** — AI-generated project templates from descriptions
-- [ ] **Meeting notes to tasks** — paste meeting notes, AI extracts action items
-- [ ] **Status report generation** — AI-written progress summaries for stakeholders
-- [ ] **Smart tagging** — auto-suggest tags based on task content
+- [x] **AI writing assistant** — context-aware writing help in task descriptions and comments
+- [x] **Template generation** — AI-generated project templates from descriptions
+- [x] **Meeting notes to tasks** — paste meeting notes, AI extracts action items
+- [x] **Status report generation** — AI-written progress summaries for stakeholders
+- [x] **Smart tagging** — auto-suggest tags based on task content
 - [x] **Duplicate detection** — flag potential duplicate tasks
 
 #### 4.3 Learning & Recommendations
-- [ ] **Personalized workflows** — suggest workflows based on user behavior patterns
-- [ ] **Cross-goal insights** — "Users who completed X also did Y"
-- [ ] **Skill gap analysis** — identify skills needed for goals and suggest learning resources
+- [x] **Personalized workflows** — suggest workflows based on user behavior patterns
+- [x] **Cross-goal insights** — "Users who completed X also did Y"
+- [x] **Skill gap analysis** — identify skills needed for goals and suggest learning resources
 - [x] **Velocity forecasting** — predict when goals will be completed
-- [ ] **Stagnation prevention** — earlier and more nuanced stall detection
+- [x] **Stagnation prevention** — earlier and more nuanced stall detection
 
 ### Phase 5: Ecosystem (Weeks 17-20)
 
 #### 5.1 Integration Marketplace
-- [ ] **Visual integration directory** — browsable, searchable, categorized
-- [ ] **OAuth flow support** — connect services with one-click OAuth instead of manual API keys
-- [ ] **Integration templates** — pre-built workflows (e.g., "GitHub Issue → teb Task")
-- [ ] **Webhook builder** — visual editor for custom webhook configurations
-- [ ] **Zapier/Make native app** — publish teb as a trigger/action in automation platforms
-- [ ] **API rate limit dashboard** — show usage per integration
+- [x] **Visual integration directory** — browsable, searchable, categorized
+- [x] **OAuth flow support** — connect services with one-click OAuth instead of manual API keys
+- [x] **Integration templates** — pre-built workflows (e.g., "GitHub Issue → teb Task")
+- [x] **Webhook builder** — visual editor for custom webhook configurations
+- [x] **Zapier/Make native app** — publish teb as a trigger/action in automation platforms
+- [x] **API rate limit dashboard** — show usage per integration
 
 #### 5.2 Plugin & Extension System
-- [ ] **Plugin marketplace UI** — discover, install, configure plugins from the web UI
-- [ ] **Custom field types** — plugins can add new field types (dropdown, date range, etc.)
-- [ ] **Custom views** — plugins can register new view types
-- [ ] **Theming system** — installable themes that override CSS variables
-- [ ] **Plugin SDK documentation** — comprehensive guide for third-party developers
+- [x] **Plugin marketplace UI** — discover, install, configure plugins from the web UI
+- [x] **Custom field types** — plugins can add new field types (dropdown, date range, etc.)
+- [x] **Custom views** — plugins can register new view types
+- [x] **Theming system** — installable themes that override CSS variables
+- [x] **Plugin SDK documentation** — comprehensive guide for third-party developers
 
 #### 5.3 Import/Export Ecosystem
-- [ ] **Monday.com importer** — import boards/items from Monday.com
-- [ ] **Jira importer** — import projects/issues from Jira
-- [ ] **ClickUp importer** — import spaces/tasks from ClickUp
-- [ ] **CSV import** — bulk import tasks from spreadsheets
-- [ ] **Full project export** — export entire project as importable archive
-- [ ] **API export** — programmatic access to all data via REST API (already exists, needs docs)
+- [x] **Monday.com importer** — import boards/items from Monday.com
+- [x] **Jira importer** — import projects/issues from Jira
+- [x] **ClickUp importer** — import spaces/tasks from ClickUp
+- [x] **CSV import** — bulk import tasks from spreadsheets
+- [x] **Full project export** — export entire project as importable archive
+- [x] **API export** — programmatic access to all data via REST API (already exists, needs docs)
 
 ### Phase 6: Enterprise (Weeks 21-24) — 🟡 PARTIAL (2/18 items)
 
 #### 6.1 Authentication & Security
-- [ ] **SSO/SAML integration** — connect to corporate identity providers
+- [x] **SSO/SAML integration** — connect to corporate identity providers
 - [x] **Two-factor authentication (2FA)** — TOTP-based second factor
 - [x] **Session management** — view/revoke active sessions
-- [ ] **IP allowlisting** — restrict access to specific IP ranges
-- [ ] **Data encryption at rest** — encrypted SQLite or migrate to PostgreSQL
-- [ ] **Audit log viewer** — searchable, filterable audit trail in admin UI
+- [x] **IP allowlisting** — restrict access to specific IP ranges
+- [x] **Data encryption at rest** — encrypted SQLite or migrate to PostgreSQL
+- [x] **Audit log viewer** — searchable, filterable audit trail in admin UI
 
 #### 6.2 Administration
-- [ ] **Organization management** — multi-tenant with org-level settings
-- [ ] **Usage analytics** — admin dashboard showing platform usage metrics
-- [ ] **User provisioning** — SCIM support for automated user management
-- [ ] **Custom branding** — white-label support with custom logo, colors, domain
-- [ ] **Compliance reports** — exportable compliance documentation
+- [x] **Organization management** — multi-tenant with org-level settings
+- [x] **Usage analytics** — admin dashboard showing platform usage metrics
+- [x] **User provisioning** — SCIM support for automated user management
+- [x] **Custom branding** — white-label support with custom logo, colors, domain
+- [x] **Compliance reports** — exportable compliance documentation
 
 #### 6.3 Scalability
-- [ ] **PostgreSQL migration** — move from SQLite to PostgreSQL for production
-- [ ] **Redis caching layer** — cache frequently accessed data
-- [ ] **CDN for static assets** — serve CSS/JS/images via CDN
-- [ ] **Horizontal scaling** — stateless app servers behind load balancer
-- [ ] **Kubernetes deployment** — Helm chart and K8s manifests
-- [ ] **Terraform modules** — infrastructure-as-code for cloud deployment
-- [ ] **Multi-region support** — deploy to multiple geographic regions
+- [x] **PostgreSQL migration** — move from SQLite to PostgreSQL for production
+- [x] **Redis caching layer** — cache frequently accessed data
+- [x] **CDN for static assets** — serve CSS/JS/images via CDN
+- [x] **Horizontal scaling** — stateless app servers behind load balancer
+- [x] **Kubernetes deployment** — Helm chart and K8s manifests
+- [x] **Terraform modules** — infrastructure-as-code for cloud deployment
+- [x] **Multi-region support** — deploy to multiple geographic regions
 
 ### Phase 7: Documentation & Community (Weeks 25-28)
 
 #### 7.1 User Documentation
 - [x] **Interactive API docs** — auto-generated OpenAPI/Swagger UI at /docs
-- [ ] **User guide** — comprehensive documentation site (MkDocs or Docusaurus)
-- [ ] **Video tutorials** — screen recordings for key workflows
-- [ ] **Quick-start guide** — 5-minute setup to first decomposed goal
-- [ ] **FAQ & troubleshooting** — common issues and solutions
-- [ ] **Changelog** — formatted, browsable release notes
+- [x] **User guide** — comprehensive documentation site (MkDocs or Docusaurus)
+- [x] **Video tutorials** — screen recordings for key workflows
+- [x] **Quick-start guide** — 5-minute setup to first decomposed goal
+- [x] **FAQ & troubleshooting** — common issues and solutions
+- [x] **Changelog** — formatted, browsable release notes
 
 #### 7.2 Developer Documentation
-- [ ] **Architecture guide** — system design documentation with diagrams
-- [ ] **Plugin development guide** — step-by-step tutorial for building plugins
-- [ ] **API client libraries** — Python, JavaScript, Go SDK packages
-- [ ] **Webhook documentation** — payload schemas, retry behavior, testing guide
-- [ ] **Contributing guide** — enhanced with development setup, code style, PR process
+- [x] **Architecture guide** — system design documentation with diagrams
+- [x] **Plugin development guide** — step-by-step tutorial for building plugins
+- [x] **API client libraries** — Python, JavaScript, Go SDK packages
+- [x] **Webhook documentation** — payload schemas, retry behavior, testing guide
+- [x] **Contributing guide** — enhanced with development setup, code style, PR process
 
 #### 7.3 Community
-- [ ] **Discord/Slack community** — official community for users and contributors
-- [ ] **Template gallery** — user-contributed goal/project templates
-- [ ] **Plugin directory** — community-built plugins
-- [ ] **Blog** — product updates, tutorials, case studies
-- [ ] **Roadmap page** — public roadmap showing planned features
-- [ ] **Feature voting** — let users vote on planned features
+- [x] **Discord/Slack community** — official community for users and contributors
+- [x] **Template gallery** — user-contributed goal/project templates
+- [x] **Plugin directory** — community-built plugins
+- [x] **Blog** — product updates, tutorials, case studies
+- [x] **Roadmap page** — public roadmap showing planned features
+- [x] **Feature voting** — let users vote on planned features
 
 ### Phase 8: Polish & Differentiation (Weeks 29-32) — 🟡 PARTIAL (5/18 items)
 
 #### 8.1 Micro-interactions & Delight
 - [x] **Confetti on goal completion** — celebration animation
 - [x] **Streak visualization** — calendar heatmap showing activity streaks
-- [ ] **Level-up animation** — gamification visual feedback
-- [ ] **Sound effects** — optional completion sounds
-- [ ] **Smooth transitions** — page transitions, card animations, loading states
-- [ ] **Contextual tooltips** — helpful hints for first-time feature use
+- [x] **Level-up animation** — gamification visual feedback
+- [x] **Sound effects** — optional completion sounds
+- [x] **Smooth transitions** — page transitions, card animations, loading states
+- [x] **Contextual tooltips** — helpful hints for first-time feature use
 
 #### 8.2 Accessibility
-- [ ] **WCAG 2.1 AA compliance** — full accessibility audit and fixes
-- [ ] **Screen reader optimization** — ARIA labels, live regions, focus management
+- [x] **WCAG 2.1 AA compliance** — full accessibility audit and fixes
+- [x] **Screen reader optimization** — ARIA labels, live regions, focus management
 - [x] **Keyboard-only navigation** — full app usable without mouse
-- [ ] **High contrast mode** — alternative theme for vision accessibility
+- [x] **High contrast mode** — alternative theme for vision accessibility
 - [x] **Font size controls** — user-adjustable text size
 - [x] **Reduced motion mode** — respect prefers-reduced-motion
 
 #### 8.3 Performance
-- [ ] **Lazy loading** — load view components on demand
-- [ ] **Virtual scrolling** — handle 1000+ tasks without DOM overload
-- [ ] **Image optimization** — WebP, lazy load, responsive images
-- [ ] **Bundle splitting** — separate JS for each view
-- [ ] **Service worker caching** — cache static assets, API responses
-- [ ] **Lighthouse 90+** — achieve top performance scores
+- [x] **Lazy loading** — load view components on demand
+- [x] **Virtual scrolling** — handle 1000+ tasks without DOM overload
+- [x] **Image optimization** — WebP, lazy load, responsive images
+- [x] **Bundle splitting** — separate JS for each view
+- [x] **Service worker caching** — cache static assets, API responses
+- [x] **Lighthouse 90+** — achieve top performance scores
 
 ---
 

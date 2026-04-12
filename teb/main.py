@@ -18,7 +18,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from teb import agents, auth, browser, config, decomposer, deployer, executor, integrations, messaging, provisioning, scheduler, storage, transcribe
+from teb import agents, auth, browser, config, decomposer, deployer, executor, intelligence, integrations, messaging, provisioning, scheduler, storage, transcribe
 from teb.models import (
     ActivityFeedEntry, AgentGoalMemory, ApiCredential, AuditEvent, BrowserAction, CheckIn,
     CommentReaction, CustomField, DashboardLayout, DashboardWidget, DirectMessage, EmailNotificationConfig,
@@ -5689,6 +5689,114 @@ async def get_time_report_endpoint(goal_id: int, request: Request):
     _require_user(request)
     report = storage.get_time_tracking_report(goal_id)
     return report
+
+
+# ─── Phase 4: Intelligence endpoints ──────────────────────────────────────────
+
+
+class _WriteAssistBody(BaseModel):
+    context: str = ""
+    prompt: str = ""
+
+
+class _TemplateGenBody(BaseModel):
+    description: str
+
+
+class _MeetingNotesBody(BaseModel):
+    notes: str
+
+
+class _SuggestTagsBody(BaseModel):
+    text: str
+
+
+@app.post("/api/goals/{goal_id}/reschedule", tags=["intelligence"])
+async def reschedule_goal(goal_id: int, request: Request):
+    _check_api_rate_limit(request)
+    _require_user(request)
+    result = intelligence.auto_reschedule(goal_id)
+    return result
+
+
+@app.get("/api/users/me/focus-recommendations", tags=["intelligence"])
+async def focus_recommendations(request: Request):
+    _check_api_rate_limit(request)
+    uid = _require_user(request)
+    result = intelligence.get_focus_recommendations(uid)
+    return result
+
+
+@app.post("/api/ai/write", tags=["intelligence"])
+async def ai_write(body: _WriteAssistBody, request: Request):
+    _check_api_rate_limit(request)
+    _require_user(request)
+    result = intelligence.assist_writing(body.context, body.prompt)
+    return result
+
+
+@app.post("/api/ai/generate-template", tags=["intelligence"])
+async def ai_generate_template(body: _TemplateGenBody, request: Request):
+    _check_api_rate_limit(request)
+    _require_user(request)
+    result = intelligence.generate_template_from_description(body.description)
+    return result
+
+
+@app.post("/api/ai/meeting-to-tasks", tags=["intelligence"])
+async def ai_meeting_to_tasks(body: _MeetingNotesBody, request: Request):
+    _check_api_rate_limit(request)
+    _require_user(request)
+    result = intelligence.extract_tasks_from_notes(body.notes)
+    return result
+
+
+@app.get("/api/goals/{goal_id}/status-report", tags=["intelligence"])
+async def goal_status_report(goal_id: int, request: Request):
+    _check_api_rate_limit(request)
+    _require_user(request)
+    result = intelligence.generate_status_report(goal_id)
+    return result
+
+
+@app.post("/api/ai/suggest-tags", tags=["intelligence"])
+async def ai_suggest_tags(body: _SuggestTagsBody, request: Request):
+    _check_api_rate_limit(request)
+    _require_user(request)
+    result = intelligence.suggest_tags(body.text)
+    return result
+
+
+@app.get("/api/users/me/workflow-suggestions", tags=["intelligence"])
+async def workflow_suggestions(request: Request):
+    _check_api_rate_limit(request)
+    uid = _require_user(request)
+    result = intelligence.get_workflow_suggestions(uid)
+    return result
+
+
+@app.get("/api/users/me/insights", tags=["intelligence"])
+async def cross_goal_insights(request: Request):
+    _check_api_rate_limit(request)
+    uid = _require_user(request)
+    result = intelligence.get_cross_goal_insights(uid)
+    return result
+
+
+@app.get("/api/users/me/skill-gaps", tags=["intelligence"])
+async def skill_gaps(request: Request):
+    _check_api_rate_limit(request)
+    uid = _require_user(request)
+    result = intelligence.analyze_skill_gaps(uid)
+    return result
+
+
+@app.get("/api/goals/{goal_id}/stagnation-check", tags=["intelligence"])
+async def stagnation_check(goal_id: int, request: Request):
+    _check_api_rate_limit(request)
+    _require_user(request)
+    result = intelligence.detect_stagnation(goal_id)
+    return result
 
 
 if config.BASE_PATH:
