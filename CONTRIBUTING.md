@@ -27,7 +27,7 @@ uvicorn teb.main:asgi_app --reload
 pytest tests/ -v
 ```
 
-All 601 tests should pass. Tests use an in-memory SQLite database and mock all external services.
+All tests should pass (1000+ tests across 23+ test files). Tests use an in-memory SQLite database and mock all external services.
 
 ## How to Contribute
 
@@ -70,13 +70,14 @@ All 601 tests should pass. Tests use an in-memory SQLite database and mock all e
 
 | Module | Purpose |
 |---|---|
-| `main.py` | FastAPI endpoints and request handling |
-| `models.py` | Dataclass definitions for all domain objects |
-| `storage.py` | SQLite data access layer (27 tables) |
+| `main.py` | FastAPI endpoints and request handling (7000+ lines, 150+ endpoints) |
+| `models.py` | Dataclass definitions for all domain objects (1800+ lines) |
+| `storage.py` | SQLite data access layer (50+ tables) |
 | `decomposer.py` | Goal → task decomposition (10 templates + AI) |
 | `executor.py` | API-based task execution |
 | `browser.py` | Browser automation (Playwright) |
 | `agents.py` | Multi-agent delegation system |
+| `intelligence.py` | Heuristic AI: scheduling, focus, writing, tagging, insights |
 | `integrations.py` | Pre-built service catalog |
 | `payments.py` | Payment provider integration (Mercury + Stripe) |
 | `discovery.py` | Tool/service discovery engine |
@@ -86,6 +87,10 @@ All 601 tests should pass. Tests use an in-memory SQLite database and mock all e
 | `ai_client.py` | Unified AI client (Anthropic + OpenAI) |
 | `auth.py` | JWT authentication + RBAC |
 | `security.py` | SSRF-safe URL validation for outbound HTTP |
+| `events.py` | SSE event streaming (EventBus with pub/sub) |
+| `gamification.py` | XP, achievements, and level tracking |
+| `importers.py` | Import from Trello, Asana, Monday, Jira, ClickUp, CSV |
+| `cache.py` | In-memory caching layer (Redis-ready) |
 | `config.py` | Environment configuration |
 
 ## Questions?
