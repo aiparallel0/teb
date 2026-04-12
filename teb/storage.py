@@ -7,6 +7,7 @@ from typing import Generator, List, Optional, Set
 from teb.config import get_db_path
 from teb.models import (
     Achievement,
+    ActivityFeedEntry,
     AgentFlow,
     AgentGoalMemory,
     AgentHandoff,
@@ -16,6 +17,7 @@ from teb.models import (
     AuditEvent,
     BrowserAction,
     CheckIn,
+    CommentReaction,
     CustomField,
     DashboardWidget,
     ExecutionCheckpoint,
@@ -27,6 +29,7 @@ from teb.models import (
     Integration,
     MessagingConfig,
     Milestone,
+    Notification,
     NotificationPreference,
     NudgeEvent,
     OutcomeMetric,
@@ -47,6 +50,8 @@ from teb.models import (
     UserProfile,
     UserXP,
     WebhookConfig,
+    Workspace,
+    WorkspaceMember,
 )
 
 _DB_PATH: Optional[str] = None
@@ -895,6 +900,69 @@ def _run_migrations(con: sqlite3.Connection) -> None:
         )
     """)
     con.execute("CREATE INDEX IF NOT EXISTS idx_widgets_user ON dashboard_widgets(user_id)")
+
+    # ─── Phase 2: Collaboration Tables ───────────────────────────────────
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS workspaces (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            name        TEXT NOT NULL,
+            owner_id    INTEGER NOT NULL,
+            description TEXT DEFAULT '',
+            invite_code TEXT DEFAULT '',
+            plan        TEXT DEFAULT 'free',
+            created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS workspace_members (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            workspace_id INTEGER NOT NULL,
+            user_id      INTEGER NOT NULL,
+            role         TEXT DEFAULT 'member',
+            joined_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    con.execute("CREATE INDEX IF NOT EXISTS idx_ws_members_ws ON workspace_members(workspace_id)")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_ws_members_user ON workspace_members(user_id)")
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS notifications (
+            id                INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id           INTEGER NOT NULL,
+            title             TEXT NOT NULL,
+            body              TEXT DEFAULT '',
+            notification_type TEXT DEFAULT 'info',
+            source_type       TEXT DEFAULT '',
+            source_id         INTEGER,
+            read              INTEGER DEFAULT 0,
+            created_at        TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    con.execute("CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id)")
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS activity_feed (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id      INTEGER NOT NULL,
+            action       TEXT NOT NULL,
+            entity_type  TEXT NOT NULL,
+            entity_id    INTEGER NOT NULL,
+            entity_title TEXT DEFAULT '',
+            details      TEXT DEFAULT '',
+            workspace_id INTEGER,
+            goal_id      INTEGER,
+            created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    con.execute("CREATE INDEX IF NOT EXISTS idx_activity_user ON activity_feed(user_id)")
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS comment_reactions (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            comment_id INTEGER NOT NULL,
+            user_id    INTEGER NOT NULL,
+            emoji      TEXT DEFAULT '👍',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    con.execute("CREATE INDEX IF NOT EXISTS idx_reactions_comment ON comment_reactions(comment_id)")
 
 
 # ─── Credential Encryption ───────────────────────────────────────────────────
@@ -4329,5 +4397,274 @@ def _row_to_widget(row: sqlite3.Row) -> DashboardWidget:
         id=row["id"], user_id=row["user_id"], widget_type=row["widget_type"],
         position=row["position"], config_json=row["config_json"],
         enabled=bool(row["enabled"]),
+        created_at=datetime.fromisoformat(row["created_at"]),
+    )
+
+
+# ─── Phase 2: Workspace CRUD ────────────────────────────────────────────────
+
+@_with_retry
+def create_workspace(ws: Workspace) -> Workspace:
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        cur = con.execute(
+            "INSERT INTO workspaces (name, owner_id, description, invite_code, plan, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (ws.name, ws.owner_id, ws.description, ws.invite_code, ws.plan, now),
+        )
+        ws.id = cur.lastrowid
+        ws.created_at = datetime.fromisoformat(now)
+    return ws
+
+
+def get_workspace(ws_id: int) -> Optional[Workspace]:
+    with _conn() as con:
+        row = con.execute("SELECT * FROM workspaces WHERE id = ?", (ws_id,)).fetchone()
+    return _row_to_workspace(row) if row else None
+
+
+def list_user_workspaces(user_id: int) -> List[Workspace]:
+    with _conn() as con:
+        rows = con.execute(
+            "SELECT w.* FROM workspaces w "
+            "JOIN workspace_members wm ON w.id = wm.workspace_id "
+            "WHERE wm.user_id = ? ORDER BY w.created_at DESC",
+            (user_id,),
+        ).fetchall()
+    return [_row_to_workspace(r) for r in rows]
+
+
+@_with_retry
+def add_workspace_member(member: WorkspaceMember) -> WorkspaceMember:
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        cur = con.execute(
+            "INSERT INTO workspace_members (workspace_id, user_id, role, joined_at) "
+            "VALUES (?, ?, ?, ?)",
+            (member.workspace_id, member.user_id, member.role, now),
+        )
+        member.id = cur.lastrowid
+        member.joined_at = datetime.fromisoformat(now)
+    return member
+
+
+def list_workspace_members(ws_id: int) -> List[WorkspaceMember]:
+    with _conn() as con:
+        rows = con.execute(
+            "SELECT * FROM workspace_members WHERE workspace_id = ? ORDER BY joined_at ASC",
+            (ws_id,),
+        ).fetchall()
+    return [_row_to_workspace_member(r) for r in rows]
+
+
+@_with_retry
+def remove_workspace_member(ws_id: int, user_id: int) -> bool:
+    with _conn() as con:
+        cur = con.execute(
+            "DELETE FROM workspace_members WHERE workspace_id = ? AND user_id = ?",
+            (ws_id, user_id),
+        )
+        return cur.rowcount > 0
+
+
+def get_workspace_by_invite_code(code: str) -> Optional[Workspace]:
+    with _conn() as con:
+        row = con.execute(
+            "SELECT * FROM workspaces WHERE invite_code = ?", (code,)
+        ).fetchone()
+    return _row_to_workspace(row) if row else None
+
+
+def _row_to_workspace(row: sqlite3.Row) -> Workspace:
+    return Workspace(
+        id=row["id"],
+        name=row["name"],
+        owner_id=row["owner_id"],
+        description=row["description"],
+        invite_code=row["invite_code"],
+        plan=row["plan"],
+        created_at=datetime.fromisoformat(row["created_at"]),
+    )
+
+
+def _row_to_workspace_member(row: sqlite3.Row) -> WorkspaceMember:
+    return WorkspaceMember(
+        id=row["id"],
+        workspace_id=row["workspace_id"],
+        user_id=row["user_id"],
+        role=row["role"],
+        joined_at=datetime.fromisoformat(row["joined_at"]),
+    )
+
+
+# ─── Phase 2: Notifications CRUD ────────────────────────────────────────────
+
+@_with_retry
+def create_notification(notif: Notification) -> Notification:
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        cur = con.execute(
+            "INSERT INTO notifications (user_id, title, body, notification_type, source_type, source_id, read, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (notif.user_id, notif.title, notif.body, notif.notification_type,
+             notif.source_type, notif.source_id, int(notif.read), now),
+        )
+        notif.id = cur.lastrowid
+        notif.created_at = datetime.fromisoformat(now)
+    return notif
+
+
+def list_user_notifications(user_id: int, unread_only: bool = False, limit: int = 50) -> List[Notification]:
+    query = "SELECT * FROM notifications WHERE user_id = ?"
+    params: list = [user_id]
+    if unread_only:
+        query += " AND read = 0"
+    query += " ORDER BY created_at DESC LIMIT ?"
+    params.append(limit)
+    with _conn() as con:
+        rows = con.execute(query, params).fetchall()
+    return [_row_to_notification(r) for r in rows]
+
+
+@_with_retry
+def mark_notification_read(notif_id: int, user_id: int) -> bool:
+    with _conn() as con:
+        cur = con.execute(
+            "UPDATE notifications SET read = 1 WHERE id = ? AND user_id = ?",
+            (notif_id, user_id),
+        )
+        return cur.rowcount > 0
+
+
+@_with_retry
+def mark_all_notifications_read(user_id: int) -> int:
+    with _conn() as con:
+        cur = con.execute(
+            "UPDATE notifications SET read = 1 WHERE user_id = ? AND read = 0",
+            (user_id,),
+        )
+        return cur.rowcount
+
+
+def count_unread_notifications(user_id: int) -> int:
+    with _conn() as con:
+        row = con.execute(
+            "SELECT COUNT(*) as cnt FROM notifications WHERE user_id = ? AND read = 0",
+            (user_id,),
+        ).fetchone()
+    return row["cnt"] if row else 0
+
+
+def _row_to_notification(row: sqlite3.Row) -> Notification:
+    return Notification(
+        id=row["id"],
+        user_id=row["user_id"],
+        title=row["title"],
+        body=row["body"],
+        notification_type=row["notification_type"],
+        source_type=row["source_type"],
+        source_id=row["source_id"],
+        read=bool(row["read"]),
+        created_at=datetime.fromisoformat(row["created_at"]),
+    )
+
+
+# ─── Phase 2: Activity Feed CRUD ────────────────────────────────────────────
+
+@_with_retry
+def create_activity_entry(entry: ActivityFeedEntry) -> ActivityFeedEntry:
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        cur = con.execute(
+            "INSERT INTO activity_feed (user_id, action, entity_type, entity_id, entity_title, details, workspace_id, goal_id, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (entry.user_id, entry.action, entry.entity_type, entry.entity_id,
+             entry.entity_title, entry.details, entry.workspace_id, entry.goal_id, now),
+        )
+        entry.id = cur.lastrowid
+        entry.created_at = datetime.fromisoformat(now)
+    return entry
+
+
+def list_activity_feed(
+    user_id: Optional[int] = None,
+    goal_id: Optional[int] = None,
+    workspace_id: Optional[int] = None,
+    limit: int = 50,
+) -> List[ActivityFeedEntry]:
+    query = "SELECT * FROM activity_feed WHERE 1=1"
+    params: list = []
+    if user_id is not None:
+        query += " AND user_id = ?"
+        params.append(user_id)
+    if goal_id is not None:
+        query += " AND goal_id = ?"
+        params.append(goal_id)
+    if workspace_id is not None:
+        query += " AND workspace_id = ?"
+        params.append(workspace_id)
+    query += " ORDER BY created_at DESC LIMIT ?"
+    params.append(limit)
+    with _conn() as con:
+        rows = con.execute(query, params).fetchall()
+    return [_row_to_activity_entry(r) for r in rows]
+
+
+def _row_to_activity_entry(row: sqlite3.Row) -> ActivityFeedEntry:
+    return ActivityFeedEntry(
+        id=row["id"],
+        user_id=row["user_id"],
+        action=row["action"],
+        entity_type=row["entity_type"],
+        entity_id=row["entity_id"],
+        entity_title=row["entity_title"],
+        details=row["details"],
+        workspace_id=row["workspace_id"],
+        goal_id=row["goal_id"],
+        created_at=datetime.fromisoformat(row["created_at"]),
+    )
+
+
+# ─── Phase 2: Comment Reactions CRUD ────────────────────────────────────────
+
+@_with_retry
+def add_comment_reaction(reaction: CommentReaction) -> CommentReaction:
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        cur = con.execute(
+            "INSERT INTO comment_reactions (comment_id, user_id, emoji, created_at) "
+            "VALUES (?, ?, ?, ?)",
+            (reaction.comment_id, reaction.user_id, reaction.emoji, now),
+        )
+        reaction.id = cur.lastrowid
+        reaction.created_at = datetime.fromisoformat(now)
+    return reaction
+
+
+@_with_retry
+def remove_comment_reaction(comment_id: int, user_id: int, emoji: str) -> bool:
+    with _conn() as con:
+        cur = con.execute(
+            "DELETE FROM comment_reactions WHERE comment_id = ? AND user_id = ? AND emoji = ?",
+            (comment_id, user_id, emoji),
+        )
+        return cur.rowcount > 0
+
+
+def list_comment_reactions(comment_id: int) -> List[CommentReaction]:
+    with _conn() as con:
+        rows = con.execute(
+            "SELECT * FROM comment_reactions WHERE comment_id = ? ORDER BY created_at ASC",
+            (comment_id,),
+        ).fetchall()
+    return [_row_to_comment_reaction(r) for r in rows]
+
+
+def _row_to_comment_reaction(row: sqlite3.Row) -> CommentReaction:
+    return CommentReaction(
+        id=row["id"],
+        comment_id=row["comment_id"],
+        user_id=row["user_id"],
+        emoji=row["emoji"],
         created_at=datetime.fromisoformat(row["created_at"]),
     )

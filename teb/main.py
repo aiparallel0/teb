@@ -20,12 +20,13 @@ from pydantic import BaseModel
 
 from teb import agents, auth, browser, config, decomposer, deployer, executor, integrations, messaging, provisioning, storage, transcribe
 from teb.models import (
-    AgentGoalMemory, ApiCredential, AuditEvent, BrowserAction, CheckIn,
-    CustomField, DashboardWidget, ExecutionLog, Goal, GoalCollaborator,
-    GoalTemplate, MessagingConfig, Milestone, NotificationPreference,
+    ActivityFeedEntry, AgentGoalMemory, ApiCredential, AuditEvent, BrowserAction, CheckIn,
+    CommentReaction, CustomField, DashboardWidget, ExecutionLog, Goal, GoalCollaborator,
+    GoalTemplate, MessagingConfig, Milestone, Notification, NotificationPreference,
     NudgeEvent, OutcomeMetric, PersonalApiKey, PluginManifest,
     ProgressSnapshot, RecurrenceRule, SpendingBudget, SpendingRequest,
     Task, TaskArtifact, TaskBlocker, TaskComment, TimeEntry, WebhookConfig,
+    Workspace, WorkspaceMember,
 )
 
 # ─── Logging ──────────────────────────────────────────────────────────────────
@@ -4718,6 +4719,239 @@ async def delete_widget(widget_id: int, request: Request):
     uid = _require_user(request)
     storage.delete_dashboard_widget(widget_id, uid)
     return {"deleted": True}
+
+
+# ─── Phase 2: Workspace endpoints ────────────────────────────────────────────
+
+@app.post("/api/workspaces", status_code=201)
+async def create_workspace_endpoint(request: Request):
+    """Create a new workspace and auto-add the owner as a member."""
+    uid = _require_user(request)
+    _check_api_rate_limit(request)
+    body = await request.json()
+    name = str(body.get("name", "")).strip()
+    if not name:
+        raise HTTPException(status_code=422, detail="name is required")
+    invite_code = secrets.token_urlsafe(8)
+    ws = Workspace(
+        name=name,
+        owner_id=uid,
+        description=str(body.get("description", "")),
+        invite_code=invite_code,
+        plan=body.get("plan", "free"),
+    )
+    ws = storage.create_workspace(ws)
+    member = WorkspaceMember(workspace_id=ws.id, user_id=uid, role="owner")
+    storage.add_workspace_member(member)
+    storage.create_activity_entry(ActivityFeedEntry(
+        user_id=uid, action="created", entity_type="workspace",
+        entity_id=ws.id, entity_title=ws.name, workspace_id=ws.id,
+    ))
+    return ws.to_dict()
+
+
+@app.get("/api/workspaces")
+async def list_workspaces_endpoint(request: Request):
+    """List workspaces for the current user."""
+    uid = _require_user(request)
+    _check_api_rate_limit(request)
+    return [w.to_dict() for w in storage.list_user_workspaces(uid)]
+
+
+@app.get("/api/workspaces/{ws_id}")
+async def get_workspace_endpoint(ws_id: int, request: Request):
+    """Get workspace details."""
+    uid = _require_user(request)
+    _check_api_rate_limit(request)
+    ws = storage.get_workspace(ws_id)
+    if not ws:
+        raise HTTPException(status_code=404, detail="Workspace not found")
+    members = storage.list_workspace_members(ws_id)
+    member_ids = [m.user_id for m in members]
+    if uid not in member_ids:
+        raise HTTPException(status_code=403, detail="Not a member of this workspace")
+    return ws.to_dict()
+
+
+@app.post("/api/workspaces/{ws_id}/members", status_code=201)
+async def add_workspace_member_endpoint(ws_id: int, request: Request):
+    """Add a member to a workspace."""
+    uid = _require_user(request)
+    _check_api_rate_limit(request)
+    ws = storage.get_workspace(ws_id)
+    if not ws:
+        raise HTTPException(status_code=404, detail="Workspace not found")
+    members = storage.list_workspace_members(ws_id)
+    caller_member = next((m for m in members if m.user_id == uid), None)
+    if not caller_member or caller_member.role not in ("owner", "admin"):
+        raise HTTPException(status_code=403, detail="Only owners and admins can add members")
+    body = await request.json()
+    new_user_id = body.get("user_id")
+    if not new_user_id:
+        raise HTTPException(status_code=422, detail="user_id is required")
+    if any(m.user_id == new_user_id for m in members):
+        raise HTTPException(status_code=409, detail="User is already a member")
+    role = body.get("role", "member")
+    if role not in ("admin", "member", "viewer"):
+        raise HTTPException(status_code=422, detail="Invalid role")
+    member = WorkspaceMember(workspace_id=ws_id, user_id=new_user_id, role=role)
+    member = storage.add_workspace_member(member)
+    storage.create_notification(Notification(
+        user_id=new_user_id, title=f"You were added to workspace '{ws.name}'",
+        notification_type="info", source_type="workspace", source_id=ws_id,
+    ))
+    return member.to_dict()
+
+
+@app.get("/api/workspaces/{ws_id}/members")
+async def list_workspace_members_endpoint(ws_id: int, request: Request):
+    """List members of a workspace."""
+    uid = _require_user(request)
+    _check_api_rate_limit(request)
+    ws = storage.get_workspace(ws_id)
+    if not ws:
+        raise HTTPException(status_code=404, detail="Workspace not found")
+    members = storage.list_workspace_members(ws_id)
+    if not any(m.user_id == uid for m in members):
+        raise HTTPException(status_code=403, detail="Not a member of this workspace")
+    return [m.to_dict() for m in members]
+
+
+@app.delete("/api/workspaces/{ws_id}/members/{member_uid}")
+async def remove_workspace_member_endpoint(ws_id: int, member_uid: int, request: Request):
+    """Remove a member from a workspace."""
+    uid = _require_user(request)
+    _check_api_rate_limit(request)
+    ws = storage.get_workspace(ws_id)
+    if not ws:
+        raise HTTPException(status_code=404, detail="Workspace not found")
+    members = storage.list_workspace_members(ws_id)
+    caller_member = next((m for m in members if m.user_id == uid), None)
+    if not caller_member or caller_member.role not in ("owner", "admin"):
+        raise HTTPException(status_code=403, detail="Only owners and admins can remove members")
+    if member_uid == ws.owner_id:
+        raise HTTPException(status_code=400, detail="Cannot remove workspace owner")
+    removed = storage.remove_workspace_member(ws_id, member_uid)
+    if not removed:
+        raise HTTPException(status_code=404, detail="Member not found")
+    return {"deleted": True}
+
+
+@app.post("/api/workspaces/join")
+async def join_workspace_endpoint(request: Request):
+    """Join a workspace by invite code."""
+    uid = _require_user(request)
+    _check_api_rate_limit(request)
+    body = await request.json()
+    code = str(body.get("invite_code", "")).strip()
+    if not code:
+        raise HTTPException(status_code=422, detail="invite_code is required")
+    ws = storage.get_workspace_by_invite_code(code)
+    if not ws:
+        raise HTTPException(status_code=404, detail="Invalid invite code")
+    members = storage.list_workspace_members(ws.id)
+    if any(m.user_id == uid for m in members):
+        raise HTTPException(status_code=409, detail="Already a member")
+    member = WorkspaceMember(workspace_id=ws.id, user_id=uid, role="member")
+    member = storage.add_workspace_member(member)
+    storage.create_activity_entry(ActivityFeedEntry(
+        user_id=uid, action="created", entity_type="workspace",
+        entity_id=ws.id, entity_title=f"Joined '{ws.name}'", workspace_id=ws.id,
+    ))
+    return member.to_dict()
+
+
+# ─── Phase 2: Notification endpoints ─────────────────────────────────────────
+
+@app.get("/api/notifications")
+async def list_notifications_endpoint(request: Request,
+                                      unread_only: bool = Query(False),
+                                      limit: int = Query(50)):
+    """List notifications for the current user."""
+    uid = _require_user(request)
+    _check_api_rate_limit(request)
+    return [n.to_dict() for n in storage.list_user_notifications(uid, unread_only=unread_only, limit=limit)]
+
+
+@app.post("/api/notifications/{notif_id}/read")
+async def mark_notification_read_endpoint(notif_id: int, request: Request):
+    """Mark a single notification as read."""
+    uid = _require_user(request)
+    _check_api_rate_limit(request)
+    ok = storage.mark_notification_read(notif_id, uid)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Notification not found")
+    return {"read": True}
+
+
+@app.post("/api/notifications/read-all")
+async def mark_all_notifications_read_endpoint(request: Request):
+    """Mark all notifications as read."""
+    uid = _require_user(request)
+    _check_api_rate_limit(request)
+    count = storage.mark_all_notifications_read(uid)
+    return {"marked": count}
+
+
+@app.get("/api/notifications/count")
+async def count_notifications_endpoint(request: Request):
+    """Get unread notification count."""
+    uid = _require_user(request)
+    _check_api_rate_limit(request)
+    return {"unread": storage.count_unread_notifications(uid)}
+
+
+# ─── Phase 2: Activity Feed endpoint ─────────────────────────────────────────
+
+@app.get("/api/activity")
+async def list_activity_endpoint(request: Request,
+                                 goal_id: Optional[int] = Query(None),
+                                 workspace_id: Optional[int] = Query(None),
+                                 limit: int = Query(50)):
+    """List activity feed entries."""
+    uid = _require_user(request)
+    _check_api_rate_limit(request)
+    return [e.to_dict() for e in storage.list_activity_feed(
+        user_id=uid, goal_id=goal_id, workspace_id=workspace_id, limit=limit,
+    )]
+
+
+# ─── Phase 2: Comment Reactions endpoints ─────────────────────────────────────
+
+@app.post("/api/comments/{comment_id}/reactions", status_code=201)
+async def add_comment_reaction_endpoint(comment_id: int, request: Request):
+    """Add an emoji reaction to a comment."""
+    uid = _require_user(request)
+    _check_api_rate_limit(request)
+    body = await request.json()
+    emoji = str(body.get("emoji", "👍")).strip()
+    if not emoji:
+        raise HTTPException(status_code=422, detail="emoji is required")
+    existing = storage.list_comment_reactions(comment_id)
+    if any(r.user_id == uid and r.emoji == emoji for r in existing):
+        raise HTTPException(status_code=409, detail="Reaction already exists")
+    reaction = CommentReaction(comment_id=comment_id, user_id=uid, emoji=emoji)
+    reaction = storage.add_comment_reaction(reaction)
+    return reaction.to_dict()
+
+
+@app.delete("/api/comments/{comment_id}/reactions/{emoji}")
+async def remove_comment_reaction_endpoint(comment_id: int, emoji: str, request: Request):
+    """Remove an emoji reaction from a comment."""
+    uid = _require_user(request)
+    _check_api_rate_limit(request)
+    removed = storage.remove_comment_reaction(comment_id, uid, emoji)
+    if not removed:
+        raise HTTPException(status_code=404, detail="Reaction not found")
+    return {"deleted": True}
+
+
+@app.get("/api/comments/{comment_id}/reactions")
+async def list_comment_reactions_endpoint(comment_id: int, request: Request):
+    """List reactions on a comment."""
+    uid = _require_user(request)
+    _check_api_rate_limit(request)
+    return [r.to_dict() for r in storage.list_comment_reactions(comment_id)]
 
 
 # ─── ASGI app for deployment ──────────────────────────────────────────────────

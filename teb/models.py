@@ -1122,3 +1122,122 @@ class DashboardWidget:
             "enabled": self.enabled,
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }
+
+
+# ─── Phase 2: Collaboration ────────────────────────────────────────────────
+
+@dataclass
+class Workspace:
+    """Team workspace container."""
+    name: str
+    owner_id: int
+    description: str = ""
+    invite_code: str = ""
+    plan: str = "free"                 # free | pro | enterprise
+    id: Optional[int] = None
+    created_at: Optional[datetime] = None
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "name": self.name,
+            "owner_id": self.owner_id,
+            "description": self.description,
+            "invite_code": self.invite_code,
+            "plan": self.plan,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+@dataclass
+class WorkspaceMember:
+    """User membership in a workspace."""
+    workspace_id: int
+    user_id: int
+    role: str = "member"               # owner | admin | member | viewer
+    id: Optional[int] = None
+    joined_at: Optional[datetime] = None
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "workspace_id": self.workspace_id,
+            "user_id": self.user_id,
+            "role": self.role,
+            "joined_at": self.joined_at.isoformat() if self.joined_at else None,
+        }
+
+
+@dataclass
+class Notification:
+    """In-app notification for a user."""
+    user_id: int
+    title: str
+    body: str = ""
+    notification_type: str = "info"    # info | mention | assignment | comment | completion
+    source_type: str = ""              # task | goal | comment | workspace
+    source_id: Optional[int] = None
+    read: bool = False
+    id: Optional[int] = None
+    created_at: Optional[datetime] = None
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "user_id": self.user_id,
+            "title": self.title,
+            "body": self.body,
+            "notification_type": self.notification_type,
+            "source_type": self.source_type,
+            "source_id": self.source_id,
+            "read": self.read,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+@dataclass
+class ActivityFeedEntry:
+    """Activity feed entry for team visibility."""
+    user_id: int
+    action: str                        # created | updated | completed | commented | assigned
+    entity_type: str                   # goal | task | comment | workspace
+    entity_id: int
+    entity_title: str = ""
+    details: str = ""
+    workspace_id: Optional[int] = None
+    goal_id: Optional[int] = None
+    id: Optional[int] = None
+    created_at: Optional[datetime] = None
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "user_id": self.user_id,
+            "action": self.action,
+            "entity_type": self.entity_type,
+            "entity_id": self.entity_id,
+            "entity_title": self.entity_title,
+            "details": self.details,
+            "workspace_id": self.workspace_id,
+            "goal_id": self.goal_id,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+@dataclass
+class CommentReaction:
+    """Emoji reaction on a comment."""
+    comment_id: int
+    user_id: int
+    emoji: str = "👍"
+    id: Optional[int] = None
+    created_at: Optional[datetime] = None
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "comment_id": self.comment_id,
+            "user_id": self.user_id,
+            "emoji": self.emoji,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
