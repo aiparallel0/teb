@@ -2740,7 +2740,7 @@ body.sidebar-collapsed .sidebar-collapse-btn { transform: rotate(180deg); }
 .sidebar-link.active::before {
   content: '';
   position: absolute;
-  left: 0; top: 4px; bottom: 4px;
+  left: 0; top: var(--sp-xs); bottom: var(--sp-xs);
   width: 3px;
   background: var(--gold-400);
   border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
@@ -3031,7 +3031,7 @@ body.sidebar-collapsed .batch-bar { left: 60px; }
 .mobile-nav-item {
   display: flex; flex-direction: column; align-items: center; gap: 2px;
   font-size: .65rem; color: var(--text-secondary); text-decoration: none;
-  padding: 4px 8px; transition: color var(--duration-fast);
+  padding: var(--sp-xs) var(--sp-md); transition: color var(--duration-fast);
 }
 .mobile-nav-item.active { color: var(--primary); }
 .mobile-nav-icon { display: flex; align-items: center; justify-content: center; width: 24px; height: 24px; }
