@@ -964,6 +964,32 @@ def _run_migrations(con: sqlite3.Connection) -> None:
     """)
     con.execute("CREATE INDEX IF NOT EXISTS idx_reactions_comment ON comment_reactions(comment_id)")
 
+    # ── Phase 6: Enterprise Security tables ──
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS user_sessions (
+            id             INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id        INTEGER NOT NULL,
+            session_token  TEXT NOT NULL,
+            ip_address     TEXT DEFAULT '',
+            user_agent     TEXT DEFAULT '',
+            is_active      INTEGER DEFAULT 1,
+            last_activity  TEXT DEFAULT '',
+            created_at     TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    con.execute("CREATE INDEX IF NOT EXISTS idx_sessions_user ON user_sessions(user_id)")
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS two_factor_config (
+            id                INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id           INTEGER NOT NULL UNIQUE,
+            totp_secret       TEXT DEFAULT '',
+            is_enabled        INTEGER DEFAULT 0,
+            backup_codes_hash TEXT DEFAULT '',
+            created_at        TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    con.execute("CREATE INDEX IF NOT EXISTS idx_2fa_user ON two_factor_config(user_id)")
+
 
 # ─── Credential Encryption ───────────────────────────────────────────────────
 
