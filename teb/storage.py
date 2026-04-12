@@ -4694,3 +4694,109 @@ def _row_to_comment_reaction(row: sqlite3.Row) -> CommentReaction:
         emoji=row["emoji"],
         created_at=datetime.fromisoformat(row["created_at"]),
     )
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Phase 6 — Enterprise: Sessions & 2FA CRUD
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def create_session(session) -> "UserSession":
+    from teb.models import UserSession
+    with _conn() as con:
+        cur = con.execute(
+            "INSERT INTO user_sessions (user_id, session_token, ip_address, user_agent, is_active, last_activity) VALUES (?,?,?,?,1,?)",
+            (session.user_id, session.session_token, session.ip_address, session.user_agent, session.last_activity),
+        )
+        session.id = cur.lastrowid
+    return session
+
+
+def list_user_sessions(user_id: int) -> list:
+    from teb.models import UserSession
+    with _conn() as con:
+        rows = con.execute(
+            "SELECT * FROM user_sessions WHERE user_id = ? AND is_active = 1 ORDER BY created_at DESC",
+            (user_id,),
+        ).fetchall()
+    return [UserSession(
+        id=r["id"], user_id=r["user_id"], session_token=r["session_token"],
+        ip_address=r["ip_address"], user_agent=r["user_agent"],
+        is_active=bool(r["is_active"]), last_activity=r["last_activity"] or "",
+        created_at=datetime.fromisoformat(r["created_at"]),
+    ) for r in rows]
+
+
+def revoke_session(session_id: int, user_id: int) -> bool:
+    with _conn() as con:
+        cur = con.execute(
+            "UPDATE user_sessions SET is_active = 0 WHERE id = ? AND user_id = ?",
+            (session_id, user_id),
+        )
+    return cur.rowcount > 0
+
+
+def revoke_all_sessions(user_id: int, except_session_id: int = None) -> int:
+    with _conn() as con:
+        if except_session_id:
+            cur = con.execute(
+                "UPDATE user_sessions SET is_active = 0 WHERE user_id = ? AND id != ?",
+                (user_id, except_session_id),
+            )
+        else:
+            cur = con.execute(
+                "UPDATE user_sessions SET is_active = 0 WHERE user_id = ?",
+                (user_id,),
+            )
+    return cur.rowcount
+
+
+def update_session_activity(session_id: int) -> None:
+    with _conn() as con:
+        con.execute(
+            "UPDATE user_sessions SET last_activity = ? WHERE id = ?",
+            (datetime.now().isoformat(), session_id),
+        )
+
+
+def get_two_factor_config(user_id: int):
+    from teb.models import TwoFactorConfig
+    with _conn() as con:
+        row = con.execute(
+            "SELECT * FROM two_factor_config WHERE user_id = ?", (user_id,),
+        ).fetchone()
+    if not row:
+        return None
+    return TwoFactorConfig(
+        id=row["id"], user_id=row["user_id"], totp_secret=row["totp_secret"],
+        is_enabled=bool(row["is_enabled"]), backup_codes_hash=row["backup_codes_hash"] or "",
+        created_at=datetime.fromisoformat(row["created_at"]),
+    )
+
+
+def save_two_factor_config(config) -> "TwoFactorConfig":
+    with _conn() as con:
+        existing = con.execute(
+            "SELECT id FROM two_factor_config WHERE user_id = ?", (config.user_id,),
+        ).fetchone()
+        if existing:
+            con.execute(
+                "UPDATE two_factor_config SET totp_secret=?, is_enabled=?, backup_codes_hash=? WHERE user_id=?",
+                (config.totp_secret, int(config.is_enabled), config.backup_codes_hash, config.user_id),
+            )
+            config.id = existing["id"]
+        else:
+            cur = con.execute(
+                "INSERT INTO two_factor_config (user_id, totp_secret, is_enabled, backup_codes_hash) VALUES (?,?,?,?)",
+                (config.user_id, config.totp_secret, int(config.is_enabled), config.backup_codes_hash),
+            )
+            config.id = cur.lastrowid
+    return config
+
+
+def disable_two_factor(user_id: int) -> bool:
+    with _conn() as con:
+        cur = con.execute(
+            "UPDATE two_factor_config SET is_enabled = 0, totp_secret = '' WHERE user_id = ?",
+            (user_id,),
+        )
+    return cur.rowcount > 0

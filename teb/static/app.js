@@ -3134,3 +3134,29 @@ function checkSessionValidity() {
 // Check session every 60 seconds
 setInterval(checkSessionValidity, 60000);
 checkSessionValidity();
+
+/* ── Phase 8 Polish: Confetti & Streak ────────────────────────────── */
+function triggerConfetti(){
+  if(window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  const colors=['#6c63ff','#ff6584','#43e97b','#f9d423','#38f9d7','#fa709a'];
+  for(let i=0;i<60;i++){
+    const p=document.createElement('div');
+    p.className='confetti-piece';
+    p.style.left=Math.random()*100+'vw';
+    p.style.top='-10px';
+    p.style.background=colors[Math.floor(Math.random()*colors.length)];
+    p.style.animationDelay=Math.random()*0.5+'s';
+    p.style.width=(6+Math.random()*8)+'px';
+    p.style.height=(6+Math.random()*8)+'px';
+    document.body.appendChild(p);
+    setTimeout(()=>p.remove(),2500);
+  }
+}
+function renderStreak(container,tasks){
+  if(!container)return;
+  const days=new Set();
+  (tasks||[]).forEach(t=>{if(t.status==='done'&&t.updated_at)days.add(t.updated_at.slice(0,10))});
+  let streak=0,d=new Date();
+  while(days.has(d.toISOString().slice(0,10))){streak++;d.setDate(d.getDate()-1)}
+  container.innerHTML='<div class="streak-badge"><span class="streak-icon">🔥</span><span class="streak-count">'+streak+'</span> day streak</div>';
+}

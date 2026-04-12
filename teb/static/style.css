@@ -3151,3 +3151,19 @@ body.sidebar-collapsed .batch-bar { left: 60px; }
 
 [data-theme="dark"] .workload-bar-wrap { background: var(--bg-alt); }
 [data-theme="dark"] .workload-header h3 { color: var(--text); }
+
+/* ═══ Phase 8: Polish & Accessibility ═══════════════════════════════════════ */
+.streak-badge{display:flex;align-items:center;gap:6px;padding:6px 12px;font-size:var(--text-sm,0.875rem);color:var(--accent,#6c63ff)}
+.streak-badge .streak-icon{font-size:1.2rem}
+.streak-count{font-weight:600}
+.confetti-piece{position:fixed;width:10px;height:10px;z-index:9999;pointer-events:none;border-radius:2px;animation:confettiFall 2s ease-in forwards}
+@keyframes confettiFall{0%{opacity:1;transform:translateY(0) rotate(0deg)}100%{opacity:0;transform:translateY(100vh) rotate(720deg)}}
+@media(prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important}.confetti-piece{display:none}}
+@media(forced-colors:active){.sidebar{border-right:2px solid CanvasText}.btn-primary{border:2px solid ButtonText}.task-card{border:1px solid CanvasText}}
+:focus-visible{outline:2px solid var(--accent,#6c63ff);outline-offset:2px}
+.sidebar-link:focus-visible{background:var(--primary-soft,rgba(108,99,255,.1))}
+.task-card:focus-visible{box-shadow:0 0 0 3px rgba(108,99,255,.3)}
+.skip-link{position:absolute;top:-40px;left:0;z-index:9999;padding:8px 16px;background:var(--primary,#6c63ff);color:#fff;font-size:var(--text-sm,0.875rem)}
+.skip-link:focus{top:0}
+html.font-lg{font-size:18px}
+html.font-xl{font-size:20px}

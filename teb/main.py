@@ -5083,6 +5083,101 @@ class _PrefixMiddleware:
         await self._inner(scope, receive, send)
 
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# Phase 6 — Enterprise: 2FA & Session Management
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@app.post("/api/auth/2fa/setup")
+async def setup_2fa(request: Request):
+    """Generate TOTP secret and backup codes for 2FA setup."""
+    _check_api_rate_limit(request)
+    uid = _require_user(request)
+    from teb import totp as _totp  # noqa: E402
+    existing = storage.get_two_factor_config(uid)
+    if existing and existing.is_enabled:
+        raise HTTPException(400, "2FA is already enabled")
+    secret = _totp.generate_secret()
+    backup_codes = _totp.generate_backup_codes()
+    import json as _json, hashlib as _hl
+    hashed = _json.dumps([_hl.sha256(c.encode()).hexdigest() for c in backup_codes])
+    from teb.models import TwoFactorConfig  # noqa: E402
+    cfg = TwoFactorConfig(user_id=uid, totp_secret=secret, is_enabled=False, backup_codes_hash=hashed)
+    storage.save_two_factor_config(cfg)
+    user = storage.get_user(uid)
+    email = user.email if user else "user@teb"
+    uri = _totp.get_totp_uri(secret, email)
+    return {"secret": secret, "uri": uri, "backup_codes": backup_codes}
+
+
+@app.post("/api/auth/2fa/verify")
+async def verify_2fa(request: Request):
+    """Verify TOTP code and enable 2FA."""
+    _check_api_rate_limit(request)
+    uid = _require_user(request)
+    body = await request.json()
+    code = body.get("code", "")
+    from teb import totp as _totp  # noqa: E402
+    cfg = storage.get_two_factor_config(uid)
+    if not cfg or not cfg.totp_secret:
+        raise HTTPException(400, "Run 2FA setup first")
+    if not _totp.verify_totp(cfg.totp_secret, code):
+        raise HTTPException(400, "Invalid TOTP code")
+    cfg.is_enabled = True
+    storage.save_two_factor_config(cfg)
+    return {"enabled": True}
+
+
+@app.post("/api/auth/2fa/disable")
+async def disable_2fa(request: Request):
+    """Disable 2FA (requires current TOTP code)."""
+    _check_api_rate_limit(request)
+    uid = _require_user(request)
+    body = await request.json()
+    code = body.get("code", "")
+    from teb import totp as _totp  # noqa: E402
+    cfg = storage.get_two_factor_config(uid)
+    if not cfg or not cfg.is_enabled:
+        raise HTTPException(400, "2FA is not enabled")
+    if not _totp.verify_totp(cfg.totp_secret, code):
+        raise HTTPException(400, "Invalid TOTP code")
+    storage.disable_two_factor(uid)
+    return {"enabled": False}
+
+
+@app.get("/api/auth/2fa/status")
+async def get_2fa_status(request: Request):
+    """Check 2FA status."""
+    uid = _require_user(request)
+    cfg = storage.get_two_factor_config(uid)
+    return {"enabled": bool(cfg and cfg.is_enabled)}
+
+
+@app.get("/api/auth/sessions")
+async def list_sessions(request: Request):
+    """List active sessions."""
+    uid = _require_user(request)
+    sessions = storage.list_user_sessions(uid)
+    return {"sessions": [s.to_dict() for s in sessions]}
+
+
+@app.delete("/api/auth/sessions/{session_id}")
+async def revoke_session_endpoint(session_id: int, request: Request):
+    """Revoke a specific session."""
+    uid = _require_user(request)
+    ok = storage.revoke_session(session_id, uid)
+    if not ok:
+        raise HTTPException(404, "Session not found")
+    return {"revoked": True}
+
+
+@app.delete("/api/auth/sessions")
+async def revoke_all_sessions_endpoint(request: Request):
+    """Revoke all other sessions."""
+    uid = _require_user(request)
+    count = storage.revoke_all_sessions(uid)
+    return {"revoked_count": count}
+
+
 if config.BASE_PATH:
     asgi_app = _PrefixMiddleware(app, config.BASE_PATH)
 else:
