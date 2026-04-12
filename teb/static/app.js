@@ -3567,3 +3567,276 @@ const DashboardBuilder = {
     }
   }
 };
+
+// ═══════════════════════════════════════════════════════════════════
+// Phase 8: Micro-interactions & Polish
+// ═══════════════════════════════════════════════════════════════════
+
+/* ── Level-Up Animation ─────────────────────────────────────────── */
+const LevelUp = {
+  XP_PER_LEVEL: 100,
+  _currentLevel: parseInt(localStorage.getItem('teb_level') || '1'),
+  _currentXP: parseInt(localStorage.getItem('teb_xp') || '0'),
+
+  addXP(amount) {
+    this._currentXP += amount;
+    while (this._currentXP >= this.XP_PER_LEVEL) {
+      this._currentXP -= this.XP_PER_LEVEL;
+      this._currentLevel++;
+      this.showAnimation(this._currentLevel);
+    }
+    localStorage.setItem('teb_level', this._currentLevel);
+    localStorage.setItem('teb_xp', this._currentXP);
+  },
+
+  showAnimation(level) {
+    if (document.querySelector('.levelup-overlay')) return;
+    const overlay = document.createElement('div');
+    overlay.className = 'levelup-overlay';
+    overlay.setAttribute('role', 'alert');
+    overlay.innerHTML = `
+      <div class="levelup-badge">
+        <div class="levelup-star">⭐</div>
+        <div class="levelup-text">Level Up!</div>
+        <div class="levelup-number">Level ${level}</div>
+      </div>`;
+    document.body.appendChild(overlay);
+    SoundFX.play('levelup');
+    setTimeout(() => overlay.classList.add('levelup-visible'), 50);
+    setTimeout(() => {
+      overlay.classList.remove('levelup-visible');
+      setTimeout(() => overlay.remove(), 400);
+    }, 2500);
+  },
+
+  getLevel() { return this._currentLevel; },
+  getXP() { return this._currentXP; }
+};
+
+/* ── Sound Effects ──────────────────────────────────────────────── */
+const SoundFX = {
+  _enabled: localStorage.getItem('teb_sounds') !== 'off',
+  _audioCtx: null,
+
+  toggle() {
+    this._enabled = !this._enabled;
+    localStorage.setItem('teb_sounds', this._enabled ? 'on' : 'off');
+    return this._enabled;
+  },
+
+  _getCtx() {
+    if (!this._audioCtx) {
+      try { this._audioCtx = new (window.AudioContext || window.webkitAudioContext)(); }
+      catch { return null; }
+    }
+    return this._audioCtx;
+  },
+
+  play(type) {
+    if (!this._enabled) return;
+    const ctx = this._getCtx();
+    if (!ctx) return;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    gain.gain.value = 0.15;
+
+    switch (type) {
+      case 'complete':
+        osc.frequency.setValueAtTime(523, ctx.currentTime);
+        osc.frequency.setValueAtTime(659, ctx.currentTime + 0.1);
+        osc.frequency.setValueAtTime(784, ctx.currentTime + 0.2);
+        gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.4);
+        osc.start(ctx.currentTime);
+        osc.stop(ctx.currentTime + 0.4);
+        break;
+      case 'notification':
+        osc.frequency.setValueAtTime(880, ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.2);
+        osc.start(ctx.currentTime);
+        osc.stop(ctx.currentTime + 0.2);
+        break;
+      case 'levelup':
+        osc.frequency.setValueAtTime(523, ctx.currentTime);
+        osc.frequency.setValueAtTime(659, ctx.currentTime + 0.15);
+        osc.frequency.setValueAtTime(784, ctx.currentTime + 0.3);
+        osc.frequency.setValueAtTime(1047, ctx.currentTime + 0.45);
+        gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.7);
+        osc.start(ctx.currentTime);
+        osc.stop(ctx.currentTime + 0.7);
+        break;
+      default:
+        osc.frequency.setValueAtTime(440, ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.15);
+        osc.start(ctx.currentTime);
+        osc.stop(ctx.currentTime + 0.15);
+    }
+  },
+
+  isEnabled() { return this._enabled; }
+};
+
+/* ── Contextual Tooltips (first-time hints) ─────────────────────── */
+const Tooltips = {
+  _seen: JSON.parse(localStorage.getItem('teb_tooltips_seen') || '[]'),
+
+  show(targetEl, message, id) {
+    if (this._seen.includes(id)) return;
+    const tip = document.createElement('div');
+    tip.className = 'contextual-tooltip';
+    tip.setAttribute('role', 'tooltip');
+    tip.innerHTML = `<span>${message}</span><button class="tooltip-dismiss" aria-label="Dismiss">✕</button>`;
+    document.body.appendChild(tip);
+
+    const rect = targetEl.getBoundingClientRect();
+    tip.style.top = (rect.bottom + 8) + 'px';
+    tip.style.left = Math.max(8, rect.left + rect.width / 2 - 120) + 'px';
+    requestAnimationFrame(() => tip.classList.add('tooltip-visible'));
+
+    tip.querySelector('.tooltip-dismiss').addEventListener('click', () => {
+      this._seen.push(id);
+      localStorage.setItem('teb_tooltips_seen', JSON.stringify(this._seen));
+      tip.classList.remove('tooltip-visible');
+      setTimeout(() => tip.remove(), 300);
+    });
+
+    // Auto-dismiss after 8 seconds
+    setTimeout(() => {
+      if (tip.parentNode) {
+        this._seen.push(id);
+        localStorage.setItem('teb_tooltips_seen', JSON.stringify(this._seen));
+        tip.classList.remove('tooltip-visible');
+        setTimeout(() => tip.remove(), 300);
+      }
+    }, 8000);
+  },
+
+  reset() {
+    this._seen = [];
+    localStorage.removeItem('teb_tooltips_seen');
+  }
+};
+
+/* ── High Contrast Mode ─────────────────────────────────────────── */
+const HighContrast = {
+  _active: localStorage.getItem('teb_high_contrast') === 'on',
+
+  init() {
+    if (this._active) document.documentElement.setAttribute('data-high-contrast', 'true');
+  },
+
+  toggle() {
+    this._active = !this._active;
+    if (this._active) {
+      document.documentElement.setAttribute('data-high-contrast', 'true');
+      localStorage.setItem('teb_high_contrast', 'on');
+    } else {
+      document.documentElement.removeAttribute('data-high-contrast');
+      localStorage.setItem('teb_high_contrast', 'off');
+    }
+    return this._active;
+  },
+
+  isActive() { return this._active; }
+};
+HighContrast.init();
+
+/* ── Virtual Scrolling ──────────────────────────────────────────── */
+const VirtualScroll = {
+  ITEM_HEIGHT: 48,
+  OVERSCAN: 5,
+
+  mount(container, items, renderItem) {
+    const totalHeight = items.length * this.ITEM_HEIGHT;
+    container.style.overflow = 'auto';
+    container.style.position = 'relative';
+    container.setAttribute('role', 'list');
+    container.setAttribute('aria-label', `List of ${items.length} items`);
+
+    const spacer = document.createElement('div');
+    spacer.style.height = totalHeight + 'px';
+    spacer.style.position = 'relative';
+    container.innerHTML = '';
+    container.appendChild(spacer);
+
+    const viewport = container.clientHeight || 400;
+    const visibleCount = Math.ceil(viewport / this.ITEM_HEIGHT);
+
+    const render = () => {
+      const scrollTop = container.scrollTop;
+      const startIdx = Math.max(0, Math.floor(scrollTop / this.ITEM_HEIGHT) - this.OVERSCAN);
+      const endIdx = Math.min(items.length, startIdx + visibleCount + 2 * this.OVERSCAN);
+
+      // Remove existing rendered items
+      spacer.querySelectorAll('.vs-item').forEach(el => el.remove());
+
+      for (let i = startIdx; i < endIdx; i++) {
+        const el = renderItem(items[i], i);
+        el.classList.add('vs-item');
+        el.style.position = 'absolute';
+        el.style.top = (i * this.ITEM_HEIGHT) + 'px';
+        el.style.left = '0';
+        el.style.right = '0';
+        el.style.height = this.ITEM_HEIGHT + 'px';
+        el.setAttribute('role', 'listitem');
+        spacer.appendChild(el);
+      }
+    };
+
+    container.addEventListener('scroll', render, { passive: true });
+    render();
+    return { refresh: render, destroy: () => container.removeEventListener('scroll', render) };
+  }
+};
+
+/* ── Screen Reader Live Region ──────────────────────────────────── */
+const A11y = {
+  _liveRegion: null,
+
+  init() {
+    if (this._liveRegion) return;
+    this._liveRegion = document.createElement('div');
+    this._liveRegion.setAttribute('role', 'status');
+    this._liveRegion.setAttribute('aria-live', 'polite');
+    this._liveRegion.setAttribute('aria-atomic', 'true');
+    this._liveRegion.className = 'sr-only';
+    document.body.appendChild(this._liveRegion);
+  },
+
+  announce(message) {
+    if (!this._liveRegion) this.init();
+    this._liveRegion.textContent = '';
+    requestAnimationFrame(() => { this._liveRegion.textContent = message; });
+  }
+};
+A11y.init();
+
+/* ── Lazy View Loading ──────────────────────────────────────────── */
+const LazyViews = {
+  _loaded: new Set(),
+
+  async load(viewName) {
+    if (this._loaded.has(viewName)) return true;
+    const base = window.__BASE_PATH__ || '';
+    const scripts = {
+      'mindmap': 'static/views/mindmap.js',
+      'kanban': 'static/views/kanban.js',
+      'gantt': 'static/views/gantt.js',
+      'table': 'static/views/table.js',
+      'timeline': 'static/views/timeline.js',
+      'calendar': 'static/views/calendar.js',
+      'workload': 'static/views/workload.js',
+      'charts': 'static/views/charts.js',
+    };
+    const src = scripts[viewName];
+    if (!src) return false;
+    return new Promise((resolve) => {
+      const script = document.createElement('script');
+      script.src = base + '/' + src;
+      script.onload = () => { this._loaded.add(viewName); resolve(true); };
+      script.onerror = () => resolve(false);
+      document.head.appendChild(script);
+    });
+  }
+};

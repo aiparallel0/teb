@@ -3449,3 +3449,118 @@ html.font-xl { font-size: 20px; }
   overflow: hidden;
   background: var(--surface, #fff);
 }
+
+/* ═══════════════════════════════════════════════════════════════════
+   Phase 8: Micro-interactions & Polish
+   ═══════════════════════════════════════════════════════════════════ */
+
+/* ── Level-Up Animation ──────────────────────────────────────────── */
+.levelup-overlay {
+  position: fixed; inset: 0; z-index: 10000;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(0,0,0,0.5);
+  opacity: 0; transition: opacity 0.4s ease;
+  pointer-events: none;
+}
+.levelup-overlay.levelup-visible { opacity: 1; pointer-events: auto; }
+.levelup-badge {
+  text-align: center; padding: 2rem 3rem;
+  background: linear-gradient(135deg, #667eea, #764ba2);
+  border-radius: 1.5rem; color: #fff;
+  transform: scale(0.5); transition: transform 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
+  box-shadow: 0 20px 60px rgba(102, 126, 234, 0.5);
+}
+.levelup-visible .levelup-badge { transform: scale(1); }
+.levelup-star { font-size: 3rem; animation: levelup-spin 1s ease-in-out; }
+@keyframes levelup-spin { from { transform: rotate(0deg) scale(0.5); } 50% { transform: rotate(180deg) scale(1.2); } to { transform: rotate(360deg) scale(1); } }
+.levelup-text { font-size: 1.5rem; font-weight: 700; margin: 0.5rem 0; letter-spacing: 0.1em; text-transform: uppercase; }
+.levelup-number { font-size: 2rem; font-weight: 300; opacity: 0.9; }
+
+/* ── Contextual Tooltips ─────────────────────────────────────────── */
+.contextual-tooltip {
+  position: fixed; z-index: 9000;
+  background: var(--card-bg, #1e293b); color: var(--text, #e2e8f0);
+  padding: 0.75rem 1rem; border-radius: 0.5rem;
+  max-width: 240px; font-size: 0.82rem; line-height: 1.4;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.3);
+  opacity: 0; transform: translateY(-4px);
+  transition: opacity 0.3s, transform 0.3s;
+  display: flex; align-items: start; gap: 0.5rem;
+}
+.contextual-tooltip.tooltip-visible { opacity: 1; transform: translateY(0); }
+.tooltip-dismiss {
+  background: none; border: none; color: inherit; cursor: pointer;
+  font-size: 0.9rem; opacity: 0.6; padding: 0; line-height: 1;
+}
+.tooltip-dismiss:hover { opacity: 1; }
+
+/* ── High Contrast Mode ──────────────────────────────────────────── */
+[data-high-contrast="true"] {
+  --bg: #000 !important;
+  --surface: #111 !important;
+  --card-bg: #111 !important;
+  --sidebar-bg: #000 !important;
+  --text: #fff !important;
+  --text-secondary: #ddd !important;
+  --border: #fff !important;
+  --accent: #ffff00 !important;
+  --accent-hover: #ffd700 !important;
+}
+[data-high-contrast="true"] * {
+  border-color: #fff !important;
+  outline-color: #ffff00 !important;
+}
+[data-high-contrast="true"] a,
+[data-high-contrast="true"] .sidebar-link {
+  color: #ffff00 !important;
+  text-decoration: underline !important;
+}
+[data-high-contrast="true"] button,
+[data-high-contrast="true"] .btn {
+  border: 2px solid #fff !important;
+}
+
+/* ── Smooth Page Transitions ─────────────────────────────────────── */
+.page-enter { animation: fadeSlideIn 0.3s ease forwards; }
+.page-exit { animation: fadeSlideOut 0.2s ease forwards; }
+@keyframes fadeSlideIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes fadeSlideOut { from { opacity: 1; transform: translateY(0); } to { opacity: 0; transform: translateY(-8px); } }
+
+/* Card hover micro-interactions */
+.task-card, .goal-card, .kanban-card {
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+.task-card:hover, .goal-card:hover, .kanban-card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 24px rgba(0,0,0,0.15);
+}
+
+/* Loading skeleton */
+.skeleton {
+  background: linear-gradient(90deg, var(--surface, #1e293b) 25%, var(--card-bg, #2a3a4e) 50%, var(--surface, #1e293b) 75%);
+  background-size: 200% 100%;
+  animation: skeleton-shimmer 1.5s infinite;
+  border-radius: 0.25rem;
+}
+@keyframes skeleton-shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
+
+/* ── Virtual Scrolling ───────────────────────────────────────────── */
+.vs-item {
+  box-sizing: border-box;
+  will-change: transform;
+  contain: layout style paint;
+}
+
+/* ── Accessibility: screen reader only ───────────────────────────── */
+.sr-only {
+  position: absolute; width: 1px; height: 1px;
+  padding: 0; margin: -1px; overflow: hidden;
+  clip: rect(0,0,0,0); white-space: nowrap; border: 0;
+}
+
+/* ── Image optimization ──────────────────────────────────────────── */
+img { max-width: 100%; height: auto; }
+img[loading="lazy"] { content-visibility: auto; }
+
+/* ── Responsive images ───────────────────────────────────────────── */
+picture img { width: 100%; height: auto; }
