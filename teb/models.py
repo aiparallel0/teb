@@ -1458,3 +1458,198 @@ class ScheduledReport:
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "last_sent_at": self.last_sent_at.isoformat() if self.last_sent_at else None,
         }
+
+
+# ─── Phase 5: Ecosystem ──────────────────────────────────────────────────────
+
+@dataclass
+class IntegrationListing:
+    """A published integration in the integration directory/marketplace."""
+    name: str
+    category: str = ""
+    description: str = ""
+    icon_url: str = ""
+    auth_type: str = "api_key"   # api_key | oauth | none
+    enabled: bool = True
+    id: Optional[int] = None
+    created_at: Optional[datetime] = None
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "name": self.name,
+            "category": self.category,
+            "description": self.description,
+            "icon_url": self.icon_url,
+            "auth_type": self.auth_type,
+            "enabled": self.enabled,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+@dataclass
+class OAuthConnection:
+    """Stored OAuth connection for a user+provider pair."""
+    user_id: int
+    provider: str
+    access_token_encrypted: str = ""
+    refresh_token_encrypted: str = ""
+    expires_at: Optional[datetime] = None
+    id: Optional[int] = None
+    created_at: Optional[datetime] = None
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "user_id": self.user_id,
+            "provider": self.provider,
+            "connected": bool(self.access_token_encrypted),
+            "expires_at": self.expires_at.isoformat() if self.expires_at else None,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+@dataclass
+class IntegrationTemplate:
+    """Pre-built integration mapping between two services."""
+    name: str
+    description: str = ""
+    source_service: str = ""
+    target_service: str = ""
+    mapping_json: str = "{}"
+    id: Optional[int] = None
+    created_at: Optional[datetime] = None
+
+    def to_dict(self) -> dict:
+        import json as _json
+        return {
+            "id": self.id,
+            "name": self.name,
+            "description": self.description,
+            "source_service": self.source_service,
+            "target_service": self.target_service,
+            "mapping": _json.loads(self.mapping_json) if self.mapping_json else {},
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+@dataclass
+class WebhookRule:
+    """User-defined webhook routing rule with filters."""
+    user_id: int
+    name: str = ""
+    event_type: str = ""
+    filter_json: str = "{}"
+    target_url: str = ""
+    headers_json: str = "{}"
+    active: bool = True
+    id: Optional[int] = None
+    created_at: Optional[datetime] = None
+
+    def to_dict(self) -> dict:
+        import json as _json
+        return {
+            "id": self.id,
+            "user_id": self.user_id,
+            "name": self.name,
+            "event_type": self.event_type,
+            "filter": _json.loads(self.filter_json) if self.filter_json else {},
+            "target_url": self.target_url,
+            "headers": _json.loads(self.headers_json) if self.headers_json else {},
+            "active": self.active,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+@dataclass
+class PluginListing:
+    """A plugin available in the plugin marketplace."""
+    name: str
+    description: str = ""
+    author: str = ""
+    version: str = "0.1.0"
+    downloads: int = 0
+    rating: float = 0.0
+    manifest_json: str = "{}"
+    id: Optional[int] = None
+    created_at: Optional[datetime] = None
+
+    def to_dict(self) -> dict:
+        import json as _json
+        return {
+            "id": self.id,
+            "name": self.name,
+            "description": self.description,
+            "author": self.author,
+            "version": self.version,
+            "downloads": self.downloads,
+            "rating": self.rating,
+            "manifest": _json.loads(self.manifest_json) if self.manifest_json else {},
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+@dataclass
+class CustomFieldDefinition:
+    """Plugin-defined custom field type."""
+    plugin_id: int
+    field_type: str = "text"
+    label: str = ""
+    options_json: str = "[]"
+    id: Optional[int] = None
+    created_at: Optional[datetime] = None
+
+    def to_dict(self) -> dict:
+        import json as _json
+        return {
+            "id": self.id,
+            "plugin_id": self.plugin_id,
+            "field_type": self.field_type,
+            "label": self.label,
+            "options": _json.loads(self.options_json) if self.options_json else [],
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+@dataclass
+class PluginView:
+    """Custom view provided by a plugin."""
+    plugin_id: int
+    name: str = ""
+    view_type: str = "board"
+    config_json: str = "{}"
+    id: Optional[int] = None
+    created_at: Optional[datetime] = None
+
+    def to_dict(self) -> dict:
+        import json as _json
+        return {
+            "id": self.id,
+            "plugin_id": self.plugin_id,
+            "name": self.name,
+            "view_type": self.view_type,
+            "config": _json.loads(self.config_json) if self.config_json else {},
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+@dataclass
+class Theme:
+    """UI theme with customizable CSS variables."""
+    name: str
+    author: str = ""
+    css_variables_json: str = "{}"
+    is_active: bool = False
+    id: Optional[int] = None
+    created_at: Optional[datetime] = None
+
+    def to_dict(self) -> dict:
+        import json as _json
+        return {
+            "id": self.id,
+            "name": self.name,
+            "author": self.author,
+            "css_variables": _json.loads(self.css_variables_json) if self.css_variables_json else {},
+            "is_active": self.is_active,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }

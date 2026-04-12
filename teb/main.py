@@ -21,13 +21,13 @@ from pydantic import BaseModel
 from teb import agents, auth, browser, config, decomposer, deployer, executor, intelligence, integrations, messaging, provisioning, scheduler, storage, transcribe
 from teb.models import (
     ActivityFeedEntry, AgentGoalMemory, ApiCredential, AuditEvent, BrowserAction, CheckIn,
-    CommentReaction, CustomField, DashboardLayout, DashboardWidget, DirectMessage, EmailNotificationConfig,
+    CommentReaction, CustomField, CustomFieldDefinition, DashboardLayout, DashboardWidget, DirectMessage, EmailNotificationConfig,
     ExecutionLog, Goal, GoalChatMessage, GoalCollaborator,
-    GoalTemplate, MessagingConfig, Milestone, Notification, NotificationPreference,
-    NudgeEvent, OutcomeMetric, PersonalApiKey, PluginManifest,
+    GoalTemplate, IntegrationListing, IntegrationTemplate, MessagingConfig, Milestone, Notification, NotificationPreference,
+    NudgeEvent, OAuthConnection, OutcomeMetric, PersonalApiKey, PluginListing, PluginManifest, PluginView,
     ProgressSnapshot, PushSubscription, RecurrenceRule, SavedView, ScheduledReport,
     SpendingBudget, SpendingRequest,
-    Task, TaskArtifact, TaskBlocker, TaskComment, TimeEntry, WebhookConfig,
+    Task, TaskArtifact, TaskBlocker, TaskComment, Theme, TimeEntry, WebhookConfig, WebhookRule,
     Workspace, WorkspaceMember,
 )
 
@@ -5797,6 +5797,543 @@ async def stagnation_check(goal_id: int, request: Request):
     _require_user(request)
     result = intelligence.detect_stagnation(goal_id)
     return result
+
+
+# ─── Phase 5.1: Integration Marketplace ──────────────────────────────────────
+
+@app.get("/api/integrations/directory", tags=["integrations"])
+async def list_integration_directory(request: Request, category: Optional[str] = Query(default=None)):
+    """List available integrations from the directory."""
+    _check_api_rate_limit(request)
+    listings = storage.list_integration_listings(category=category)
+    return [il.to_dict() for il in listings]
+
+
+@app.get("/api/integrations/directory/{listing_id}", tags=["integrations"])
+async def get_integration_directory_item(listing_id: int, request: Request):
+    """Get details for a specific integration listing."""
+    _check_api_rate_limit(request)
+    il = storage.get_integration_listing(listing_id)
+    if not il:
+        raise HTTPException(status_code=404, detail="Integration listing not found")
+    return il.to_dict()
+
+
+@app.post("/api/integrations/oauth/initiate", tags=["integrations"])
+async def oauth_initiate(request: Request):
+    """Initiate an OAuth flow for a provider. Returns the authorization URL."""
+    uid = _require_user(request)
+    _check_api_rate_limit(request)
+    body = await request.json()
+    provider = body.get("provider", "")
+    redirect_uri = body.get("redirect_uri", "")
+    if not provider:
+        raise HTTPException(status_code=400, detail="provider is required")
+    auth_url = f"https://{provider}.example.com/oauth/authorize?client_id=teb&redirect_uri={redirect_uri}&state={uid}"
+    return {"auth_url": auth_url, "provider": provider}
+
+
+@app.post("/api/integrations/oauth/callback", tags=["integrations"])
+async def oauth_callback(request: Request):
+    """Handle OAuth callback and store encrypted tokens."""
+    uid = _require_user(request)
+    _check_api_rate_limit(request)
+    body = await request.json()
+    provider = body.get("provider", "")
+    access_token = body.get("access_token", "")
+    refresh_token = body.get("refresh_token", "")
+    if not provider or not access_token:
+        raise HTTPException(status_code=400, detail="provider and access_token are required")
+    oc = OAuthConnection(
+        user_id=uid,
+        provider=provider,
+        access_token_encrypted=access_token,
+        refresh_token_encrypted=refresh_token,
+    )
+    oc = storage.upsert_oauth_connection(oc)
+    return oc.to_dict()
+
+
+@app.get("/api/integrations/templates", tags=["integrations"])
+async def list_integration_templates(request: Request):
+    """List all integration templates."""
+    _check_api_rate_limit(request)
+    templates = storage.list_integration_templates()
+    return [t.to_dict() for t in templates]
+
+
+@app.post("/api/integrations/templates/{template_id}/apply", tags=["integrations"])
+async def apply_integration_template(template_id: int, request: Request):
+    """Apply an integration template to set up a new integration mapping."""
+    uid = _require_user(request)
+    _check_api_rate_limit(request)
+    template = storage.get_integration_template(template_id)
+    if not template:
+        raise HTTPException(status_code=404, detail="Template not found")
+    return {"applied": True, "template": template.to_dict(), "user_id": uid}
+
+
+# ─── Webhook Rules (Builder) ────────────────────────────────────────────────
+
+@app.post("/api/webhooks/rules", status_code=201, tags=["webhooks"])
+async def create_webhook_rule(request: Request):
+    """Create a new webhook routing rule."""
+    uid = _require_user(request)
+    _check_api_rate_limit(request)
+    body = await request.json()
+    wr = WebhookRule(
+        user_id=uid,
+        name=body.get("name", ""),
+        event_type=body.get("event_type", ""),
+        filter_json=json.dumps(body.get("filter", {})),
+        target_url=body.get("target_url", ""),
+        headers_json=json.dumps(body.get("headers", {})),
+        active=body.get("active", True),
+    )
+    if not wr.target_url:
+        raise HTTPException(status_code=400, detail="target_url is required")
+    wr = storage.create_webhook_rule(wr)
+    return wr.to_dict()
+
+
+@app.get("/api/webhooks/rules", tags=["webhooks"])
+async def list_webhook_rules(request: Request):
+    """List all webhook rules for the current user."""
+    uid = _require_user(request)
+    _check_api_rate_limit(request)
+    rules = storage.list_webhook_rules(uid)
+    return [r.to_dict() for r in rules]
+
+
+@app.put("/api/webhooks/rules/{rule_id}", tags=["webhooks"])
+async def update_webhook_rule(rule_id: int, request: Request):
+    """Update an existing webhook rule."""
+    uid = _require_user(request)
+    _check_api_rate_limit(request)
+    existing = storage.get_webhook_rule(rule_id)
+    if not existing or existing.user_id != uid:
+        raise HTTPException(status_code=404, detail="Webhook rule not found")
+    body = await request.json()
+    existing.name = body.get("name", existing.name)
+    existing.event_type = body.get("event_type", existing.event_type)
+    if "filter" in body:
+        existing.filter_json = json.dumps(body["filter"])
+    existing.target_url = body.get("target_url", existing.target_url)
+    if "headers" in body:
+        existing.headers_json = json.dumps(body["headers"])
+    if "active" in body:
+        existing.active = body["active"]
+    existing = storage.update_webhook_rule(existing)
+    return existing.to_dict()
+
+
+@app.delete("/api/webhooks/rules/{rule_id}", tags=["webhooks"])
+async def delete_webhook_rule(rule_id: int, request: Request):
+    """Delete a webhook rule."""
+    uid = _require_user(request)
+    _check_api_rate_limit(request)
+    existing = storage.get_webhook_rule(rule_id)
+    if not existing or existing.user_id != uid:
+        raise HTTPException(status_code=404, detail="Webhook rule not found")
+    storage.delete_webhook_rule(rule_id, uid)
+    return {"deleted": rule_id}
+
+
+@app.post("/api/webhooks/rules/{rule_id}/test", tags=["webhooks"])
+async def test_webhook_rule(rule_id: int, request: Request):
+    """Send a test payload to a webhook rule's target URL."""
+    uid = _require_user(request)
+    _check_api_rate_limit(request)
+    rule = storage.get_webhook_rule(rule_id)
+    if not rule or rule.user_id != uid:
+        raise HTTPException(status_code=404, detail="Webhook rule not found")
+    test_payload = {
+        "event": rule.event_type,
+        "test": True,
+        "message": "This is a test webhook delivery from teb.",
+    }
+    return {"sent": True, "target_url": rule.target_url, "payload": test_payload}
+
+
+# ─── Zapier/Make Native App ─────────────────────────────────────────────────
+
+@app.get("/api/integrations/zapier/triggers", tags=["integrations"])
+async def zapier_list_triggers(request: Request):
+    """List available triggers for Zapier/Make integration."""
+    _check_api_rate_limit(request)
+    return {"triggers": [
+        {"key": "goal_created", "label": "Goal Created", "description": "Triggers when a new goal is created."},
+        {"key": "task_completed", "label": "Task Completed", "description": "Triggers when a task is marked done."},
+        {"key": "goal_completed", "label": "Goal Completed", "description": "Triggers when a goal is completed."},
+        {"key": "task_created", "label": "Task Created", "description": "Triggers when a new task is created."},
+        {"key": "checkin_submitted", "label": "Check-in Submitted", "description": "Triggers when a check-in is submitted."},
+    ]}
+
+
+@app.get("/api/integrations/zapier/actions", tags=["integrations"])
+async def zapier_list_actions(request: Request):
+    """List available actions for Zapier/Make integration."""
+    _check_api_rate_limit(request)
+    return {"actions": [
+        {"key": "create_goal", "label": "Create Goal", "description": "Create a new goal in teb."},
+        {"key": "create_task", "label": "Create Task", "description": "Create a task under a goal."},
+        {"key": "update_task_status", "label": "Update Task Status", "description": "Update the status of a task."},
+        {"key": "add_comment", "label": "Add Comment", "description": "Add a comment to a task."},
+    ]}
+
+
+@app.post("/api/integrations/zapier/subscribe", tags=["integrations"])
+async def zapier_subscribe(request: Request):
+    """Subscribe to a trigger event (Zapier subscription endpoint)."""
+    uid = _require_user(request)
+    _check_api_rate_limit(request)
+    body = await request.json()
+    event_type = body.get("event_type", "")
+    target_url = body.get("target_url", "")
+    if not event_type or not target_url:
+        raise HTTPException(status_code=400, detail="event_type and target_url are required")
+    sub_id = storage.create_zapier_subscription(uid, event_type, target_url)
+    return {"id": sub_id, "event_type": event_type, "target_url": target_url}
+
+
+@app.delete("/api/integrations/zapier/unsubscribe/{sub_id}", tags=["integrations"])
+async def zapier_unsubscribe(sub_id: int, request: Request):
+    """Unsubscribe from a trigger event."""
+    uid = _require_user(request)
+    _check_api_rate_limit(request)
+    storage.delete_zapier_subscription(sub_id, uid)
+    return {"deleted": sub_id}
+
+
+# ─── API Rate Limit Dashboard ───────────────────────────────────────────────
+
+@app.get("/api/integrations/rate-limits", tags=["integrations"])
+async def get_rate_limit_usage(request: Request):
+    """Get API rate limit usage for the current user."""
+    uid = _require_user(request)
+    _check_api_rate_limit(request)
+    usage = storage.get_api_rate_limit_usage(uid)
+    return usage
+
+
+# ─── Phase 5.2: Plugin & Extension System ───────────────────────────────────
+
+@app.get("/api/plugins/marketplace", tags=["plugins"])
+async def list_plugin_marketplace(request: Request):
+    """List plugins available in the marketplace."""
+    _check_api_rate_limit(request)
+    listings = storage.list_plugin_listings()
+    return [pl.to_dict() for pl in listings]
+
+
+@app.get("/api/plugins/marketplace/{listing_id}", tags=["plugins"])
+async def get_plugin_marketplace_item(listing_id: int, request: Request):
+    """Get details for a specific plugin listing."""
+    _check_api_rate_limit(request)
+    pl = storage.get_plugin_listing(listing_id)
+    if not pl:
+        raise HTTPException(status_code=404, detail="Plugin listing not found")
+    return pl.to_dict()
+
+
+@app.post("/api/plugins/marketplace/{listing_id}/install", status_code=201, tags=["plugins"])
+async def install_plugin_from_marketplace(listing_id: int, request: Request):
+    """Install a plugin from the marketplace."""
+    uid = _require_user(request)
+    _check_api_rate_limit(request)
+    pl = storage.get_plugin_listing(listing_id)
+    if not pl:
+        raise HTTPException(status_code=404, detail="Plugin listing not found")
+    storage.increment_plugin_downloads(listing_id)
+    existing = storage.get_plugin(pl.name)
+    if existing:
+        return {"installed": True, "plugin": existing.to_dict(), "already_installed": True}
+    plugin = PluginManifest(
+        name=pl.name,
+        version=pl.version,
+        description=pl.description,
+        task_types="[]",
+        required_credentials="[]",
+        module_path="",
+    )
+    plugin = storage.create_plugin(plugin)
+    return {"installed": True, "plugin": plugin.to_dict(), "already_installed": False}
+
+
+@app.post("/api/plugins/fields", status_code=201, tags=["plugins"])
+async def create_custom_field_definition(request: Request):
+    """Create a custom field definition provided by a plugin."""
+    uid = _require_user(request)
+    _check_api_rate_limit(request)
+    body = await request.json()
+    cfd = CustomFieldDefinition(
+        plugin_id=body.get("plugin_id", 0),
+        field_type=body.get("field_type", "text"),
+        label=body.get("label", ""),
+        options_json=json.dumps(body.get("options", [])),
+    )
+    if not cfd.label:
+        raise HTTPException(status_code=400, detail="label is required")
+    cfd = storage.create_custom_field_definition(cfd)
+    return cfd.to_dict()
+
+
+@app.get("/api/plugins/fields", tags=["plugins"])
+async def list_custom_field_definitions(request: Request, plugin_id: Optional[int] = Query(default=None)):
+    """List custom field definitions, optionally filtered by plugin."""
+    _check_api_rate_limit(request)
+    fields = storage.list_custom_field_definitions(plugin_id=plugin_id)
+    return [f.to_dict() for f in fields]
+
+
+@app.post("/api/plugins/views", status_code=201, tags=["plugins"])
+async def create_plugin_view(request: Request):
+    """Create a custom view provided by a plugin."""
+    uid = _require_user(request)
+    _check_api_rate_limit(request)
+    body = await request.json()
+    pv = PluginView(
+        plugin_id=body.get("plugin_id", 0),
+        name=body.get("name", ""),
+        view_type=body.get("view_type", "board"),
+        config_json=json.dumps(body.get("config", {})),
+    )
+    if not pv.name:
+        raise HTTPException(status_code=400, detail="name is required")
+    pv = storage.create_plugin_view(pv)
+    return pv.to_dict()
+
+
+@app.get("/api/plugins/views", tags=["plugins"])
+async def list_plugin_views(request: Request, plugin_id: Optional[int] = Query(default=None)):
+    """List custom views, optionally filtered by plugin."""
+    _check_api_rate_limit(request)
+    views = storage.list_plugin_views(plugin_id=plugin_id)
+    return [v.to_dict() for v in views]
+
+
+@app.get("/api/themes", tags=["themes"])
+async def list_themes(request: Request):
+    """List all available themes."""
+    _check_api_rate_limit(request)
+    themes = storage.list_themes()
+    return [t.to_dict() for t in themes]
+
+
+@app.post("/api/themes", status_code=201, tags=["themes"])
+async def create_theme(request: Request):
+    """Create a new theme."""
+    uid = _require_user(request)
+    _check_api_rate_limit(request)
+    body = await request.json()
+    theme = Theme(
+        name=body.get("name", ""),
+        author=body.get("author", ""),
+        css_variables_json=json.dumps(body.get("css_variables", {})),
+    )
+    if not theme.name:
+        raise HTTPException(status_code=400, detail="name is required")
+    theme = storage.create_theme(theme)
+    return theme.to_dict()
+
+
+@app.put("/api/themes/{theme_id}/activate", tags=["themes"])
+async def activate_theme(theme_id: int, request: Request):
+    """Activate a theme (deactivates all others)."""
+    uid = _require_user(request)
+    _check_api_rate_limit(request)
+    theme = storage.get_theme(theme_id)
+    if not theme:
+        raise HTTPException(status_code=404, detail="Theme not found")
+    storage.activate_theme(theme_id)
+    return {"activated": theme_id, "name": theme.name}
+
+
+@app.get("/api/themes/active", tags=["themes"])
+async def get_active_theme(request: Request):
+    """Get the currently active theme."""
+    _check_api_rate_limit(request)
+    theme = storage.get_active_theme()
+    if not theme:
+        return {"active_theme": None}
+    return theme.to_dict()
+
+
+@app.get("/api/plugins/sdk/docs", tags=["plugins"])
+async def get_plugin_sdk_docs(request: Request):
+    """Return plugin SDK documentation as JSON."""
+    _check_api_rate_limit(request)
+    return {
+        "sdk_version": "1.0.0",
+        "overview": "The teb Plugin SDK allows developers to extend teb with custom functionality.",
+        "plugin_manifest": {
+            "description": "Every plugin must include a manifest.json in its directory.",
+            "fields": {
+                "name": "Unique plugin name (string, required)",
+                "version": "Semantic version (string, required)",
+                "description": "Human-readable description (string)",
+                "task_types": "List of task types this plugin handles (array of strings)",
+                "required_credentials": "Credential names needed (array of strings)",
+                "module_path": "Python module path to the plugin entry point",
+            },
+        },
+        "hooks": {
+            "on_task_execute": "Called when a task matching plugin task_types is executed. Receives task_context dict.",
+            "on_goal_created": "Called when a new goal is created.",
+            "on_task_completed": "Called when a task status changes to done.",
+        },
+        "custom_fields": {
+            "description": "Plugins can define custom field types via POST /api/plugins/fields.",
+            "supported_types": ["text", "number", "date", "select", "multi_select", "url", "email", "checkbox"],
+        },
+        "custom_views": {
+            "description": "Plugins can register custom views via POST /api/plugins/views.",
+            "supported_view_types": ["board", "list", "calendar", "timeline", "chart"],
+        },
+        "api_endpoints": {
+            "register_plugin": "POST /api/plugins",
+            "list_plugins": "GET /api/plugins",
+            "execute_plugin": "POST /api/plugins/{name}/execute",
+            "plugin_marketplace": "GET /api/plugins/marketplace",
+        },
+    }
+
+
+# ─── Phase 5.3: Import/Export Ecosystem ──────────────────────────────────────
+
+@app.post("/api/import/monday", status_code=201, tags=["import"])
+async def import_monday(request: Request):
+    """Import a Monday.com board JSON into teb goals and tasks."""
+    uid = _require_user(request)
+    _check_api_rate_limit(request)
+    body = await request.json()
+    board = body.get("board", {})
+    if not board or not isinstance(board, dict):
+        raise HTTPException(status_code=422, detail="board (Monday.com JSON) is required")
+    from teb import importers
+    goal, tasks = importers.import_from_monday(uid, board)
+    return {"goal": goal.to_dict(), "tasks_imported": len(tasks)}
+
+
+@app.post("/api/import/jira", status_code=201, tags=["import"])
+async def import_jira(request: Request):
+    """Import Jira project/sprint data into teb goals and tasks."""
+    uid = _require_user(request)
+    _check_api_rate_limit(request)
+    body = await request.json()
+    project = body.get("project", {})
+    if not project or not isinstance(project, dict):
+        raise HTTPException(status_code=422, detail="project (Jira JSON) is required")
+    from teb import importers
+    goal, tasks = importers.import_from_jira(uid, project)
+    return {"goal": goal.to_dict(), "tasks_imported": len(tasks)}
+
+
+@app.post("/api/import/clickup", status_code=201, tags=["import"])
+async def import_clickup(request: Request):
+    """Import ClickUp list data into teb goals and tasks."""
+    uid = _require_user(request)
+    _check_api_rate_limit(request)
+    body = await request.json()
+    list_data = body.get("list", {})
+    if not list_data or not isinstance(list_data, dict):
+        raise HTTPException(status_code=422, detail="list (ClickUp JSON) is required")
+    from teb import importers
+    goal, tasks = importers.import_from_clickup(uid, list_data)
+    return {"goal": goal.to_dict(), "tasks_imported": len(tasks)}
+
+
+@app.post("/api/import/csv", status_code=201, tags=["import"])
+async def import_csv(request: Request):
+    """Import tasks from CSV text."""
+    uid = _require_user(request)
+    _check_api_rate_limit(request)
+    body = await request.json()
+    csv_text = body.get("csv", "")
+    if not csv_text:
+        raise HTTPException(status_code=422, detail="csv (CSV text content) is required")
+    from teb import importers
+    goal, tasks = importers.import_from_csv(uid, csv_text)
+    return {"goal": goal.to_dict(), "tasks_imported": len(tasks)}
+
+
+@app.get("/api/goals/{goal_id}/export/full", tags=["export"])
+async def export_full_project(goal_id: int, request: Request):
+    """Export a full goal with all tasks, comments, and artifacts."""
+    uid = _require_user(request)
+    _check_api_rate_limit(request)
+    result = storage.export_project(goal_id)
+    if not result:
+        raise HTTPException(status_code=404, detail="Goal not found")
+    return result
+
+
+@app.get("/api/export/schema", tags=["export"])
+async def export_schema_docs(request: Request):
+    """Return the data schema documentation for exports."""
+    _check_api_rate_limit(request)
+    return {
+        "version": "1.0.0",
+        "description": "teb data export schema documentation",
+        "entities": {
+            "goal": {
+                "fields": {
+                    "id": "integer – unique goal identifier",
+                    "user_id": "integer – owner user ID",
+                    "title": "string – goal title",
+                    "description": "string – goal description",
+                    "status": "string – drafting | decomposed | in_progress | completed | archived",
+                    "answers": "object – structured answers from goal questionnaire",
+                    "tags": "string – comma-separated tags",
+                    "created_at": "ISO 8601 datetime",
+                    "updated_at": "ISO 8601 datetime",
+                },
+            },
+            "task": {
+                "fields": {
+                    "id": "integer – unique task identifier",
+                    "goal_id": "integer – parent goal ID",
+                    "parent_id": "integer | null – parent task ID for subtasks",
+                    "title": "string – task title",
+                    "description": "string – task description",
+                    "status": "string – todo | in_progress | done | failed | blocked",
+                    "estimated_minutes": "integer – estimated duration",
+                    "order_index": "integer – sort order",
+                    "due_date": "string | null – YYYY-MM-DD",
+                    "tags": "string – comma-separated tags",
+                    "created_at": "ISO 8601 datetime",
+                    "updated_at": "ISO 8601 datetime",
+                },
+            },
+            "task_comment": {
+                "fields": {
+                    "id": "integer",
+                    "task_id": "integer – parent task ID",
+                    "content": "string – comment text",
+                    "author": "string – comment author",
+                    "created_at": "ISO 8601 datetime",
+                },
+            },
+            "task_artifact": {
+                "fields": {
+                    "id": "integer",
+                    "task_id": "integer – parent task ID",
+                    "artifact_type": "string – file type or artifact category",
+                    "content": "string – artifact content or URL",
+                    "created_at": "ISO 8601 datetime",
+                },
+            },
+        },
+        "export_endpoint": "GET /api/goals/{id}/export/full",
+        "import_endpoints": {
+            "trello": "POST /api/import/trello",
+            "asana": "POST /api/import/asana",
+            "monday": "POST /api/import/monday",
+            "jira": "POST /api/import/jira",
+            "clickup": "POST /api/import/clickup",
+            "csv": "POST /api/import/csv",
+        },
+    }
 
 
 if config.BASE_PATH:

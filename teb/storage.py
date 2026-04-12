@@ -20,6 +20,7 @@ from teb.models import (
     CheckIn,
     CommentReaction,
     CustomField,
+    CustomFieldDefinition,
     DashboardLayout,
     DashboardWidget,
     DirectMessage,
@@ -32,14 +33,19 @@ from teb.models import (
     GoalCollaborator,
     GoalTemplate,
     Integration,
+    IntegrationListing,
+    IntegrationTemplate,
     MessagingConfig,
     Milestone,
     Notification,
     NotificationPreference,
     NudgeEvent,
+    OAuthConnection,
     OutcomeMetric,
     PersonalApiKey,
+    PluginListing,
     PluginManifest,
+    PluginView,
     ProactiveSuggestion,
     ProgressSnapshot,
     PushSubscription,
@@ -53,11 +59,13 @@ from teb.models import (
     TaskArtifact,
     TaskBlocker,
     TaskComment,
+    Theme,
     TimeEntry,
     User,
     UserProfile,
     UserXP,
     WebhookConfig,
+    WebhookRule,
     Workspace,
     WorkspaceMember,
 )
@@ -432,6 +440,111 @@ def init_db() -> None:
                 created_at      TEXT    NOT NULL,
                 updated_at      TEXT    NOT NULL
             );
+
+            -- Phase 5: Ecosystem tables
+
+            CREATE TABLE IF NOT EXISTS integration_listings (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                name        TEXT    NOT NULL,
+                category    TEXT    NOT NULL DEFAULT '',
+                description TEXT    NOT NULL DEFAULT '',
+                icon_url    TEXT    NOT NULL DEFAULT '',
+                auth_type   TEXT    NOT NULL DEFAULT 'api_key',
+                enabled     INTEGER NOT NULL DEFAULT 1,
+                created_at  TEXT    NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS oauth_connections (
+                id                       INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id                  INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                provider                 TEXT    NOT NULL,
+                access_token_encrypted   TEXT    NOT NULL DEFAULT '',
+                refresh_token_encrypted  TEXT    NOT NULL DEFAULT '',
+                expires_at               TEXT    DEFAULT NULL,
+                created_at               TEXT    NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_oauth_conn_user ON oauth_connections(user_id);
+
+            CREATE TABLE IF NOT EXISTS integration_templates (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                name            TEXT    NOT NULL,
+                description     TEXT    NOT NULL DEFAULT '',
+                source_service  TEXT    NOT NULL DEFAULT '',
+                target_service  TEXT    NOT NULL DEFAULT '',
+                mapping_json    TEXT    NOT NULL DEFAULT '{}',
+                created_at      TEXT    NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS webhook_rules (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                name         TEXT    NOT NULL DEFAULT '',
+                event_type   TEXT    NOT NULL DEFAULT '',
+                filter_json  TEXT    NOT NULL DEFAULT '{}',
+                target_url   TEXT    NOT NULL DEFAULT '',
+                headers_json TEXT    NOT NULL DEFAULT '{}',
+                active       INTEGER NOT NULL DEFAULT 1,
+                created_at   TEXT    NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_webhook_rules_user ON webhook_rules(user_id);
+
+            CREATE TABLE IF NOT EXISTS plugin_listings (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                name          TEXT    NOT NULL,
+                description   TEXT    NOT NULL DEFAULT '',
+                author        TEXT    NOT NULL DEFAULT '',
+                version       TEXT    NOT NULL DEFAULT '0.1.0',
+                downloads     INTEGER NOT NULL DEFAULT 0,
+                rating        REAL    NOT NULL DEFAULT 0,
+                manifest_json TEXT    NOT NULL DEFAULT '{}',
+                created_at    TEXT    NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS custom_field_definitions (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                plugin_id    INTEGER NOT NULL,
+                field_type   TEXT    NOT NULL DEFAULT 'text',
+                label        TEXT    NOT NULL DEFAULT '',
+                options_json TEXT    NOT NULL DEFAULT '[]',
+                created_at   TEXT    NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS plugin_views (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                plugin_id   INTEGER NOT NULL,
+                name        TEXT    NOT NULL DEFAULT '',
+                view_type   TEXT    NOT NULL DEFAULT 'board',
+                config_json TEXT    NOT NULL DEFAULT '{}',
+                created_at  TEXT    NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS themes (
+                id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+                name               TEXT    NOT NULL,
+                author             TEXT    NOT NULL DEFAULT '',
+                css_variables_json TEXT    NOT NULL DEFAULT '{}',
+                is_active          INTEGER NOT NULL DEFAULT 0,
+                created_at         TEXT    NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS zapier_subscriptions (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                event_type  TEXT    NOT NULL,
+                target_url  TEXT    NOT NULL,
+                created_at  TEXT    NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_zapier_sub_user ON zapier_subscriptions(user_id);
+
+            CREATE TABLE IF NOT EXISTS api_usage_log (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                integration  TEXT    NOT NULL DEFAULT '',
+                endpoint     TEXT    NOT NULL DEFAULT '',
+                created_at   TEXT    NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_api_usage_user ON api_usage_log(user_id);
+            CREATE INDEX IF NOT EXISTS idx_api_usage_time ON api_usage_log(created_at);
         """)
 
         # ─── Lightweight schema migrations ────────────────────────────────
@@ -5458,3 +5571,489 @@ def _row_to_scheduled_report(row: sqlite3.Row) -> ScheduledReport:
         created_at=datetime.fromisoformat(row["created_at"]),
         last_sent_at=datetime.fromisoformat(row["last_sent_at"]) if row["last_sent_at"] else None,
     )
+
+
+# ─── Phase 5: Integration Marketplace ────────────────────────────────────────
+
+@_with_retry
+def create_integration_listing(il: IntegrationListing) -> IntegrationListing:
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        cur = con.execute(
+            "INSERT INTO integration_listings (name, category, description, icon_url, auth_type, enabled, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (il.name, il.category, il.description, il.icon_url, il.auth_type, int(il.enabled), now),
+        )
+        il.id = cur.lastrowid
+        il.created_at = datetime.fromisoformat(now)
+    return il
+
+
+@_with_retry
+def list_integration_listings(category: Optional[str] = None) -> List[IntegrationListing]:
+    with _conn() as con:
+        if category:
+            rows = con.execute(
+                "SELECT * FROM integration_listings WHERE category = ? ORDER BY name", (category,)
+            ).fetchall()
+        else:
+            rows = con.execute("SELECT * FROM integration_listings ORDER BY name").fetchall()
+    return [_row_to_integration_listing(r) for r in rows]
+
+
+@_with_retry
+def get_integration_listing(listing_id: int) -> Optional[IntegrationListing]:
+    with _conn() as con:
+        row = con.execute("SELECT * FROM integration_listings WHERE id = ?", (listing_id,)).fetchone()
+    return _row_to_integration_listing(row) if row else None
+
+
+def _row_to_integration_listing(row: sqlite3.Row) -> IntegrationListing:
+    return IntegrationListing(
+        id=row["id"], name=row["name"], category=row["category"],
+        description=row["description"], icon_url=row["icon_url"],
+        auth_type=row["auth_type"], enabled=bool(row["enabled"]),
+        created_at=datetime.fromisoformat(row["created_at"]),
+    )
+
+
+# ─── OAuth Connections ───────────────────────────────────────────────────────
+
+@_with_retry
+def create_oauth_connection(oc: OAuthConnection) -> OAuthConnection:
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        cur = con.execute(
+            "INSERT INTO oauth_connections (user_id, provider, access_token_encrypted, "
+            "refresh_token_encrypted, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+            (oc.user_id, oc.provider, oc.access_token_encrypted,
+             oc.refresh_token_encrypted,
+             oc.expires_at.isoformat() if oc.expires_at else None, now),
+        )
+        oc.id = cur.lastrowid
+        oc.created_at = datetime.fromisoformat(now)
+    return oc
+
+
+@_with_retry
+def get_oauth_connection(user_id: int, provider: str) -> Optional[OAuthConnection]:
+    with _conn() as con:
+        row = con.execute(
+            "SELECT * FROM oauth_connections WHERE user_id = ? AND provider = ? ORDER BY id DESC LIMIT 1",
+            (user_id, provider),
+        ).fetchone()
+    return _row_to_oauth_connection(row) if row else None
+
+
+@_with_retry
+def upsert_oauth_connection(oc: OAuthConnection) -> OAuthConnection:
+    """Insert or update an OAuth connection for user+provider."""
+    with _conn() as con:
+        existing = con.execute(
+            "SELECT id FROM oauth_connections WHERE user_id = ? AND provider = ?",
+            (oc.user_id, oc.provider),
+        ).fetchone()
+        now = datetime.now(timezone.utc).isoformat()
+        if existing:
+            con.execute(
+                "UPDATE oauth_connections SET access_token_encrypted=?, refresh_token_encrypted=?, "
+                "expires_at=? WHERE id=?",
+                (oc.access_token_encrypted, oc.refresh_token_encrypted,
+                 oc.expires_at.isoformat() if oc.expires_at else None, existing["id"]),
+            )
+            oc.id = existing["id"]
+        else:
+            cur = con.execute(
+                "INSERT INTO oauth_connections (user_id, provider, access_token_encrypted, "
+                "refresh_token_encrypted, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                (oc.user_id, oc.provider, oc.access_token_encrypted,
+                 oc.refresh_token_encrypted,
+                 oc.expires_at.isoformat() if oc.expires_at else None, now),
+            )
+            oc.id = cur.lastrowid
+        oc.created_at = datetime.fromisoformat(now)
+    return oc
+
+
+def _row_to_oauth_connection(row: sqlite3.Row) -> OAuthConnection:
+    return OAuthConnection(
+        id=row["id"], user_id=row["user_id"], provider=row["provider"],
+        access_token_encrypted=row["access_token_encrypted"],
+        refresh_token_encrypted=row["refresh_token_encrypted"],
+        expires_at=datetime.fromisoformat(row["expires_at"]) if row["expires_at"] else None,
+        created_at=datetime.fromisoformat(row["created_at"]),
+    )
+
+
+# ─── Integration Templates ──────────────────────────────────────────────────
+
+@_with_retry
+def create_integration_template(t: IntegrationTemplate) -> IntegrationTemplate:
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        cur = con.execute(
+            "INSERT INTO integration_templates (name, description, source_service, target_service, mapping_json, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (t.name, t.description, t.source_service, t.target_service, t.mapping_json, now),
+        )
+        t.id = cur.lastrowid
+        t.created_at = datetime.fromisoformat(now)
+    return t
+
+
+@_with_retry
+def list_integration_templates() -> List[IntegrationTemplate]:
+    with _conn() as con:
+        rows = con.execute("SELECT * FROM integration_templates ORDER BY name").fetchall()
+    return [_row_to_integration_template(r) for r in rows]
+
+
+@_with_retry
+def get_integration_template(template_id: int) -> Optional[IntegrationTemplate]:
+    with _conn() as con:
+        row = con.execute("SELECT * FROM integration_templates WHERE id = ?", (template_id,)).fetchone()
+    return _row_to_integration_template(row) if row else None
+
+
+def _row_to_integration_template(row: sqlite3.Row) -> IntegrationTemplate:
+    return IntegrationTemplate(
+        id=row["id"], name=row["name"], description=row["description"],
+        source_service=row["source_service"], target_service=row["target_service"],
+        mapping_json=row["mapping_json"],
+        created_at=datetime.fromisoformat(row["created_at"]),
+    )
+
+
+# ─── Webhook Rules ──────────────────────────────────────────────────────────
+
+@_with_retry
+def create_webhook_rule(wr: WebhookRule) -> WebhookRule:
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        cur = con.execute(
+            "INSERT INTO webhook_rules (user_id, name, event_type, filter_json, target_url, headers_json, active, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (wr.user_id, wr.name, wr.event_type, wr.filter_json, wr.target_url,
+             wr.headers_json, int(wr.active), now),
+        )
+        wr.id = cur.lastrowid
+        wr.created_at = datetime.fromisoformat(now)
+    return wr
+
+
+@_with_retry
+def list_webhook_rules(user_id: int) -> List[WebhookRule]:
+    with _conn() as con:
+        rows = con.execute(
+            "SELECT * FROM webhook_rules WHERE user_id = ? ORDER BY created_at DESC", (user_id,)
+        ).fetchall()
+    return [_row_to_webhook_rule(r) for r in rows]
+
+
+@_with_retry
+def get_webhook_rule(rule_id: int) -> Optional[WebhookRule]:
+    with _conn() as con:
+        row = con.execute("SELECT * FROM webhook_rules WHERE id = ?", (rule_id,)).fetchone()
+    return _row_to_webhook_rule(row) if row else None
+
+
+@_with_retry
+def update_webhook_rule(wr: WebhookRule) -> WebhookRule:
+    with _conn() as con:
+        con.execute(
+            "UPDATE webhook_rules SET name=?, event_type=?, filter_json=?, target_url=?, "
+            "headers_json=?, active=? WHERE id=?",
+            (wr.name, wr.event_type, wr.filter_json, wr.target_url,
+             wr.headers_json, int(wr.active), wr.id),
+        )
+    return wr
+
+
+@_with_retry
+def delete_webhook_rule(rule_id: int, user_id: int) -> None:
+    with _conn() as con:
+        con.execute("DELETE FROM webhook_rules WHERE id = ? AND user_id = ?", (rule_id, user_id))
+
+
+def _row_to_webhook_rule(row: sqlite3.Row) -> WebhookRule:
+    return WebhookRule(
+        id=row["id"], user_id=row["user_id"], name=row["name"],
+        event_type=row["event_type"], filter_json=row["filter_json"],
+        target_url=row["target_url"], headers_json=row["headers_json"],
+        active=bool(row["active"]),
+        created_at=datetime.fromisoformat(row["created_at"]),
+    )
+
+
+# ─── Plugin Marketplace ─────────────────────────────────────────────────────
+
+@_with_retry
+def create_plugin_listing(pl: PluginListing) -> PluginListing:
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        cur = con.execute(
+            "INSERT INTO plugin_listings (name, description, author, version, downloads, rating, manifest_json, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (pl.name, pl.description, pl.author, pl.version, pl.downloads, pl.rating, pl.manifest_json, now),
+        )
+        pl.id = cur.lastrowid
+        pl.created_at = datetime.fromisoformat(now)
+    return pl
+
+
+@_with_retry
+def list_plugin_listings() -> List[PluginListing]:
+    with _conn() as con:
+        rows = con.execute("SELECT * FROM plugin_listings ORDER BY downloads DESC, name").fetchall()
+    return [_row_to_plugin_listing(r) for r in rows]
+
+
+@_with_retry
+def get_plugin_listing(listing_id: int) -> Optional[PluginListing]:
+    with _conn() as con:
+        row = con.execute("SELECT * FROM plugin_listings WHERE id = ?", (listing_id,)).fetchone()
+    return _row_to_plugin_listing(row) if row else None
+
+
+@_with_retry
+def increment_plugin_downloads(listing_id: int) -> None:
+    with _conn() as con:
+        con.execute("UPDATE plugin_listings SET downloads = downloads + 1 WHERE id = ?", (listing_id,))
+
+
+def _row_to_plugin_listing(row: sqlite3.Row) -> PluginListing:
+    return PluginListing(
+        id=row["id"], name=row["name"], description=row["description"],
+        author=row["author"], version=row["version"], downloads=row["downloads"],
+        rating=row["rating"], manifest_json=row["manifest_json"],
+        created_at=datetime.fromisoformat(row["created_at"]),
+    )
+
+
+# ─── Custom Field Definitions ───────────────────────────────────────────────
+
+@_with_retry
+def create_custom_field_definition(cfd: CustomFieldDefinition) -> CustomFieldDefinition:
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        cur = con.execute(
+            "INSERT INTO custom_field_definitions (plugin_id, field_type, label, options_json, created_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (cfd.plugin_id, cfd.field_type, cfd.label, cfd.options_json, now),
+        )
+        cfd.id = cur.lastrowid
+        cfd.created_at = datetime.fromisoformat(now)
+    return cfd
+
+
+@_with_retry
+def list_custom_field_definitions(plugin_id: Optional[int] = None) -> List[CustomFieldDefinition]:
+    with _conn() as con:
+        if plugin_id is not None:
+            rows = con.execute(
+                "SELECT * FROM custom_field_definitions WHERE plugin_id = ? ORDER BY id", (plugin_id,)
+            ).fetchall()
+        else:
+            rows = con.execute("SELECT * FROM custom_field_definitions ORDER BY id").fetchall()
+    return [_row_to_custom_field_definition(r) for r in rows]
+
+
+def _row_to_custom_field_definition(row: sqlite3.Row) -> CustomFieldDefinition:
+    return CustomFieldDefinition(
+        id=row["id"], plugin_id=row["plugin_id"], field_type=row["field_type"],
+        label=row["label"], options_json=row["options_json"],
+        created_at=datetime.fromisoformat(row["created_at"]),
+    )
+
+
+# ─── Plugin Views ───────────────────────────────────────────────────────────
+
+@_with_retry
+def create_plugin_view(pv: PluginView) -> PluginView:
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        cur = con.execute(
+            "INSERT INTO plugin_views (plugin_id, name, view_type, config_json, created_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (pv.plugin_id, pv.name, pv.view_type, pv.config_json, now),
+        )
+        pv.id = cur.lastrowid
+        pv.created_at = datetime.fromisoformat(now)
+    return pv
+
+
+@_with_retry
+def list_plugin_views(plugin_id: Optional[int] = None) -> List[PluginView]:
+    with _conn() as con:
+        if plugin_id is not None:
+            rows = con.execute(
+                "SELECT * FROM plugin_views WHERE plugin_id = ? ORDER BY id", (plugin_id,)
+            ).fetchall()
+        else:
+            rows = con.execute("SELECT * FROM plugin_views ORDER BY id").fetchall()
+    return [_row_to_plugin_view(r) for r in rows]
+
+
+def _row_to_plugin_view(row: sqlite3.Row) -> PluginView:
+    return PluginView(
+        id=row["id"], plugin_id=row["plugin_id"], name=row["name"],
+        view_type=row["view_type"], config_json=row["config_json"],
+        created_at=datetime.fromisoformat(row["created_at"]),
+    )
+
+
+# ─── Themes ─────────────────────────────────────────────────────────────────
+
+@_with_retry
+def create_theme(theme: Theme) -> Theme:
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        cur = con.execute(
+            "INSERT INTO themes (name, author, css_variables_json, is_active, created_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (theme.name, theme.author, theme.css_variables_json, int(theme.is_active), now),
+        )
+        theme.id = cur.lastrowid
+        theme.created_at = datetime.fromisoformat(now)
+    return theme
+
+
+@_with_retry
+def list_themes() -> List[Theme]:
+    with _conn() as con:
+        rows = con.execute("SELECT * FROM themes ORDER BY name").fetchall()
+    return [_row_to_theme(r) for r in rows]
+
+
+@_with_retry
+def get_active_theme() -> Optional[Theme]:
+    with _conn() as con:
+        row = con.execute("SELECT * FROM themes WHERE is_active = 1 LIMIT 1").fetchone()
+    return _row_to_theme(row) if row else None
+
+
+@_with_retry
+def activate_theme(theme_id: int) -> None:
+    with _conn() as con:
+        con.execute("UPDATE themes SET is_active = 0")
+        con.execute("UPDATE themes SET is_active = 1 WHERE id = ?", (theme_id,))
+
+
+@_with_retry
+def get_theme(theme_id: int) -> Optional[Theme]:
+    with _conn() as con:
+        row = con.execute("SELECT * FROM themes WHERE id = ?", (theme_id,)).fetchone()
+    return _row_to_theme(row) if row else None
+
+
+def _row_to_theme(row: sqlite3.Row) -> Theme:
+    return Theme(
+        id=row["id"], name=row["name"], author=row["author"],
+        css_variables_json=row["css_variables_json"], is_active=bool(row["is_active"]),
+        created_at=datetime.fromisoformat(row["created_at"]),
+    )
+
+
+# ─── Zapier Subscriptions ───────────────────────────────────────────────────
+
+@_with_retry
+def create_zapier_subscription(user_id: int, event_type: str, target_url: str) -> int:
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        cur = con.execute(
+            "INSERT INTO zapier_subscriptions (user_id, event_type, target_url, created_at) VALUES (?, ?, ?, ?)",
+            (user_id, event_type, target_url, now),
+        )
+        return cur.lastrowid
+
+
+@_with_retry
+def delete_zapier_subscription(sub_id: int, user_id: int) -> None:
+    with _conn() as con:
+        con.execute("DELETE FROM zapier_subscriptions WHERE id = ? AND user_id = ?", (sub_id, user_id))
+
+
+@_with_retry
+def list_zapier_subscriptions(user_id: int) -> list:
+    with _conn() as con:
+        rows = con.execute(
+            "SELECT * FROM zapier_subscriptions WHERE user_id = ? ORDER BY created_at DESC", (user_id,)
+        ).fetchall()
+    return [{"id": r["id"], "event_type": r["event_type"], "target_url": r["target_url"],
+             "created_at": r["created_at"]} for r in rows]
+
+
+# ─── API Rate Limit Usage ───────────────────────────────────────────────────
+
+@_with_retry
+def record_api_usage(user_id: int, integration: str = "", endpoint: str = "") -> None:
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        con.execute(
+            "INSERT INTO api_usage_log (user_id, integration, endpoint, created_at) VALUES (?, ?, ?, ?)",
+            (user_id, integration, endpoint, now),
+        )
+
+
+@_with_retry
+def get_api_rate_limit_usage(user_id: int) -> dict:
+    """Count recent API calls per integration for the given user (last 24h)."""
+    with _conn() as con:
+        rows = con.execute(
+            "SELECT integration, COUNT(*) as cnt FROM api_usage_log "
+            "WHERE user_id = ? AND created_at >= datetime('now', '-1 day') "
+            "GROUP BY integration ORDER BY cnt DESC",
+            (user_id,),
+        ).fetchall()
+        total = con.execute(
+            "SELECT COUNT(*) as cnt FROM api_usage_log "
+            "WHERE user_id = ? AND created_at >= datetime('now', '-1 day')",
+            (user_id,),
+        ).fetchone()
+    return {
+        "user_id": user_id,
+        "window": "24h",
+        "total_calls": total["cnt"] if total else 0,
+        "by_integration": [{"integration": r["integration"] or "general", "calls": r["cnt"]} for r in rows],
+    }
+
+
+# ─── Full Project Export ─────────────────────────────────────────────────────
+
+@_with_retry
+def export_project(goal_id: int) -> dict:
+    """Export a full goal with all tasks, comments, and artifacts as JSON."""
+    with _conn() as con:
+        goal_row = con.execute("SELECT * FROM goals WHERE id = ?", (goal_id,)).fetchone()
+        if not goal_row:
+            return {}
+        goal = _row_to_goal(goal_row)
+
+        task_rows = con.execute("SELECT * FROM tasks WHERE goal_id = ? ORDER BY order_index", (goal_id,)).fetchall()
+        tasks = [_row_to_task(r) for r in task_rows]
+
+        task_ids = [t.id for t in tasks]
+        comments = []
+        artifacts = []
+        for tid in task_ids:
+            comment_rows = con.execute("SELECT * FROM task_comments WHERE task_id = ?", (tid,)).fetchall()
+            for cr in comment_rows:
+                comments.append({
+                    "id": cr["id"], "task_id": cr["task_id"],
+                    "content": cr["content"], "author": cr["author"],
+                    "created_at": cr["created_at"],
+                })
+            artifact_rows = con.execute("SELECT * FROM task_artifacts WHERE task_id = ?", (tid,)).fetchall()
+            for ar in artifact_rows:
+                artifacts.append({
+                    "id": ar["id"], "task_id": ar["task_id"],
+                    "artifact_type": ar["artifact_type"], "content": ar["content"],
+                    "created_at": ar["created_at"],
+                })
+
+    return {
+        "goal": goal.to_dict(),
+        "tasks": [t.to_dict() for t in tasks],
+        "comments": comments,
+        "artifacts": artifacts,
+    }
