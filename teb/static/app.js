@@ -1,5 +1,21 @@
 /* app.js — teb frontend */
 
+// ─── Utility: HTML escaping (must be defined first — used by toast and others) ─
+function escHtml(str) {
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+// ─── Utility: Safe event binding helper ──────────────────────────────────────
+function on(id, event, fn) {
+  const el = document.getElementById(id);
+  if (el) el.addEventListener(event, fn);
+}
+
 // ─── Base path (injected by server; falls back to "" for standalone) ──────────
 const BASE_PATH = (window.__BASE_PATH__ || '').replace(/\/$/, '');
 
@@ -472,12 +488,18 @@ const TaskDetailPanel = {
     panel.style.display = 'block';
     requestAnimationFrame(() => panel.classList.add('open'));
 
-    document.getElementById('task-detail-title').textContent = task.title || '';
-    document.getElementById('task-detail-status').value = task.status || 'todo';
-    document.getElementById('task-detail-desc').value = task.description || '';
-    document.getElementById('task-detail-due').value = task.due_date || '';
-    document.getElementById('task-detail-est').value = task.estimated_minutes || '';
-    document.getElementById('task-detail-tags').value = (task.tags || []).join(', ');
+    const titleEl = document.getElementById('task-detail-title');
+    const statusEl = document.getElementById('task-detail-status');
+    const descEl = document.getElementById('task-detail-desc');
+    const dueEl = document.getElementById('task-detail-due');
+    const estEl = document.getElementById('task-detail-est');
+    const tagsEl = document.getElementById('task-detail-tags');
+    if (titleEl) titleEl.textContent = task.title || '';
+    if (statusEl) statusEl.value = task.status || 'todo';
+    if (descEl) descEl.value = task.description || '';
+    if (dueEl) dueEl.value = task.due_date || '';
+    if (estEl) estEl.value = task.estimated_minutes || '';
+    if (tagsEl) tagsEl.value = (task.tags || []).join(', ');
 
     // Subtask progress
     const subtasksEl = document.getElementById('task-detail-subtasks');
@@ -506,13 +528,18 @@ const TaskDetailPanel = {
     if (!this._currentTask || !currentGoalId) return;
     const taskId = this._currentTask.id;
     try {
-      const tagsStr = document.getElementById('task-detail-tags').value;
+      const tagsEl = document.getElementById('task-detail-tags');
+      const tagsStr = tagsEl ? tagsEl.value : '';
       const tags = tagsStr ? tagsStr.split(',').map(t => t.trim()).filter(Boolean) : [];
+      const statusEl = document.getElementById('task-detail-status');
+      const descEl = document.getElementById('task-detail-desc');
+      const dueEl = document.getElementById('task-detail-due');
+      const estEl = document.getElementById('task-detail-est');
       await api.patch(`/api/goals/${currentGoalId}/tasks/${taskId}`, {
-        status: document.getElementById('task-detail-status').value,
-        description: document.getElementById('task-detail-desc').value,
-        due_date: document.getElementById('task-detail-due').value || null,
-        estimated_minutes: parseInt(document.getElementById('task-detail-est').value, 10) || null,
+        status: statusEl ? statusEl.value : 'todo',
+        description: descEl ? descEl.value : '',
+        due_date: (dueEl ? dueEl.value : '') || null,
+        estimated_minutes: (estEl && estEl.value.trim()) ? parseInt(estEl.value, 10) : null,
         tags: tags,
       });
       toast.success('Saved', 'Task updated');
@@ -894,22 +921,26 @@ function updateUserBar() {
   const token = localStorage.getItem('teb_token');
   const email = localStorage.getItem('teb_email');
   const bar = document.getElementById('user-bar');
+  if (!bar) return;
   if (token && email) {
-    document.getElementById('user-email').textContent = email;
+    const emailEl = document.getElementById('user-email');
+    if (emailEl) emailEl.textContent = email;
     bar.style.display = 'flex';
   } else {
     bar.style.display = 'none';
   }
 }
 
-document.getElementById('btn-auth-submit').addEventListener('click', async () => {
-  const email = document.getElementById('auth-email').value.trim();
-  const password = document.getElementById('auth-password').value;
+on('btn-auth-submit', 'click', async () => {
+  const emailEl = document.getElementById('auth-email');
+  const passEl = document.getElementById('auth-password');
+  const email = emailEl ? emailEl.value.trim() : '';
+  const password = passEl ? passEl.value : '';
   showError('error-auth', '');
   if (!email || !password) { showError('error-auth', 'Please enter email and password.'); return; }
 
   const btn = document.getElementById('btn-auth-submit');
-  btn.disabled = true;
+  if (btn) btn.disabled = true;
   try {
     const endpoint = authMode === 'register' ? '/api/auth/register' : '/api/auth/login';
     const res = await api.post(endpoint, { email, password });
@@ -922,23 +953,27 @@ document.getElementById('btn-auth-submit').addEventListener('click', async () =>
   } catch (e) {
     showError('error-auth', e.message);
   } finally {
-    btn.disabled = false;
+    if (btn) btn.disabled = false;
   }
 });
 
-document.getElementById('auth-toggle-link').addEventListener('click', (e) => {
+on('auth-toggle-link', 'click', (e) => {
   e.preventDefault();
   authMode = authMode === 'login' ? 'register' : 'login';
-  document.getElementById('auth-title').textContent = authMode === 'register' ? 'Create account' : 'Sign in';
-  document.getElementById('btn-auth-submit').textContent = authMode === 'register' ? 'Register' : 'Sign in';
-  document.getElementById('auth-toggle-text').textContent =
+  const authTitle = document.getElementById('auth-title');
+  const authSubmit = document.getElementById('btn-auth-submit');
+  const authToggleText = document.getElementById('auth-toggle-text');
+  const authToggleLink = document.getElementById('auth-toggle-link');
+  if (authTitle) authTitle.textContent = authMode === 'register' ? 'Create account' : 'Sign in';
+  if (authSubmit) authSubmit.textContent = authMode === 'register' ? 'Register' : 'Sign in';
+  if (authToggleText) authToggleText.textContent =
     authMode === 'register' ? 'Already have an account?' : "Don't have an account?";
-  document.getElementById('auth-toggle-link').textContent =
+  if (authToggleLink) authToggleLink.textContent =
     authMode === 'register' ? 'Sign in' : 'Register';
   showError('error-auth', '');
 });
 
-document.getElementById('auth-skip-link').addEventListener('click', (e) => {
+on('auth-skip-link', 'click', (e) => {
   e.preventDefault();
   localStorage.removeItem('teb_token');
   localStorage.removeItem('teb_email');
@@ -947,7 +982,7 @@ document.getElementById('auth-skip-link').addEventListener('click', (e) => {
   Router.navigate('#/home');
 });
 
-document.getElementById('btn-logout').addEventListener('click', () => {
+on('btn-logout', 'click', () => {
   localStorage.removeItem('teb_token');
   localStorage.removeItem('teb_email');
   updateUserBar();
@@ -956,8 +991,11 @@ document.getElementById('btn-logout').addEventListener('click', () => {
   toast.info('Signed out', 'You have been logged out.');
 });
 
-document.getElementById('auth-password').addEventListener('keydown', e => {
-  if (e.key === 'Enter') document.getElementById('btn-auth-submit').click();
+on('auth-password', 'keydown', e => {
+  if (e.key === 'Enter') {
+    const btn = document.getElementById('btn-auth-submit');
+    if (btn) btn.click();
+  }
 });
 
 // ─── Landing screen ───────────────────────────────────────────────────────────
@@ -1015,15 +1053,16 @@ async function openGoal(goalId) {
   }
 }
 
-document.getElementById('btn-create-goal').addEventListener('click', async () => {
-  const title = document.getElementById('goal-title').value.trim();
-  const desc = document.getElementById('goal-desc').value.trim();
+on('btn-create-goal', 'click', async () => {
+  const titleEl = document.getElementById('goal-title');
+  const descEl = document.getElementById('goal-desc');
+  const title = titleEl ? titleEl.value.trim() : '';
+  const desc = descEl ? descEl.value.trim() : '';
   showError('error-landing', '');
   if (!title) { showError('error-landing', 'Please enter a goal.'); return; }
 
   const btn = document.getElementById('btn-create-goal');
-  btn.disabled = true;
-  btn.innerHTML = 'Working… <span class="spinner"></span>';
+  if (btn) { btn.disabled = true; btn.innerHTML = 'Working… <span class="spinner"></span>'; }
 
   try {
     const goal = await api.post('/api/goals', { title, description: desc });
@@ -1032,20 +1071,23 @@ document.getElementById('btn-create-goal').addEventListener('click', async () =>
   } catch (e) {
     showError('error-landing', e.message);
   } finally {
-    btn.disabled = false;
-    btn.textContent = 'Decompose →';
+    if (btn) { btn.disabled = false; btn.textContent = 'Decompose →'; }
   }
 });
 
 // Enter key on goal title input
-document.getElementById('goal-title').addEventListener('keydown', e => {
-  if (e.key === 'Enter') document.getElementById('btn-create-goal').click();
+on('goal-title', 'keydown', e => {
+  if (e.key === 'Enter') {
+    const btn = document.getElementById('btn-create-goal');
+    if (btn) btn.click();
+  }
 });
 
 // ─── Clarify screen ───────────────────────────────────────────────────────────
 
 async function startClarifyFlow(goal) {
-  document.getElementById('clarify-goal-title').textContent = goal.title;
+  const titleEl = document.getElementById('clarify-goal-title');
+  if (titleEl) titleEl.textContent = goal.title;
   const q = await api.get(`/api/goals/${goal.id}/next_question`);
   if (q.done) {
     await triggerDecompose(goal.id);
@@ -1056,27 +1098,31 @@ async function startClarifyFlow(goal) {
 }
 
 function showQuestion(q) {
-  document.getElementById('clarify-question-text').textContent = q.text;
-  document.getElementById('clarify-answer').placeholder = q.hint || '';
-  document.getElementById('clarify-answer').value = '';
-  document.getElementById('clarify-answer').dataset.key = q.key;
-  document.getElementById('clarify-answer').focus();
+  const qText = document.getElementById('clarify-question-text');
+  const answerEl = document.getElementById('clarify-answer');
+  if (qText) qText.textContent = q.text;
+  if (answerEl) {
+    answerEl.placeholder = q.hint || '';
+    answerEl.value = '';
+    answerEl.dataset.key = q.key;
+    answerEl.focus();
+  }
 }
 
-document.getElementById('btn-clarify-next').addEventListener('click', submitClarifyAnswer);
-document.getElementById('clarify-answer').addEventListener('keydown', e => {
+on('btn-clarify-next', 'click', submitClarifyAnswer);
+on('clarify-answer', 'keydown', e => {
   if (e.key === 'Enter') submitClarifyAnswer();
 });
 
 async function submitClarifyAnswer() {
   const input = document.getElementById('clarify-answer');
-  const answer = input.value.trim();
-  const key = input.dataset.key;
+  const answer = input ? input.value.trim() : '';
+  const key = input ? input.dataset.key : '';
   showError('error-clarify', '');
   if (!answer) { showError('error-clarify', 'Please enter an answer (or click "Skip").'); return; }
 
   const btn = document.getElementById('btn-clarify-next');
-  btn.disabled = true;
+  if (btn) btn.disabled = true;
   try {
     const res = await api.post(`/api/goals/${currentGoalId}/clarify`, { key, answer });
     if (res.done) {
@@ -1087,15 +1133,15 @@ async function submitClarifyAnswer() {
   } catch (e) {
     showError('error-clarify', e.message);
   } finally {
-    btn.disabled = false;
+    if (btn) btn.disabled = false;
   }
 }
 
-document.getElementById('btn-skip-clarify').addEventListener('click', async () => {
+on('btn-skip-clarify', 'click', async () => {
   await triggerDecompose(currentGoalId);
 });
 
-document.getElementById('back-from-clarify').addEventListener('click', () => {
+on('back-from-clarify', 'click', () => {
   Router.navigate('#/home');
 });
 
@@ -1119,7 +1165,8 @@ async function triggerDecompose(goalId) {
 async function showTasksScreen(goal, freshDecompose) {
   currentGoalId = goal.id;
   currentGoalTitle = goal.title;
-  document.getElementById('tasks-goal-title').textContent = goal.title;
+  const goalTitleEl = document.getElementById('tasks-goal-title');
+  if (goalTitleEl) goalTitleEl.textContent = goal.title;
   currentTasks = goal.tasks || [];
   renderTasks(currentTasks);
   updateProgress(currentTasks);
@@ -1161,13 +1208,16 @@ async function showTasksScreen(goal, freshDecompose) {
 
 function setDripMode(on) {
   dripMode = on;
-  document.getElementById('drip-section').style.display = on ? 'block' : 'none';
-  document.getElementById('all-tasks-section').style.display = on ? 'none' : 'block';
-  document.getElementById('btn-toggle-view').textContent = on ? 'Show all tasks' : 'Switch to drip mode';
+  const dripSection = document.getElementById('drip-section');
+  const allTasksSection = document.getElementById('all-tasks-section');
+  const toggleBtn = document.getElementById('btn-toggle-view');
+  if (dripSection) dripSection.style.display = on ? 'block' : 'none';
+  if (allTasksSection) allTasksSection.style.display = on ? 'none' : 'block';
+  if (toggleBtn) toggleBtn.textContent = on ? 'Show all tasks' : 'Switch to drip mode';
   if (on) loadDrip();
 }
 
-document.getElementById('btn-toggle-view').addEventListener('click', () => {
+on('btn-toggle-view', 'click', () => {
   setDripMode(!dripMode);
 });
 
@@ -1180,70 +1230,89 @@ async function loadDrip() {
     const msg = document.getElementById('drip-message');
 
     if (!res.task) {
-      card.style.display = 'none';
-      doneMsg.style.display = 'block';
-      // Show contextual done message
+      if (card) card.style.display = 'none';
+      if (doneMsg) doneMsg.style.display = 'block';
+      // BUG-05: Only show "All tasks completed" when all tasks are actually done
+      const allDone = currentTasks.length > 0 &&
+        currentTasks.every(t => t.status === 'done');
       const doneTitle = document.getElementById('drip-done-title');
       const doneDesc = document.getElementById('drip-done-desc');
-      if (res.message && res.message.includes('well done')) {
-        doneTitle.textContent = 'All tasks completed!';
-        doneDesc.textContent = 'Great job — you\'ve finished everything on your list.';
+      if (allDone || (res.message && res.message.includes('well done'))) {
+        if (doneTitle) doneTitle.textContent = 'All tasks completed!';
+        if (doneDesc) doneDesc.textContent = 'Great job — you\'ve finished everything on your list.';
       } else {
-        doneTitle.textContent = 'No tasks yet';
-        doneDesc.textContent = res.message || 'Click "AI Orchestrate" or decompose your goal to get started.';
+        if (doneTitle) doneTitle.textContent = 'No tasks yet';
+        if (doneDesc) doneDesc.textContent = res.message || 'Click "AI Orchestrate" or decompose your goal to get started.';
       }
-      msg.textContent = '';
+      if (msg) msg.textContent = '';
       return;
     }
 
-    doneMsg.style.display = 'none';
-    card.style.display = 'block';
-    card.dataset.taskId = res.task.id;
-    document.getElementById('drip-title').textContent = res.task.title;
-    document.getElementById('drip-desc').textContent = res.task.description;
-    document.getElementById('drip-meta').textContent = `~${res.task.estimated_minutes} min`;
-    msg.textContent = res.message || '';
+    if (doneMsg) doneMsg.style.display = 'none';
+    if (card) {
+      card.style.display = 'block';
+      card.dataset.taskId = res.task.id;
+    }
+    const dripTitle = document.getElementById('drip-title');
+    const dripDesc = document.getElementById('drip-desc');
+    const dripMeta = document.getElementById('drip-meta');
+    if (dripTitle) dripTitle.textContent = res.task.title;
+    if (dripDesc) dripDesc.textContent = res.task.description;
+    if (dripMeta) dripMeta.textContent = `~${res.task.estimated_minutes} min`;
+    if (msg) msg.textContent = res.message || '';
 
     // Skip suggestion (P2.2)
     const skipSug = document.getElementById('drip-skip-suggestion');
-    if (res.skip_suggestion) {
-      skipSug.textContent = res.skip_suggestion;
-      skipSug.style.display = 'block';
-    } else {
-      skipSug.style.display = 'none';
+    if (skipSug) {
+      if (res.skip_suggestion) {
+        skipSug.textContent = res.skip_suggestion;
+        skipSug.style.display = 'block';
+      } else {
+        skipSug.style.display = 'none';
+      }
     }
 
     // Stall detection (P2.3)
     const stallMsg = document.getElementById('drip-stall-msg');
-    if (res.stall_detected) {
-      stallMsg.textContent = res.message;
-      if (res.sub_task_suggestion) {
-        stallMsg.textContent += ` Suggested mini-task: "${res.sub_task_suggestion.title}"`;
+    if (stallMsg) {
+      if (res.stall_detected) {
+        stallMsg.textContent = res.message;
+        if (res.sub_task_suggestion) {
+          stallMsg.textContent += ` Suggested mini-task: "${res.sub_task_suggestion.title}"`;
+        }
+        stallMsg.style.display = 'block';
+      } else {
+        stallMsg.style.display = 'none';
       }
-      stallMsg.style.display = 'block';
-    } else {
-      stallMsg.style.display = 'none';
     }
 
     // Adaptive question
     const aqSection = document.getElementById('drip-adaptive-question');
-    if (res.adaptive_question) {
-      document.getElementById('drip-q-text').textContent = res.adaptive_question.text;
-      document.getElementById('drip-q-answer').placeholder = res.adaptive_question.hint || '';
-      document.getElementById('drip-q-answer').value = '';
-      document.getElementById('drip-q-answer').dataset.key = res.adaptive_question.key;
-      aqSection.style.display = 'block';
-    } else {
-      aqSection.style.display = 'none';
+    if (aqSection) {
+      if (res.adaptive_question) {
+        const qText = document.getElementById('drip-q-text');
+        const qAnswer = document.getElementById('drip-q-answer');
+        if (qText) qText.textContent = res.adaptive_question.text;
+        if (qAnswer) {
+          qAnswer.placeholder = res.adaptive_question.hint || '';
+          qAnswer.value = '';
+          qAnswer.dataset.key = res.adaptive_question.key;
+        }
+        aqSection.style.display = 'block';
+      } else {
+        aqSection.style.display = 'none';
+      }
     }
   } catch (e) {
-    document.getElementById('drip-message').textContent = 'Could not load next task.';
+    const dripMsg = document.getElementById('drip-message');
+    if (dripMsg) dripMsg.textContent = 'Could not load next task.';
   }
 }
 
-document.getElementById('btn-drip-done').addEventListener('click', async () => {
+// BUG-06: Don't parseInt task IDs — they may be UUIDs/strings
+on('btn-drip-done', 'click', async () => {
   const card = document.getElementById('drip-card');
-  const tid = parseInt(card.dataset.taskId, 10);
+  const tid = card ? card.dataset.taskId : null;
   if (!tid) return;
   try {
     await api.patch(`/api/tasks/${tid}`, { status: 'done' });
@@ -1255,9 +1324,9 @@ document.getElementById('btn-drip-done').addEventListener('click', async () => {
   }
 });
 
-document.getElementById('btn-drip-skip').addEventListener('click', async () => {
+on('btn-drip-skip', 'click', async () => {
   const card = document.getElementById('drip-card');
-  const tid = parseInt(card.dataset.taskId, 10);
+  const tid = card ? card.dataset.taskId : null;
   if (!tid) return;
   try {
     await api.patch(`/api/tasks/${tid}`, { status: 'skipped' });
@@ -1268,14 +1337,15 @@ document.getElementById('btn-drip-skip').addEventListener('click', async () => {
   }
 });
 
-document.getElementById('btn-drip-q-submit').addEventListener('click', async () => {
+on('btn-drip-q-submit', 'click', async () => {
   const input = document.getElementById('drip-q-answer');
-  const answer = input.value.trim();
-  const key = input.dataset.key;
+  const answer = input ? input.value.trim() : '';
+  const key = input ? input.dataset.key : '';
   if (!answer || !key) return;
   try {
     await api.post(`/api/goals/${currentGoalId}/drip/clarify`, { key, answer });
-    document.getElementById('drip-adaptive-question').style.display = 'none';
+    const aq = document.getElementById('drip-adaptive-question');
+    if (aq) aq.style.display = 'none';
   } catch (e) {
     showError('error-tasks', e.message);
   }
@@ -1514,6 +1584,7 @@ async function refreshGoalView() {
 
 async function loadFocusTask() {
   const banner = document.getElementById('focus-banner');
+  if (!banner) return;
   if (!currentGoalId) { banner.style.display = 'none'; return; }
   try {
     const res = await api.get(`/api/goals/${currentGoalId}/focus`);
@@ -1522,9 +1593,12 @@ async function loadFocusTask() {
       return;
     }
     const t = res.focus_task;
-    document.getElementById('focus-title').textContent = t.title;
-    document.getElementById('focus-desc').textContent = t.description;
-    document.getElementById('focus-meta').textContent = `~${t.estimated_minutes} min`;
+    const focusTitle = document.getElementById('focus-title');
+    const focusDesc = document.getElementById('focus-desc');
+    const focusMeta = document.getElementById('focus-meta');
+    if (focusTitle) focusTitle.textContent = t.title;
+    if (focusDesc) focusDesc.textContent = t.description;
+    if (focusMeta) focusMeta.textContent = `~${t.estimated_minutes} min`;
     banner.style.display = 'block';
     banner.dataset.taskId = t.id;
   } catch (e) {
@@ -1534,6 +1608,7 @@ async function loadFocusTask() {
 
 async function loadProgressDetail() {
   const el = document.getElementById('progress-detail');
+  if (!el) return;
   if (!currentGoalId) { el.textContent = ''; return; }
   try {
     const p = await api.get(`/api/goals/${currentGoalId}/progress`);
@@ -1565,18 +1640,18 @@ async function loadProgressDetail() {
   }
 }
 
-document.getElementById('btn-focus-done').addEventListener('click', async () => {
+on('btn-focus-done', 'click', async () => {
   const banner = document.getElementById('focus-banner');
-  const tid = parseInt(banner.dataset.taskId, 10);
+  const tid = banner ? banner.dataset.taskId : null;
   if (tid) {
     await patchTaskStatus(tid, 'done');
     toast.success('Done!', 'Task marked as completed.');
   }
 });
 
-document.getElementById('btn-focus-start').addEventListener('click', async () => {
+on('btn-focus-start', 'click', async () => {
   const banner = document.getElementById('focus-banner');
-  const tid = parseInt(banner.dataset.taskId, 10);
+  const tid = banner ? banner.dataset.taskId : null;
   if (tid) await patchTaskStatus(tid, 'in_progress');
 });
 
@@ -1589,8 +1664,10 @@ function updateProgress(tasks) {
 }
 
 function setProgress(pct) {
-  document.getElementById('progress-fill').style.width = pct + '%';
-  document.getElementById('progress-label').textContent = pct + '% complete';
+  const fill = document.getElementById('progress-fill');
+  const label = document.getElementById('progress-label');
+  if (fill) fill.style.width = pct + '%';
+  if (label) label.textContent = pct + '% complete';
 }
 
 function renderStatusChart(tasks) {
@@ -1637,15 +1714,15 @@ function renderStatusChart(tasks) {
     </div>`;
 }
 
-document.getElementById('back-from-tasks').addEventListener('click', () => {
+on('back-from-tasks', 'click', () => {
   Router.navigate('#/home');
 });
 
-document.getElementById('btn-redecompose').addEventListener('click', async () => {
+on('btn-redecompose', 'click', async () => {
   if (!currentGoalId) return;
   showError('error-tasks', '');
   const btn = document.getElementById('btn-redecompose');
-  btn.disabled = true;
+  if (btn) btn.disabled = true;
   showLoading('Re-generating tasks…');
   try {
     await api.post(`/api/goals/${currentGoalId}/decompose`, {});
@@ -1656,11 +1733,11 @@ document.getElementById('btn-redecompose').addEventListener('click', async () =>
     hideLoading();
     showError('error-tasks', e.message);
   } finally {
-    btn.disabled = false;
+    if (btn) btn.disabled = false;
   }
 });
 
-document.getElementById('btn-add-task').addEventListener('click', async () => {
+on('btn-add-task', 'click', async () => {
   if (!currentGoalId) return;
   const title = prompt('Task title:');
   if (!title || !title.trim()) return;
@@ -1695,7 +1772,7 @@ async function loadAutopilotStatus() {
   }
 }
 
-document.getElementById('autopilot-toggle').addEventListener('change', async (e) => {
+on('autopilot-toggle', 'change', async (e) => {
   const enabled = e.target.checked;
   const status = document.getElementById('autopilot-status');
   try {
@@ -1710,7 +1787,8 @@ document.getElementById('autopilot-toggle').addEventListener('change', async (e)
       await api.del(`/api/goals/${currentGoalId}/auto-execute`);
       autopilotEnabled = false;
       if (status) status.textContent = 'Off';
-      document.getElementById('budget-prompt').style.display = 'none';
+      const bp = document.getElementById('budget-prompt');
+      if (bp) bp.style.display = 'none';
     }
   } catch (e) {
     e.target.checked = !enabled;
@@ -1719,22 +1797,26 @@ document.getElementById('autopilot-toggle').addEventListener('change', async (e)
 });
 
 async function checkBudgetPrompt() {
+  const bp = document.getElementById('budget-prompt');
+  if (!bp) return;
   try {
     const budgets = await api.get(`/api/goals/${currentGoalId}/budgets`);
     if (!budgets || !budgets.length) {
-      document.getElementById('budget-prompt').style.display = 'block';
+      bp.style.display = 'block';
     } else {
-      document.getElementById('budget-prompt').style.display = 'none';
+      bp.style.display = 'none';
     }
   } catch (e) {
     // Show prompt if we can't determine
-    document.getElementById('budget-prompt').style.display = 'block';
+    bp.style.display = 'block';
   }
 }
 
-document.getElementById('btn-set-budget').addEventListener('click', async () => {
-  const daily = parseFloat(document.getElementById('budget-daily').value) || 50;
-  const total = parseFloat(document.getElementById('budget-total').value) || 500;
+on('btn-set-budget', 'click', async () => {
+  const dailyEl = document.getElementById('budget-daily');
+  const totalEl = document.getElementById('budget-total');
+  const daily = parseFloat(dailyEl ? dailyEl.value : '') || 50;
+  const total = parseFloat(totalEl ? totalEl.value : '') || 500;
   showError('error-budget', '');
   try {
     await api.post('/api/budgets', {
@@ -1746,7 +1828,8 @@ document.getElementById('btn-set-budget').addEventListener('click', async () => 
       autopilot_enabled: true,
       autopilot_threshold: daily,
     });
-    document.getElementById('budget-prompt').style.display = 'none';
+    const bp = document.getElementById('budget-prompt');
+    if (bp) bp.style.display = 'none';
     toast.success('Budget set', `Daily: $${daily}, Total: $${total}`);
   } catch (e) {
     showError('error-budget', e.message);
@@ -1755,7 +1838,7 @@ document.getElementById('btn-set-budget').addEventListener('click', async () => 
 
 // ─── AI Orchestrate ───────────────────────────────────────────────────────────
 
-document.getElementById('btn-orchestrate').addEventListener('click', async () => {
+on('btn-orchestrate', 'click', async () => {
   const btn = document.getElementById('btn-orchestrate');
   const panel = document.getElementById('agent-activity-panel');
   const content = document.getElementById('agent-activity-content');
@@ -1928,7 +2011,7 @@ async function loadAgentActivity() {
   }
 }
 
-document.getElementById('btn-add-all-outcomes').addEventListener('click', async () => {
+on('btn-add-all-outcomes', 'click', async () => {
   const banner = document.getElementById('outcome-suggestions-banner');
   if (!_pendingOutcomeSuggestions) return;
   try {
@@ -1940,7 +2023,7 @@ document.getElementById('btn-add-all-outcomes').addEventListener('click', async 
       });
     }
     _pendingOutcomeSuggestions = null;
-    banner.style.display = 'none';
+    if (banner) banner.style.display = 'none';
     loadOutcomeMetrics();
     toast.success('Metrics added', 'Outcome metrics are now being tracked.');
   } catch (e) {
@@ -1948,9 +2031,10 @@ document.getElementById('btn-add-all-outcomes').addEventListener('click', async 
   }
 });
 
-document.getElementById('btn-skip-outcomes').addEventListener('click', () => {
+on('btn-skip-outcomes', 'click', () => {
   _pendingOutcomeSuggestions = null;
-  document.getElementById('outcome-suggestions-banner').style.display = 'none';
+  const banner = document.getElementById('outcome-suggestions-banner');
+  if (banner) banner.style.display = 'none';
 });
 
 // ─── Proactive suggestions ────────────────────────────────────────────────────
@@ -2007,23 +2091,22 @@ async function loadProactiveSuggestions() {
 
 // ─── Service discovery ────────────────────────────────────────────────────────
 
-document.getElementById('btn-discover').addEventListener('click', async () => {
+on('btn-discover', 'click', async () => {
   const btn = document.getElementById('btn-discover');
   const container = document.getElementById('discovery-list');
-  btn.disabled = true;
-  btn.textContent = 'Searching…';
+  if (btn) { btn.disabled = true; btn.textContent = 'Searching…'; }
   try {
     const params = currentGoalTitle ? `?goal_title=${encodeURIComponent(currentGoalTitle)}` : '';
     const res = await api.get(`/api/discover/services${params}`);
     const services = res.services || res || [];
     if (!services.length) {
-      container.innerHTML = `
+      if (container) container.innerHTML = `
         <div class="empty-state" style="padding:var(--space-md)">
           <div class="empty-state-icon">🔍</div>
           <div class="empty-state-desc">No matching services found.</div>
         </div>`;
     } else {
-      container.innerHTML = services.slice(0, 10).map(s => {
+      if (container) container.innerHTML = services.slice(0, 10).map(s => {
         const category = s.category ? `<span class="badge">${escHtml(s.category)}</span>` : '';
         const skillLevel = s.skill_level ? `<span class="badge">${escHtml(s.skill_level)}</span>` : '';
         return `
@@ -2037,21 +2120,21 @@ document.getElementById('btn-discover').addEventListener('click', async () => {
       }).join('');
     }
   } catch (e) {
-    container.innerHTML = `<p class="error">${escHtml(e.message)}</p>`;
+    if (container) container.innerHTML = `<p class="error">${escHtml(e.message)}</p>`;
   } finally {
-    btn.disabled = false;
-    btn.textContent = 'Find matching services';
+    if (btn) { btn.disabled = false; btn.textContent = 'Find matching services'; }
   }
 });
 
 // ─── Settings Modal ───────────────────────────────────────────────────────────
 
-document.getElementById('btn-settings')?.addEventListener('click', () => {
+on('btn-settings', 'click', () => {
   showSettingsModal();
 });
 
-document.getElementById('btn-close-settings').addEventListener('click', () => {
-  document.getElementById('settings-modal').style.display = 'none';
+on('btn-close-settings', 'click', () => {
+  const modal = document.getElementById('settings-modal');
+  if (modal) modal.style.display = 'none';
 });
 
 // Settings tabs
@@ -2069,19 +2152,21 @@ document.querySelectorAll('.settings-tab').forEach(tab => {
   });
 });
 
-document.getElementById('btn-tg-save').addEventListener('click', async () => {
-  const token = document.getElementById('tg-bot-token').value.trim();
-  const chatId = document.getElementById('tg-chat-id').value.trim();
+on('btn-tg-save', 'click', async () => {
+  const tokenEl = document.getElementById('tg-bot-token');
+  const chatIdEl = document.getElementById('tg-chat-id');
+  const token = tokenEl ? tokenEl.value.trim() : '';
+  const chatId = chatIdEl ? chatIdEl.value.trim() : '';
   showError('error-tg', '');
   if (!token || !chatId) { showError('error-tg', 'Both bot token and chat ID are required.'); return; }
   try {
     await api.post('/api/messaging/config', {
       channel: 'telegram',
       config: { bot_token: token, chat_id: chatId },
-      notify_nudges: document.getElementById('notif-nudges').checked,
-      notify_tasks: document.getElementById('notif-tasks').checked,
-      notify_spending: document.getElementById('notif-spending').checked,
-      notify_checkins: document.getElementById('notif-checkins').checked,
+      notify_nudges: document.getElementById('notif-nudges')?.checked ?? false,
+      notify_tasks: document.getElementById('notif-tasks')?.checked ?? false,
+      notify_spending: document.getElementById('notif-spending')?.checked ?? false,
+      notify_checkins: document.getElementById('notif-checkins')?.checked ?? false,
     });
     showError('error-tg', '');
     loadExistingConfigs();
@@ -2091,11 +2176,12 @@ document.getElementById('btn-tg-save').addEventListener('click', async () => {
   }
 });
 
-document.getElementById('btn-tg-test').addEventListener('click', async () => {
+on('btn-tg-test', 'click', async () => {
   showError('error-tg', '');
-  // Save first, then test
-  const token = document.getElementById('tg-bot-token').value.trim();
-  const chatId = document.getElementById('tg-chat-id').value.trim();
+  const tokenEl = document.getElementById('tg-bot-token');
+  const chatIdEl = document.getElementById('tg-chat-id');
+  const token = tokenEl ? tokenEl.value.trim() : '';
+  const chatId = chatIdEl ? chatIdEl.value.trim() : '';
   if (!token || !chatId) { showError('error-tg', 'Save a config first.'); return; }
   try {
     const cfg = await api.post('/api/messaging/config', {
@@ -2110,18 +2196,19 @@ document.getElementById('btn-tg-test').addEventListener('click', async () => {
   }
 });
 
-document.getElementById('btn-wh-save').addEventListener('click', async () => {
-  const url = document.getElementById('wh-url').value.trim();
+on('btn-wh-save', 'click', async () => {
+  const urlEl = document.getElementById('wh-url');
+  const url = urlEl ? urlEl.value.trim() : '';
   showError('error-wh', '');
   if (!url) { showError('error-wh', 'URL is required.'); return; }
   try {
     await api.post('/api/messaging/config', {
       channel: 'webhook',
       config: { url },
-      notify_nudges: document.getElementById('notif-nudges').checked,
-      notify_tasks: document.getElementById('notif-tasks').checked,
-      notify_spending: document.getElementById('notif-spending').checked,
-      notify_checkins: document.getElementById('notif-checkins').checked,
+      notify_nudges: document.getElementById('notif-nudges')?.checked ?? false,
+      notify_tasks: document.getElementById('notif-tasks')?.checked ?? false,
+      notify_spending: document.getElementById('notif-spending')?.checked ?? false,
+      notify_checkins: document.getElementById('notif-checkins')?.checked ?? false,
     });
     showError('error-wh', '');
     loadExistingConfigs();
@@ -2131,9 +2218,10 @@ document.getElementById('btn-wh-save').addEventListener('click', async () => {
   }
 });
 
-document.getElementById('btn-wh-test').addEventListener('click', async () => {
+on('btn-wh-test', 'click', async () => {
   showError('error-wh', '');
-  const url = document.getElementById('wh-url').value.trim();
+  const urlEl = document.getElementById('wh-url');
+  const url = urlEl ? urlEl.value.trim() : '';
   if (!url) { showError('error-wh', 'Save a config first.'); return; }
   try {
     const cfg = await api.post('/api/messaging/config', {
@@ -2213,39 +2301,33 @@ async function loadCredentials() {
   }
 }
 
-document.getElementById('btn-add-credential').addEventListener('click', async () => {
-  const name = document.getElementById('cred-name').value.trim();
-  const baseUrl = document.getElementById('cred-base-url').value.trim();
-  const authHeader = document.getElementById('cred-auth-header').value.trim() || 'Authorization';
-  const authValue = document.getElementById('cred-auth-value').value.trim();
-  const desc = document.getElementById('cred-desc').value.trim();
+on('btn-add-credential', 'click', async () => {
+  const nameEl = document.getElementById('cred-name');
+  const baseUrlEl = document.getElementById('cred-base-url');
+  const authHeaderEl = document.getElementById('cred-auth-header');
+  const authValueEl = document.getElementById('cred-auth-value');
+  const descEl = document.getElementById('cred-desc');
+  const name = nameEl ? nameEl.value.trim() : '';
+  const baseUrl = baseUrlEl ? baseUrlEl.value.trim() : '';
+  const authHeader = (authHeaderEl ? authHeaderEl.value.trim() : '') || 'Authorization';
+  const authValue = authValueEl ? authValueEl.value.trim() : '';
+  const desc = descEl ? descEl.value.trim() : '';
   showError('error-credential', '');
   if (!name || !baseUrl) { showError('error-credential', 'Name and base URL are required.'); return; }
   try {
     await api.post('/api/credentials', {
       name, base_url: baseUrl, auth_header: authHeader, auth_value: authValue, description: desc,
     });
-    document.getElementById('cred-name').value = '';
-    document.getElementById('cred-base-url').value = '';
-    document.getElementById('cred-auth-value').value = '';
-    document.getElementById('cred-desc').value = '';
+    if (nameEl) nameEl.value = '';
+    if (baseUrlEl) baseUrlEl.value = '';
+    if (authValueEl) authValueEl.value = '';
+    if (descEl) descEl.value = '';
     loadCredentials();
     toast.success('Added', 'Credential stored securely.');
   } catch (e) {
     showError('error-credential', e.message);
   }
 });
-
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-
-function escHtml(str) {
-  return String(str)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-}
 
 // ─── Keyboard shortcuts ──────────────────────────────────────────────────────
 
@@ -2254,21 +2336,21 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape') {
     const settingsModal = document.getElementById('settings-modal');
     const adminModal = document.getElementById('admin-modal');
-    if (settingsModal.style.display !== 'none') {
+    if (settingsModal && settingsModal.style.display !== 'none') {
       settingsModal.style.display = 'none';
-    } else if (adminModal.style.display !== 'none') {
+    } else if (adminModal && adminModal.style.display !== 'none') {
       adminModal.style.display = 'none';
     }
   }
 });
 
 // Click outside modal to close
-document.getElementById('settings-modal').addEventListener('click', (e) => {
+on('settings-modal', 'click', (e) => {
   if (e.target === e.currentTarget) {
     e.currentTarget.style.display = 'none';
   }
 });
-document.getElementById('admin-modal').addEventListener('click', (e) => {
+on('admin-modal', 'click', (e) => {
   if (e.target === e.currentTarget) {
     e.currentTarget.style.display = 'none';
   }
@@ -2328,15 +2410,17 @@ init();
 
 // ─── Daily Check-in ───────────────────────────────────────────────────────────
 
-document.getElementById('btn-checkin').addEventListener('click', submitCheckin);
+on('btn-checkin', 'click', submitCheckin);
 
 async function submitCheckin() {
-  const done = document.getElementById('checkin-done').value.trim();
-  const blockers = document.getElementById('checkin-blockers').value.trim();
+  const doneEl = document.getElementById('checkin-done');
+  const blockersEl = document.getElementById('checkin-blockers');
+  const done = doneEl ? doneEl.value.trim() : '';
+  const blockers = blockersEl ? blockersEl.value.trim() : '';
   if (!done && !blockers) return;
 
   const btn = document.getElementById('btn-checkin');
-  btn.disabled = true;
+  if (btn) btn.disabled = true;
   try {
     const res = await api.post(`/api/goals/${currentGoalId}/checkin`, {
       done_summary: done,
@@ -2344,11 +2428,10 @@ async function submitCheckin() {
     });
     // Show coaching feedback
     const fb = document.getElementById('checkin-feedback');
-    fb.textContent = res.coaching;
-    fb.style.display = 'block';
+    if (fb) { fb.textContent = res.coaching; fb.style.display = 'block'; }
     // Clear inputs
-    document.getElementById('checkin-done').value = '';
-    document.getElementById('checkin-blockers').value = '';
+    if (doneEl) doneEl.value = '';
+    if (blockersEl) blockersEl.value = '';
     // Refresh history and nudge
     loadCheckinHistory();
     loadNudge();
@@ -2356,7 +2439,7 @@ async function submitCheckin() {
   } catch (e) {
     showError('error-tasks', e.message);
   } finally {
-    btn.disabled = false;
+    if (btn) btn.disabled = false;
   }
 }
 
@@ -2389,8 +2472,10 @@ async function loadNudge() {
   try {
     const res = await api.get(`/api/goals/${currentGoalId}/nudge`);
     const banner = document.getElementById('nudge-banner');
+    if (!banner) return;
     if (res.nudge) {
-      document.getElementById('nudge-message').textContent = res.nudge.message;
+      const nudgeMsg = document.getElementById('nudge-message');
+      if (nudgeMsg) nudgeMsg.textContent = res.nudge.message;
       banner.style.display = 'flex';
       banner.dataset.nudgeId = res.nudge.id;
     } else {
@@ -2401,8 +2486,9 @@ async function loadNudge() {
   }
 }
 
-document.getElementById('btn-nudge-ack').addEventListener('click', async () => {
+on('btn-nudge-ack', 'click', async () => {
   const banner = document.getElementById('nudge-banner');
+  if (!banner) return;
   const nudgeId = banner.dataset.nudgeId;
   if (nudgeId) {
     try {
@@ -2471,7 +2557,7 @@ async function loadOutcomeMetrics() {
   }
 }
 
-document.getElementById('btn-suggest-outcomes').addEventListener('click', async () => {
+on('btn-suggest-outcomes', 'click', async () => {
   if (!currentGoalId) return;
   try {
     const suggestions = await api.get(`/api/goals/${currentGoalId}/outcome_suggestions`);
@@ -2489,7 +2575,7 @@ document.getElementById('btn-suggest-outcomes').addEventListener('click', async 
   }
 });
 
-document.getElementById('btn-add-outcome').addEventListener('click', async () => {
+on('btn-add-outcome', 'click', async () => {
   if (!currentGoalId) return;
   const label = prompt('Metric name (e.g. "Revenue earned", "Chapters completed"):');
   if (!label || !label.trim()) return;
@@ -2710,12 +2796,13 @@ async function loadPlatformInsights() {
 
 // ─── Admin Panel ──────────────────────────────────────────────────────────────
 
-document.getElementById('btn-admin')?.addEventListener('click', () => {
+on('btn-admin', 'click', () => {
   showAdminModal();
 });
 
-document.getElementById('btn-close-admin').addEventListener('click', () => {
-  document.getElementById('admin-modal').style.display = 'none';
+on('btn-close-admin', 'click', () => {
+  const modal = document.getElementById('admin-modal');
+  if (modal) modal.style.display = 'none';
 });
 
 async function loadAdminStats() {
@@ -2884,19 +2971,27 @@ async function adminDeleteIntegration(name) {
   }
 }
 
-document.getElementById('btn-admin-add-integration').addEventListener('click', async () => {
-  const serviceName = document.getElementById('ai-service-name').value.trim();
+on('btn-admin-add-integration', 'click', async () => {
+  const serviceNameEl = document.getElementById('ai-service-name');
+  const serviceName = serviceNameEl ? serviceNameEl.value.trim() : '';
   if (!serviceName) { showError('admin-integrations-error', 'Service name is required.'); return; }
-  const category = document.getElementById('ai-category').value.trim();
-  const baseUrl = document.getElementById('ai-base-url').value.trim();
-  const authType = document.getElementById('ai-auth-type').value;
-  const authHeader = document.getElementById('ai-auth-header').value.trim() || 'Authorization';
-  const docsUrl = document.getElementById('ai-docs-url').value.trim();
-  const capsRaw = document.getElementById('ai-capabilities').value.trim();
+  const categoryEl = document.getElementById('ai-category');
+  const baseUrlEl = document.getElementById('ai-base-url');
+  const authTypeEl = document.getElementById('ai-auth-type');
+  const authHeaderEl = document.getElementById('ai-auth-header');
+  const docsUrlEl = document.getElementById('ai-docs-url');
+  const capsRawEl = document.getElementById('ai-capabilities');
+  const category = categoryEl ? categoryEl.value.trim() : '';
+  const baseUrl = baseUrlEl ? baseUrlEl.value.trim() : '';
+  const authType = authTypeEl ? authTypeEl.value : '';
+  const authHeader = (authHeaderEl ? authHeaderEl.value.trim() : '') || 'Authorization';
+  const docsUrl = docsUrlEl ? docsUrlEl.value.trim() : '';
+  const capsRaw = capsRawEl ? capsRawEl.value.trim() : '';
   const capabilities = capsRaw ? capsRaw.split(',').map(s => s.trim()).filter(Boolean) : [];
   let commonEndpoints = [];
   try {
-    const ep = document.getElementById('ai-endpoints').value.trim();
+    const epEl = document.getElementById('ai-endpoints');
+    const ep = epEl ? epEl.value.trim() : '';
     if (ep) commonEndpoints = JSON.parse(ep);
   } catch (e) {
     showError('admin-integrations-error', 'Common endpoints must be valid JSON.');
@@ -3066,6 +3161,7 @@ function scrollToElement(el) {
 // ─── Tab trap for modals (accessibility) ──────────────────────────────────────
 
 function trapFocusInModal(modalEl) {
+  if (!modalEl) return;
   const focusable = modalEl.querySelectorAll(
     'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
   );
