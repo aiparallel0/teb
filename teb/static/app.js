@@ -2608,8 +2608,6 @@ async function loadGamification() {
     if (xpDisplay && xpData) {
       const level = xpData.level || 1;
       const xp = xpData.total_xp || 0;
-      const streak = xpData.streak_days || 0;
-      const nextLevelXP = (level) * 100;
       const currentLevelXP = xp % 100;
       const pct = Math.min(100, Math.round((currentLevelXP / 100) * 100));
       xpDisplay.innerHTML = `
