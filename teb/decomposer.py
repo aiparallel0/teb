@@ -2402,3 +2402,251 @@ def validate_spending(
         "remaining_daily": remaining_daily - amount,
         "remaining_total": remaining_total - amount,
     }
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Phase 1: AI Priority Triage & Risk Assessment
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def triage_tasks(goal_id: int) -> List[Dict[str, Any]]:
+    """Auto-prioritize tasks using AI (with template fallback).
+
+    Considers: goal urgency, dependencies, estimated effort, and task status.
+    Returns a list of {task_id, priority, score, reason}.
+    """
+    from teb import storage as _storage
+
+    tasks = _storage.list_tasks(goal_id=goal_id)
+    if not tasks:
+        return []
+
+    # Try AI triage
+    try:
+        if config.get_ai_provider():
+            return _triage_ai(tasks, goal_id)
+    except Exception:
+        pass
+
+    # Template fallback
+    return _triage_template(tasks)
+
+
+def _triage_template(tasks: List[Task]) -> List[Dict[str, Any]]:
+    """Template-based triage: score by deps, urgency, effort."""
+    task_ids = {t.id for t in tasks if t.id is not None}
+
+    # Count dependents (how many tasks depend on each task)
+    dependents_count: Dict[int, int] = {}
+    for t in tasks:
+        try:
+            deps = json.loads(t.depends_on) if t.depends_on else []
+            for d in deps:
+                if isinstance(d, (int, float)):
+                    dependents_count[int(d)] = dependents_count.get(int(d), 0) + 1
+        except (json.JSONDecodeError, ValueError):
+            pass
+
+    results: List[Dict[str, Any]] = []
+    for task in tasks:
+        if task.status in ("done", "skipped"):
+            continue
+
+        score = 0.0
+        reasons: List[str] = []
+
+        # Dependency impact: tasks that block others are higher priority
+        dep_count = dependents_count.get(task.id, 0) if task.id else 0
+        if dep_count > 0:
+            score += min(0.4, dep_count * 0.15)
+            reasons.append(f"blocks {dep_count} task(s)")
+
+        # Due date urgency
+        if task.due_date:
+            try:
+                due = datetime.fromisoformat(task.due_date)
+                if due.tzinfo is None:
+                    due = due.replace(tzinfo=timezone.utc)
+                days_left = (due - datetime.now(timezone.utc)).total_seconds() / 86400
+                if days_left <= 0:
+                    score += 0.4
+                    reasons.append("overdue")
+                elif days_left <= 1:
+                    score += 0.35
+                    reasons.append("due today/tomorrow")
+                elif days_left <= 3:
+                    score += 0.25
+                    reasons.append("due within 3 days")
+                elif days_left <= 7:
+                    score += 0.15
+                    reasons.append("due this week")
+            except (ValueError, TypeError):
+                pass
+
+        # Quick wins boost
+        if task.estimated_minutes <= 30:
+            score += 0.1
+            reasons.append("quick win")
+
+        # Status boost for in-progress tasks
+        if task.status == "in_progress":
+            score += 0.1
+            reasons.append("already in progress")
+
+        score = round(min(1.0, score), 3)
+        priority = "high" if score >= 0.5 else "medium" if score >= 0.25 else "low"
+
+        results.append({
+            "task_id": task.id,
+            "title": task.title,
+            "priority": priority,
+            "score": score,
+            "reason": "; ".join(reasons) if reasons else "standard priority",
+        })
+
+    results.sort(key=lambda x: x["score"], reverse=True)
+    return results
+
+
+def _triage_ai(tasks: List[Task], goal_id: int) -> List[Dict[str, Any]]:
+    """AI-based task triage."""
+    from teb.ai_client import ai_chat
+
+    system_prompt = """You are a project manager. Prioritize the given tasks.
+Return a JSON array of objects: [{"task_id": int, "priority": "high"|"medium"|"low", "score": float 0-1, "reason": string}].
+Consider dependencies, due dates, effort, and status. Return valid JSON only."""
+
+    task_data = [
+        {"id": t.id, "title": t.title, "status": t.status,
+         "estimated_minutes": t.estimated_minutes, "due_date": t.due_date,
+         "depends_on": t.depends_on}
+        for t in tasks if t.status not in ("done", "skipped")
+    ]
+
+    try:
+        response = ai_chat(system_prompt, json.dumps(task_data), json_mode=True)
+        data = json.loads(response)
+        if isinstance(data, list):
+            return data
+        if isinstance(data, dict) and "tasks" in data:
+            return data["tasks"]
+    except Exception:
+        pass
+
+    return _triage_template(tasks)
+
+
+def estimate_risk(task_id: int) -> Dict[str, Any]:
+    """Estimate risk for a single task.
+
+    Considers: dependency depth, estimated effort, historical failure rates,
+    task status, and due date proximity.
+    Returns a dict with risk_score, risk_factors, estimated_delay.
+    """
+    from teb import storage as _storage
+
+    task = _storage.get_task(task_id)
+    if not task:
+        return {"error": "Task not found", "risk_score": 0, "risk_factors": [], "estimated_delay": 0}
+
+    tasks = _storage.list_tasks(goal_id=task.goal_id)
+    task_map = {t.id: t for t in tasks}
+
+    risk_factors: List[str] = []
+    risk_score = 0.0
+
+    # 1. Dependency depth — deeper chains are riskier
+    dep_depth = _get_dependency_depth(task, task_map, set())
+    if dep_depth >= 3:
+        risk_score += 0.3
+        risk_factors.append(f"deep dependency chain (depth {dep_depth})")
+    elif dep_depth >= 2:
+        risk_score += 0.15
+        risk_factors.append(f"moderate dependency chain (depth {dep_depth})")
+
+    # 2. Estimated effort — larger tasks are riskier
+    if task.estimated_minutes > 240:
+        risk_score += 0.25
+        risk_factors.append(f"large task ({task.estimated_minutes} min)")
+    elif task.estimated_minutes > 120:
+        risk_score += 0.1
+        risk_factors.append(f"medium-large task ({task.estimated_minutes} min)")
+
+    # 3. Blocked dependencies — if any dep is failed/stuck
+    try:
+        deps = json.loads(task.depends_on) if task.depends_on else []
+        for dep_id in deps:
+            dep_task = task_map.get(int(dep_id))
+            if dep_task and dep_task.status == "failed":
+                risk_score += 0.3
+                risk_factors.append(f"depends on failed task '{dep_task.title}'")
+            elif dep_task and dep_task.status not in ("done", "skipped"):
+                risk_score += 0.05
+    except (json.JSONDecodeError, ValueError):
+        pass
+
+    # 4. Overdue
+    if task.due_date:
+        try:
+            due = datetime.fromisoformat(task.due_date)
+            if due.tzinfo is None:
+                due = due.replace(tzinfo=timezone.utc)
+            days_left = (due - datetime.now(timezone.utc)).total_seconds() / 86400
+            if days_left <= 0:
+                risk_score += 0.2
+                risk_factors.append(f"overdue by {abs(int(days_left))} day(s)")
+            elif days_left <= 1:
+                risk_score += 0.1
+                risk_factors.append("due today/tomorrow")
+        except (ValueError, TypeError):
+            pass
+
+    # 5. Task already failed
+    if task.status == "failed":
+        risk_score += 0.2
+        risk_factors.append("task has already failed")
+
+    risk_score = round(min(1.0, risk_score), 3)
+
+    # Estimated delay based on risk
+    estimated_delay = int(task.estimated_minutes * risk_score)
+
+    # Persist risk assessment
+    from teb.models import TaskRisk
+    risk_obj = TaskRisk(
+        task_id=task_id,
+        goal_id=task.goal_id,
+        risk_score=risk_score,
+        risk_factors=json.dumps(risk_factors),
+        estimated_delay=estimated_delay,
+        assessed_at=datetime.now(timezone.utc).isoformat(),
+    )
+    _storage.create_risk_assessment(risk_obj)
+
+    return {
+        "task_id": task_id,
+        "title": task.title,
+        "risk_score": risk_score,
+        "risk_factors": risk_factors,
+        "estimated_delay": estimated_delay,
+        "risk_level": "critical" if risk_score >= 0.7 else "high" if risk_score >= 0.4 else "medium" if risk_score >= 0.2 else "low",
+    }
+
+
+def _get_dependency_depth(task: Task, task_map: Dict[int, Task], visited: Set[int]) -> int:
+    """Recursively compute dependency depth."""
+    if task.id is None:
+        return 0
+    if task.id in visited:
+        return 0
+    visited = visited | {task.id}
+    try:
+        deps = json.loads(task.depends_on) if task.depends_on else []
+    except (json.JSONDecodeError, ValueError):
+        return 0
+    max_depth = 0
+    for dep_id in deps:
+        dep_task = task_map.get(int(dep_id))
+        if dep_task:
+            depth = 1 + _get_dependency_depth(dep_task, task_map, visited)
+            max_depth = max(max_depth, depth)
+    return max_depth

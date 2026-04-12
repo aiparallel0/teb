@@ -1827,3 +1827,168 @@ class FeatureVote:
             "roadmap_item_id": self.roadmap_item_id,
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }
+
+
+# ─── Phase 1: Risk Assessment ───────────────────────────────────────────────
+
+@dataclass
+class TaskRisk:
+    """Risk assessment for a task."""
+    task_id: int
+    goal_id: int
+    risk_score: float = 0.0            # 0.0 (no risk) to 1.0 (critical)
+    risk_factors: str = "[]"           # JSON array of factor strings
+    estimated_delay: int = 0           # estimated delay in minutes
+    assessed_at: str = ""              # ISO timestamp
+    id: Optional[int] = None
+    created_at: Optional[datetime] = None
+
+    def to_dict(self) -> dict:
+        import json as _json
+        return {
+            "id": self.id,
+            "task_id": self.task_id,
+            "goal_id": self.goal_id,
+            "risk_score": self.risk_score,
+            "risk_factors": _json.loads(self.risk_factors) if self.risk_factors else [],
+            "estimated_delay": self.estimated_delay,
+            "assessed_at": self.assessed_at or None,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+# ─── Phase 2: Task Scheduling ───────────────────────────────────────────────
+
+@dataclass
+class TaskSchedule:
+    """Persistent schedule for a task."""
+    task_id: int
+    goal_id: int
+    user_id: int
+    scheduled_start: str = ""          # ISO datetime
+    scheduled_end: str = ""            # ISO datetime
+    calendar_slot: int = 1             # day number in the schedule
+    id: Optional[int] = None
+    created_at: Optional[datetime] = None
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "task_id": self.task_id,
+            "goal_id": self.goal_id,
+            "user_id": self.user_id,
+            "scheduled_start": self.scheduled_start or None,
+            "scheduled_end": self.scheduled_end or None,
+            "calendar_slot": self.calendar_slot,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+# ─── Phase 3: Progress Reports ──────────────────────────────────────────────
+
+@dataclass
+class ProgressReport:
+    """Auto-generated progress report for a goal."""
+    goal_id: int
+    user_id: int
+    summary: str = ""
+    metrics_json: str = "{}"           # JSON with completion %, velocity, etc.
+    blockers_json: str = "[]"          # JSON array of blocker descriptions
+    next_actions_json: str = "[]"      # JSON array of next action strings
+    id: Optional[int] = None
+    created_at: Optional[datetime] = None
+
+    def to_dict(self) -> dict:
+        import json as _json
+        return {
+            "id": self.id,
+            "goal_id": self.goal_id,
+            "user_id": self.user_id,
+            "summary": self.summary,
+            "metrics": _json.loads(self.metrics_json) if self.metrics_json else {},
+            "blockers": _json.loads(self.blockers_json) if self.blockers_json else [],
+            "next_actions": _json.loads(self.next_actions_json) if self.next_actions_json else [],
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+# ─── Phase 6: Social Gamification ───────────────────────────────────────────
+
+@dataclass
+class Streak:
+    """User completion streak tracking."""
+    user_id: int
+    current_streak: int = 0
+    longest_streak: int = 0
+    last_activity_date: str = ""       # ISO date (YYYY-MM-DD)
+    streak_type: str = "daily"         # daily | weekly
+    id: Optional[int] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "user_id": self.user_id,
+            "current_streak": self.current_streak,
+            "longest_streak": self.longest_streak,
+            "last_activity_date": self.last_activity_date or None,
+            "streak_type": self.streak_type,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+
+@dataclass
+class LeaderboardEntry:
+    """User position on a leaderboard."""
+    user_id: int
+    score: int = 0
+    rank: int = 0
+    period: str = "weekly"             # weekly | monthly | all_time
+    id: Optional[int] = None
+    created_at: Optional[datetime] = None
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "user_id": self.user_id,
+            "score": self.score,
+            "rank": self.rank,
+            "period": self.period,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+@dataclass
+class TeamChallenge:
+    """Team challenge for social accountability."""
+    title: str
+    description: str = ""
+    goal_type: str = "tasks_completed" # tasks_completed | xp_earned | streak_days
+    target_value: int = 10
+    current_value: int = 0
+    status: str = "active"             # active | completed | expired
+    creator_id: Optional[int] = None
+    participants_json: str = "[]"      # JSON array of user IDs
+    start_date: str = ""               # ISO date
+    end_date: str = ""                 # ISO date
+    id: Optional[int] = None
+    created_at: Optional[datetime] = None
+
+    def to_dict(self) -> dict:
+        import json as _json
+        return {
+            "id": self.id,
+            "title": self.title,
+            "description": self.description,
+            "goal_type": self.goal_type,
+            "target_value": self.target_value,
+            "current_value": self.current_value,
+            "status": self.status,
+            "creator_id": self.creator_id,
+            "participants": _json.loads(self.participants_json) if self.participants_json else [],
+            "start_date": self.start_date or None,
+            "end_date": self.end_date or None,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }

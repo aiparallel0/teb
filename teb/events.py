@@ -200,6 +200,13 @@ def emit_webhook_event(user_id: int, event_type: str, data: Dict[str, Any]) -> N
     event_bus.publish(user_id, event_type, data)
 
 
+def emit_report_generated(user_id: int, goal_id: int, report_id: int, summary: str) -> None:
+    """Emit an event when a progress report is generated."""
+    event_bus.publish(user_id, "report_generated", {
+        "goal_id": goal_id, "report_id": report_id, "summary": summary[:200],
+    })
+
+
 async def stream_events(user_id: int, last_event_id: Optional[str] = None) -> AsyncGenerator[str, None]:
     """Async generator that yields SSE-formatted strings for a user.
 

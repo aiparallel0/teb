@@ -58,13 +58,19 @@ from teb.models import (
     ScheduledReport,
     SpendingBudget,
     SpendingRequest,
+    Streak,
     SuccessPath,
     Task,
     TaskArtifact,
     TaskBlocker,
     TaskComment,
+    TaskRisk,
+    TaskSchedule,
+    TeamChallenge,
     Theme,
     TimeEntry,
+    LeaderboardEntry,
+    ProgressReport,
     User,
     UserProfile,
     UserXP,
@@ -6702,3 +6708,448 @@ def remove_feature_vote(user_id: int, roadmap_item_id: int) -> bool:
             con.execute("UPDATE roadmap_items SET votes = MAX(votes - 1, 0) WHERE id=?", (roadmap_item_id,))
             return True
     return False
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Bridging Plan: Risk Assessments, Schedules, Reports, Gamification Social
+# ═══════════════════════════════════════════════════════════════════════════════
+
+_bridging_tables_ensured = False
+
+
+def _ensure_bridging_tables() -> None:
+    global _bridging_tables_ensured
+    if _bridging_tables_ensured:
+        return
+    with _conn() as con:
+        con.executescript("""
+            CREATE TABLE IF NOT EXISTS risk_assessments (
+                id               INTEGER PRIMARY KEY AUTOINCREMENT,
+                task_id          INTEGER NOT NULL,
+                goal_id          INTEGER NOT NULL,
+                risk_score       REAL    NOT NULL DEFAULT 0.0,
+                risk_factors     TEXT    NOT NULL DEFAULT '[]',
+                estimated_delay  INTEGER NOT NULL DEFAULT 0,
+                assessed_at      TEXT    NOT NULL DEFAULT '',
+                created_at       TEXT    NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_risk_task ON risk_assessments(task_id);
+            CREATE INDEX IF NOT EXISTS idx_risk_goal ON risk_assessments(goal_id);
+
+            CREATE TABLE IF NOT EXISTS task_schedules (
+                id               INTEGER PRIMARY KEY AUTOINCREMENT,
+                task_id          INTEGER NOT NULL,
+                goal_id          INTEGER NOT NULL,
+                user_id          INTEGER NOT NULL,
+                scheduled_start  TEXT    NOT NULL DEFAULT '',
+                scheduled_end    TEXT    NOT NULL DEFAULT '',
+                calendar_slot    INTEGER NOT NULL DEFAULT 1,
+                created_at       TEXT    NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_schedule_task ON task_schedules(task_id);
+            CREATE INDEX IF NOT EXISTS idx_schedule_user ON task_schedules(user_id);
+            CREATE INDEX IF NOT EXISTS idx_schedule_goal ON task_schedules(goal_id);
+
+            CREATE TABLE IF NOT EXISTS progress_reports (
+                id                INTEGER PRIMARY KEY AUTOINCREMENT,
+                goal_id           INTEGER NOT NULL,
+                user_id           INTEGER NOT NULL,
+                summary           TEXT    NOT NULL DEFAULT '',
+                metrics_json      TEXT    NOT NULL DEFAULT '{}',
+                blockers_json     TEXT    NOT NULL DEFAULT '[]',
+                next_actions_json TEXT    NOT NULL DEFAULT '[]',
+                created_at        TEXT    NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_reports_goal ON progress_reports(goal_id);
+            CREATE INDEX IF NOT EXISTS idx_reports_user ON progress_reports(user_id);
+
+            CREATE TABLE IF NOT EXISTS streaks (
+                id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id             INTEGER NOT NULL,
+                current_streak      INTEGER NOT NULL DEFAULT 0,
+                longest_streak      INTEGER NOT NULL DEFAULT 0,
+                last_activity_date  TEXT    NOT NULL DEFAULT '',
+                streak_type         TEXT    NOT NULL DEFAULT 'daily',
+                created_at          TEXT    NOT NULL,
+                updated_at          TEXT    NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_streaks_user ON streaks(user_id);
+
+            CREATE TABLE IF NOT EXISTS leaderboard (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id     INTEGER NOT NULL,
+                score       INTEGER NOT NULL DEFAULT 0,
+                rank        INTEGER NOT NULL DEFAULT 0,
+                period      TEXT    NOT NULL DEFAULT 'weekly',
+                created_at  TEXT    NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_lb_user ON leaderboard(user_id);
+            CREATE INDEX IF NOT EXISTS idx_lb_period ON leaderboard(period);
+
+            CREATE TABLE IF NOT EXISTS team_challenges (
+                id                INTEGER PRIMARY KEY AUTOINCREMENT,
+                title             TEXT    NOT NULL,
+                description       TEXT    NOT NULL DEFAULT '',
+                goal_type         TEXT    NOT NULL DEFAULT 'tasks_completed',
+                target_value      INTEGER NOT NULL DEFAULT 10,
+                current_value     INTEGER NOT NULL DEFAULT 0,
+                status            TEXT    NOT NULL DEFAULT 'active',
+                creator_id        INTEGER,
+                participants_json TEXT    NOT NULL DEFAULT '[]',
+                start_date        TEXT    NOT NULL DEFAULT '',
+                end_date          TEXT    NOT NULL DEFAULT '',
+                created_at        TEXT    NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_challenges_status ON team_challenges(status);
+        """)
+    _bridging_tables_ensured = True
+
+
+# ─── Risk Assessment CRUD ────────────────────────────────────────────────────
+
+@_with_retry
+def create_risk_assessment(risk: TaskRisk) -> TaskRisk:
+    _ensure_bridging_tables()
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        cur = con.execute(
+            """INSERT INTO risk_assessments (task_id, goal_id, risk_score, risk_factors, estimated_delay, assessed_at, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (risk.task_id, risk.goal_id, risk.risk_score, risk.risk_factors,
+             risk.estimated_delay, risk.assessed_at or now, now),
+        )
+        risk.id = cur.lastrowid
+        risk.created_at = datetime.fromisoformat(now)
+    return risk
+
+
+def get_risk_assessment(task_id: int) -> Optional[TaskRisk]:
+    _ensure_bridging_tables()
+    with _conn() as con:
+        row = con.execute(
+            "SELECT * FROM risk_assessments WHERE task_id = ? ORDER BY created_at DESC LIMIT 1",
+            (task_id,),
+        ).fetchone()
+    if not row:
+        return None
+    return _row_to_task_risk(row)
+
+
+def list_risk_assessments(goal_id: int) -> List[TaskRisk]:
+    _ensure_bridging_tables()
+    with _conn() as con:
+        rows = con.execute(
+            "SELECT * FROM risk_assessments WHERE goal_id = ? ORDER BY risk_score DESC",
+            (goal_id,),
+        ).fetchall()
+    return [_row_to_task_risk(r) for r in rows]
+
+
+def _row_to_task_risk(row: sqlite3.Row) -> TaskRisk:
+    return TaskRisk(
+        id=row["id"],
+        task_id=row["task_id"],
+        goal_id=row["goal_id"],
+        risk_score=row["risk_score"],
+        risk_factors=row["risk_factors"],
+        estimated_delay=row["estimated_delay"],
+        assessed_at=row["assessed_at"],
+        created_at=datetime.fromisoformat(row["created_at"]) if row["created_at"] else None,
+    )
+
+
+# ─── Task Schedule CRUD ─────────────────────────────────────────────────────
+
+@_with_retry
+def create_task_schedule(sched: TaskSchedule) -> TaskSchedule:
+    _ensure_bridging_tables()
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        cur = con.execute(
+            """INSERT INTO task_schedules (task_id, goal_id, user_id, scheduled_start, scheduled_end, calendar_slot, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (sched.task_id, sched.goal_id, sched.user_id,
+             sched.scheduled_start, sched.scheduled_end, sched.calendar_slot, now),
+        )
+        sched.id = cur.lastrowid
+        sched.created_at = datetime.fromisoformat(now)
+    return sched
+
+
+def list_task_schedules(goal_id: Optional[int] = None, user_id: Optional[int] = None) -> List[TaskSchedule]:
+    _ensure_bridging_tables()
+    with _conn() as con:
+        if goal_id is not None:
+            rows = con.execute(
+                "SELECT * FROM task_schedules WHERE goal_id = ? ORDER BY scheduled_start",
+                (goal_id,),
+            ).fetchall()
+        elif user_id is not None:
+            rows = con.execute(
+                "SELECT * FROM task_schedules WHERE user_id = ? ORDER BY scheduled_start",
+                (user_id,),
+            ).fetchall()
+        else:
+            rows = con.execute("SELECT * FROM task_schedules ORDER BY scheduled_start").fetchall()
+    return [_row_to_task_schedule(r) for r in rows]
+
+
+@_with_retry
+def delete_task_schedules(goal_id: int) -> int:
+    """Delete all schedules for a goal (before rescheduling)."""
+    _ensure_bridging_tables()
+    with _conn() as con:
+        cur = con.execute("DELETE FROM task_schedules WHERE goal_id = ?", (goal_id,))
+        return cur.rowcount
+
+
+def _row_to_task_schedule(row: sqlite3.Row) -> TaskSchedule:
+    return TaskSchedule(
+        id=row["id"],
+        task_id=row["task_id"],
+        goal_id=row["goal_id"],
+        user_id=row["user_id"],
+        scheduled_start=row["scheduled_start"],
+        scheduled_end=row["scheduled_end"],
+        calendar_slot=row["calendar_slot"],
+        created_at=datetime.fromisoformat(row["created_at"]) if row["created_at"] else None,
+    )
+
+
+# ─── Progress Report CRUD ───────────────────────────────────────────────────
+
+@_with_retry
+def create_progress_report(report: ProgressReport) -> ProgressReport:
+    _ensure_bridging_tables()
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        cur = con.execute(
+            """INSERT INTO progress_reports (goal_id, user_id, summary, metrics_json, blockers_json, next_actions_json, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (report.goal_id, report.user_id, report.summary,
+             report.metrics_json, report.blockers_json, report.next_actions_json, now),
+        )
+        report.id = cur.lastrowid
+        report.created_at = datetime.fromisoformat(now)
+    return report
+
+
+def list_progress_reports(goal_id: int) -> List[ProgressReport]:
+    _ensure_bridging_tables()
+    with _conn() as con:
+        rows = con.execute(
+            "SELECT * FROM progress_reports WHERE goal_id = ? ORDER BY created_at DESC",
+            (goal_id,),
+        ).fetchall()
+    return [_row_to_progress_report(r) for r in rows]
+
+
+def _row_to_progress_report(row: sqlite3.Row) -> ProgressReport:
+    return ProgressReport(
+        id=row["id"],
+        goal_id=row["goal_id"],
+        user_id=row["user_id"],
+        summary=row["summary"],
+        metrics_json=row["metrics_json"],
+        blockers_json=row["blockers_json"],
+        next_actions_json=row["next_actions_json"],
+        created_at=datetime.fromisoformat(row["created_at"]) if row["created_at"] else None,
+    )
+
+
+# ─── Streak CRUD ─────────────────────────────────────────────────────────────
+
+def get_or_create_streak(user_id: int, streak_type: str = "daily") -> Streak:
+    _ensure_bridging_tables()
+    with _conn() as con:
+        row = con.execute(
+            "SELECT * FROM streaks WHERE user_id = ? AND streak_type = ?",
+            (user_id, streak_type),
+        ).fetchone()
+        if row:
+            return _row_to_streak(row)
+        now = datetime.now(timezone.utc).isoformat()
+        cur = con.execute(
+            """INSERT INTO streaks (user_id, current_streak, longest_streak, last_activity_date, streak_type, created_at, updated_at)
+               VALUES (?, 0, 0, '', ?, ?, ?)""",
+            (user_id, streak_type, now, now),
+        )
+        return Streak(id=cur.lastrowid, user_id=user_id, streak_type=streak_type,
+                      created_at=datetime.fromisoformat(now), updated_at=datetime.fromisoformat(now))
+
+
+@_with_retry
+def update_streak(user_id: int, streak_type: str = "daily") -> Streak:
+    """Update a user's streak based on current activity."""
+    _ensure_bridging_tables()
+    now = datetime.now(timezone.utc)
+    now_iso = now.isoformat()
+    today_str = now.strftime("%Y-%m-%d")
+    streak = get_or_create_streak(user_id, streak_type)
+
+    new_streak = streak.current_streak
+    new_longest = streak.longest_streak
+
+    if streak.last_activity_date:
+        last_date = date.fromisoformat(streak.last_activity_date)
+        today_date = date.fromisoformat(today_str)
+        delta_days = (today_date - last_date).days
+        if delta_days == 0:
+            # Already recorded today, no change
+            return streak
+        elif delta_days == 1:
+            new_streak += 1
+        else:
+            new_streak = 1
+    else:
+        new_streak = 1
+
+    new_longest = max(new_longest, new_streak)
+    with _conn() as con:
+        con.execute(
+            """UPDATE streaks SET current_streak = ?, longest_streak = ?,
+               last_activity_date = ?, updated_at = ?
+               WHERE user_id = ? AND streak_type = ?""",
+            (new_streak, new_longest, today_str, now_iso, user_id, streak_type),
+        )
+    return get_or_create_streak(user_id, streak_type)
+
+
+def _row_to_streak(row: sqlite3.Row) -> Streak:
+    return Streak(
+        id=row["id"],
+        user_id=row["user_id"],
+        current_streak=row["current_streak"],
+        longest_streak=row["longest_streak"],
+        last_activity_date=row["last_activity_date"],
+        streak_type=row["streak_type"],
+        created_at=datetime.fromisoformat(row["created_at"]) if row["created_at"] else None,
+        updated_at=datetime.fromisoformat(row["updated_at"]) if row["updated_at"] else None,
+    )
+
+
+# ─── Leaderboard CRUD ───────────────────────────────────────────────────────
+
+def get_leaderboard(period: str = "weekly", limit: int = 20) -> List[LeaderboardEntry]:
+    _ensure_bridging_tables()
+    with _conn() as con:
+        rows = con.execute(
+            "SELECT * FROM leaderboard WHERE period = ? ORDER BY score DESC LIMIT ?",
+            (period, limit),
+        ).fetchall()
+    entries = [_row_to_leaderboard(r) for r in rows]
+    for i, entry in enumerate(entries):
+        entry.rank = i + 1
+    return entries
+
+
+@_with_retry
+def update_leaderboard(user_id: int, score: int, period: str = "weekly") -> LeaderboardEntry:
+    _ensure_bridging_tables()
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        existing = con.execute(
+            "SELECT id FROM leaderboard WHERE user_id = ? AND period = ?",
+            (user_id, period),
+        ).fetchone()
+        if existing:
+            con.execute(
+                "UPDATE leaderboard SET score = ? WHERE user_id = ? AND period = ?",
+                (score, user_id, period),
+            )
+            entry_id = existing["id"]
+        else:
+            cur = con.execute(
+                "INSERT INTO leaderboard (user_id, score, rank, period, created_at) VALUES (?, ?, 0, ?, ?)",
+                (user_id, score, period, now),
+            )
+            entry_id = cur.lastrowid
+    return LeaderboardEntry(id=entry_id, user_id=user_id, score=score, period=period,
+                            created_at=datetime.fromisoformat(now))
+
+
+def _row_to_leaderboard(row: sqlite3.Row) -> LeaderboardEntry:
+    return LeaderboardEntry(
+        id=row["id"],
+        user_id=row["user_id"],
+        score=row["score"],
+        rank=row["rank"],
+        period=row["period"],
+        created_at=datetime.fromisoformat(row["created_at"]) if row["created_at"] else None,
+    )
+
+
+# ─── Team Challenge CRUD ────────────────────────────────────────────────────
+
+@_with_retry
+def create_team_challenge(challenge: TeamChallenge) -> TeamChallenge:
+    _ensure_bridging_tables()
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        cur = con.execute(
+            """INSERT INTO team_challenges (title, description, goal_type, target_value, current_value,
+               status, creator_id, participants_json, start_date, end_date, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (challenge.title, challenge.description, challenge.goal_type,
+             challenge.target_value, challenge.current_value, challenge.status,
+             challenge.creator_id, challenge.participants_json,
+             challenge.start_date, challenge.end_date, now),
+        )
+        challenge.id = cur.lastrowid
+        challenge.created_at = datetime.fromisoformat(now)
+    return challenge
+
+
+def get_team_challenge(challenge_id: int) -> Optional[TeamChallenge]:
+    _ensure_bridging_tables()
+    with _conn() as con:
+        row = con.execute("SELECT * FROM team_challenges WHERE id = ?", (challenge_id,)).fetchone()
+    if not row:
+        return None
+    return _row_to_team_challenge(row)
+
+
+def list_team_challenges(status: Optional[str] = None) -> List[TeamChallenge]:
+    _ensure_bridging_tables()
+    with _conn() as con:
+        if status:
+            rows = con.execute(
+                "SELECT * FROM team_challenges WHERE status = ? ORDER BY created_at DESC",
+                (status,),
+            ).fetchall()
+        else:
+            rows = con.execute("SELECT * FROM team_challenges ORDER BY created_at DESC").fetchall()
+    return [_row_to_team_challenge(r) for r in rows]
+
+
+@_with_retry
+def update_team_challenge_progress(challenge_id: int, increment: int = 1) -> Optional[TeamChallenge]:
+    _ensure_bridging_tables()
+    with _conn() as con:
+        row = con.execute("SELECT * FROM team_challenges WHERE id = ?", (challenge_id,)).fetchone()
+        if not row:
+            return None
+        new_value = row["current_value"] + increment
+        new_status = "completed" if new_value >= row["target_value"] else row["status"]
+        con.execute(
+            "UPDATE team_challenges SET current_value = ?, status = ? WHERE id = ?",
+            (new_value, new_status, challenge_id),
+        )
+    return get_team_challenge(challenge_id)
+
+
+def _row_to_team_challenge(row: sqlite3.Row) -> TeamChallenge:
+    return TeamChallenge(
+        id=row["id"],
+        title=row["title"],
+        description=row["description"],
+        goal_type=row["goal_type"],
+        target_value=row["target_value"],
+        current_value=row["current_value"],
+        status=row["status"],
+        creator_id=row["creator_id"],
+        participants_json=row["participants_json"],
+        start_date=row["start_date"],
+        end_date=row["end_date"],
+        created_at=datetime.fromisoformat(row["created_at"]) if row["created_at"] else None,
+    )
