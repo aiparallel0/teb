@@ -1241,3 +1241,48 @@ class CommentReaction:
             "emoji": self.emoji,
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }
+
+
+# ─── Phase 6: Enterprise Security ──────────────────────────────────────────
+
+@dataclass
+class UserSession:
+    """Active user session tracking."""
+    user_id: int
+    session_token: str
+    ip_address: str = ""
+    user_agent: str = ""
+    is_active: bool = True
+    last_activity: str = ""
+    id: Optional[int] = None
+    created_at: Optional[datetime] = None
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "user_id": self.user_id,
+            "ip_address": self.ip_address,
+            "user_agent": self.user_agent,
+            "is_active": self.is_active,
+            "last_activity": self.last_activity or None,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+@dataclass
+class TwoFactorConfig:
+    """2FA configuration per user."""
+    user_id: int
+    totp_secret: str = ""
+    is_enabled: bool = False
+    backup_codes_hash: str = ""        # JSON array of hashed backup codes
+    id: Optional[int] = None
+    created_at: Optional[datetime] = None
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "user_id": self.user_id,
+            "is_enabled": self.is_enabled,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
