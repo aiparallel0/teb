@@ -1334,10 +1334,11 @@ function buildTaskCard(task, subtasks, byParent, depth) {
     card.querySelector('.task-expand-btn').textContent = expanded ? '▾' : '▴';
   });
 
-  // Checkbox click → toggle done
+  // Checkbox click → toggle done (celebrate when completing, not undoing)
   card.querySelector('.task-checkbox').addEventListener('click', (e) => {
+    const wasNotDone = task.status !== 'done';
     toggleTaskDone(task);
-    if (task.status !== 'done') showCelebration('✅');
+    if (wasNotDone) showCelebration('✅');
   });
 
   // Batch select checkbox
