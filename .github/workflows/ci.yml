@@ -59,3 +59,18 @@ jobs:
           sleep 5
           curl -f http://localhost:8000/health || exit 1
           docker stop teb-test
+
+      - name: Verify base-path static files load (prevents CSS/JS 404 regression)
+        run: |
+          docker run -d --name teb-basepath \
+            -e TEB_JWT_SECRET=ci-test-secret \
+            -e TEB_BASE_PATH=/teb \
+            -p 8001:8000 \
+            teb:test
+          sleep 5
+          curl -f http://localhost:8001/health || { echo "FAIL: /health"; docker logs teb-basepath; exit 1; }
+          curl -sf http://localhost:8001/teb | grep -q 'style.css' || { echo "FAIL: HTML missing style.css"; exit 1; }
+          curl -sf -o /dev/null -w '%{http_code}' http://localhost:8001/teb/static/style.css | grep -q 200 || { echo "FAIL: CSS 404"; exit 1; }
+          curl -sf -o /dev/null -w '%{http_code}' http://localhost:8001/teb/static/app.js | grep -q 200 || { echo "FAIL: JS 404"; exit 1; }
+          echo "Base-path static files OK"
+          docker stop teb-basepath

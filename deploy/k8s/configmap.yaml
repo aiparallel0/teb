@@ -1,0 +1,14 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: teb-config
+  labels:
+    app: teb
+data:
+  PORT: "8000"
+  DATABASE_URL: "sqlite:///data/teb.db"
+  TEB_LOG_LEVEL: "INFO"
+  TEB_CORS_ORIGINS: "https://teb.example.com"
+  TEB_AI_PROVIDER: "auto"
+  TEB_REGION: "default"
+  TEB_BASE_PATH: ""

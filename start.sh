@@ -71,5 +71,5 @@ else
   fi
 
   echo "[start.sh] Starting server at http://localhost:8000 …"
-  uvicorn teb.main:app --reload
+  uvicorn teb.main:asgi_app --reload
 fi

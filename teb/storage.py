@@ -1,4 +1,5 @@
 import json
+import re
 import sqlite3
 from contextlib import contextmanager
 from datetime import date, datetime, timezone
@@ -7,6 +8,7 @@ from typing import Generator, List, Optional, Set
 from teb.config import get_db_path
 from teb.models import (
     Achievement,
+    ActivityFeedEntry,
     AgentFlow,
     AgentGoalMemory,
     AgentHandoff,
@@ -14,27 +16,46 @@ from teb.models import (
     AgentSchedule,
     ApiCredential,
     AuditEvent,
+    BrandingConfig,
     BrowserAction,
     CheckIn,
+    CommentReaction,
     CustomField,
+    CustomFieldDefinition,
+    DashboardLayout,
     DashboardWidget,
+    DirectMessage,
+    EmailNotificationConfig,
     ExecutionCheckpoint,
     ExecutionContext,
     ExecutionLog,
     Goal,
+    GoalChatMessage,
     GoalCollaborator,
     GoalTemplate,
+    IPAllowlist,
     Integration,
+    IntegrationListing,
+    IntegrationTemplate,
     MessagingConfig,
     Milestone,
+    Notification,
     NotificationPreference,
     NudgeEvent,
+    OAuthConnection,
+    Organization,
     OutcomeMetric,
     PersonalApiKey,
+    PluginListing,
     PluginManifest,
+    PluginView,
     ProactiveSuggestion,
     ProgressSnapshot,
+    PushSubscription,
     RecurrenceRule,
+    SSOConfig,
+    SavedView,
+    ScheduledReport,
     SpendingBudget,
     SpendingRequest,
     SuccessPath,
@@ -42,11 +63,15 @@ from teb.models import (
     TaskArtifact,
     TaskBlocker,
     TaskComment,
+    Theme,
     TimeEntry,
     User,
     UserProfile,
     UserXP,
     WebhookConfig,
+    WebhookRule,
+    Workspace,
+    WorkspaceMember,
 )
 
 _DB_PATH: Optional[str] = None
@@ -419,6 +444,111 @@ def init_db() -> None:
                 created_at      TEXT    NOT NULL,
                 updated_at      TEXT    NOT NULL
             );
+
+            -- Phase 5: Ecosystem tables
+
+            CREATE TABLE IF NOT EXISTS integration_listings (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                name        TEXT    NOT NULL,
+                category    TEXT    NOT NULL DEFAULT '',
+                description TEXT    NOT NULL DEFAULT '',
+                icon_url    TEXT    NOT NULL DEFAULT '',
+                auth_type   TEXT    NOT NULL DEFAULT 'api_key',
+                enabled     INTEGER NOT NULL DEFAULT 1,
+                created_at  TEXT    NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS oauth_connections (
+                id                       INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id                  INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                provider                 TEXT    NOT NULL,
+                access_token_encrypted   TEXT    NOT NULL DEFAULT '',
+                refresh_token_encrypted  TEXT    NOT NULL DEFAULT '',
+                expires_at               TEXT    DEFAULT NULL,
+                created_at               TEXT    NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_oauth_conn_user ON oauth_connections(user_id);
+
+            CREATE TABLE IF NOT EXISTS integration_templates (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                name            TEXT    NOT NULL,
+                description     TEXT    NOT NULL DEFAULT '',
+                source_service  TEXT    NOT NULL DEFAULT '',
+                target_service  TEXT    NOT NULL DEFAULT '',
+                mapping_json    TEXT    NOT NULL DEFAULT '{}',
+                created_at      TEXT    NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS webhook_rules (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                name         TEXT    NOT NULL DEFAULT '',
+                event_type   TEXT    NOT NULL DEFAULT '',
+                filter_json  TEXT    NOT NULL DEFAULT '{}',
+                target_url   TEXT    NOT NULL DEFAULT '',
+                headers_json TEXT    NOT NULL DEFAULT '{}',
+                active       INTEGER NOT NULL DEFAULT 1,
+                created_at   TEXT    NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_webhook_rules_user ON webhook_rules(user_id);
+
+            CREATE TABLE IF NOT EXISTS plugin_listings (
+                id            INTEGER PRIMARY KEY AUTOINCREMENT,
+                name          TEXT    NOT NULL,
+                description   TEXT    NOT NULL DEFAULT '',
+                author        TEXT    NOT NULL DEFAULT '',
+                version       TEXT    NOT NULL DEFAULT '0.1.0',
+                downloads     INTEGER NOT NULL DEFAULT 0,
+                rating        REAL    NOT NULL DEFAULT 0,
+                manifest_json TEXT    NOT NULL DEFAULT '{}',
+                created_at    TEXT    NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS custom_field_definitions (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                plugin_id    INTEGER NOT NULL,
+                field_type   TEXT    NOT NULL DEFAULT 'text',
+                label        TEXT    NOT NULL DEFAULT '',
+                options_json TEXT    NOT NULL DEFAULT '[]',
+                created_at   TEXT    NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS plugin_views (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                plugin_id   INTEGER NOT NULL,
+                name        TEXT    NOT NULL DEFAULT '',
+                view_type   TEXT    NOT NULL DEFAULT 'board',
+                config_json TEXT    NOT NULL DEFAULT '{}',
+                created_at  TEXT    NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS themes (
+                id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+                name               TEXT    NOT NULL,
+                author             TEXT    NOT NULL DEFAULT '',
+                css_variables_json TEXT    NOT NULL DEFAULT '{}',
+                is_active          INTEGER NOT NULL DEFAULT 0,
+                created_at         TEXT    NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS zapier_subscriptions (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                event_type  TEXT    NOT NULL,
+                target_url  TEXT    NOT NULL,
+                created_at  TEXT    NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_zapier_sub_user ON zapier_subscriptions(user_id);
+
+            CREATE TABLE IF NOT EXISTS api_usage_log (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                integration  TEXT    NOT NULL DEFAULT '',
+                endpoint     TEXT    NOT NULL DEFAULT '',
+                created_at   TEXT    NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_api_usage_user ON api_usage_log(user_id);
+            CREATE INDEX IF NOT EXISTS idx_api_usage_time ON api_usage_log(created_at);
         """)
 
         # ─── Lightweight schema migrations ────────────────────────────────
@@ -896,6 +1026,268 @@ def _run_migrations(con: sqlite3.Connection) -> None:
     """)
     con.execute("CREATE INDEX IF NOT EXISTS idx_widgets_user ON dashboard_widgets(user_id)")
 
+    # ─── Phase 2: Collaboration Tables ───────────────────────────────────
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS workspaces (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            name        TEXT NOT NULL,
+            owner_id    INTEGER NOT NULL,
+            description TEXT DEFAULT '',
+            invite_code TEXT DEFAULT '',
+            plan        TEXT DEFAULT 'free',
+            created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS workspace_members (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            workspace_id INTEGER NOT NULL,
+            user_id      INTEGER NOT NULL,
+            role         TEXT DEFAULT 'member',
+            joined_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    con.execute("CREATE INDEX IF NOT EXISTS idx_ws_members_ws ON workspace_members(workspace_id)")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_ws_members_user ON workspace_members(user_id)")
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS notifications (
+            id                INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id           INTEGER NOT NULL,
+            title             TEXT NOT NULL,
+            body              TEXT DEFAULT '',
+            notification_type TEXT DEFAULT 'info',
+            source_type       TEXT DEFAULT '',
+            source_id         INTEGER,
+            read              INTEGER DEFAULT 0,
+            created_at        TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    con.execute("CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id)")
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS activity_feed (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id      INTEGER NOT NULL,
+            action       TEXT NOT NULL,
+            entity_type  TEXT NOT NULL,
+            entity_id    INTEGER NOT NULL,
+            entity_title TEXT DEFAULT '',
+            details      TEXT DEFAULT '',
+            workspace_id INTEGER,
+            goal_id      INTEGER,
+            created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    con.execute("CREATE INDEX IF NOT EXISTS idx_activity_user ON activity_feed(user_id)")
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS comment_reactions (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            comment_id INTEGER NOT NULL,
+            user_id    INTEGER NOT NULL,
+            emoji      TEXT DEFAULT '👍',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    con.execute("CREATE INDEX IF NOT EXISTS idx_reactions_comment ON comment_reactions(comment_id)")
+
+    # ─── Phase 2: Direct Messages ────────────────────────────────────────
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS direct_messages (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            sender_id    INTEGER NOT NULL,
+            recipient_id INTEGER NOT NULL,
+            content      TEXT NOT NULL,
+            read         INTEGER DEFAULT 0,
+            created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    con.execute("CREATE INDEX IF NOT EXISTS idx_dm_sender ON direct_messages(sender_id)")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_dm_recipient ON direct_messages(recipient_id)")
+
+    # ─── Phase 2: Goal Chat Messages ─────────────────────────────────────
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS goal_chat_messages (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            goal_id    INTEGER NOT NULL,
+            user_id    INTEGER NOT NULL,
+            content    TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    con.execute("CREATE INDEX IF NOT EXISTS idx_goal_chat_goal ON goal_chat_messages(goal_id)")
+
+    # ─── Phase 2: Email Notification Config ──────────────────────────────
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS email_notification_config (
+            id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id              INTEGER NOT NULL UNIQUE,
+            digest_frequency     TEXT DEFAULT 'none',
+            notify_on_mention    INTEGER DEFAULT 1,
+            notify_on_assignment INTEGER DEFAULT 1,
+            notify_on_comment    INTEGER DEFAULT 1
+        )
+    """)
+    con.execute("CREATE INDEX IF NOT EXISTS idx_email_config_user ON email_notification_config(user_id)")
+
+    # ─── Phase 2: Push Subscriptions ─────────────────────────────────────
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS push_subscriptions (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id    INTEGER NOT NULL,
+            endpoint   TEXT NOT NULL,
+            p256dh     TEXT DEFAULT '',
+            auth       TEXT DEFAULT '',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    con.execute("CREATE INDEX IF NOT EXISTS idx_push_user ON push_subscriptions(user_id)")
+    con.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_push_endpoint ON push_subscriptions(endpoint)")
+
+    # ── Phase 6: Enterprise Security tables ──
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS user_sessions (
+            id             INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id        INTEGER NOT NULL,
+            session_token  TEXT NOT NULL,
+            ip_address     TEXT DEFAULT '',
+            user_agent     TEXT DEFAULT '',
+            is_active      INTEGER DEFAULT 1,
+            last_activity  TEXT DEFAULT '',
+            created_at     TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    con.execute("CREATE INDEX IF NOT EXISTS idx_sessions_user ON user_sessions(user_id)")
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS two_factor_config (
+            id                INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id           INTEGER NOT NULL UNIQUE,
+            totp_secret       TEXT DEFAULT '',
+            is_enabled        INTEGER DEFAULT 0,
+            backup_codes_hash TEXT DEFAULT '',
+            created_at        TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    con.execute("CREATE INDEX IF NOT EXISTS idx_2fa_user ON two_factor_config(user_id)")
+
+    # ── Phase 6: SSO Config ──
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS sso_configs (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            org_id      INTEGER NOT NULL,
+            provider    TEXT    NOT NULL DEFAULT '',
+            entity_id   TEXT    NOT NULL DEFAULT '',
+            sso_url     TEXT    NOT NULL DEFAULT '',
+            certificate TEXT    NOT NULL DEFAULT '',
+            created_at  TEXT    NOT NULL DEFAULT (datetime('now'))
+        )
+    """)
+    con.execute("CREATE INDEX IF NOT EXISTS idx_sso_org ON sso_configs(org_id)")
+
+    # ── Phase 6: IP Allowlist ──
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS ip_allowlist (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            org_id      INTEGER NOT NULL,
+            cidr_range  TEXT    NOT NULL DEFAULT '',
+            description TEXT    NOT NULL DEFAULT '',
+            created_at  TEXT    NOT NULL DEFAULT (datetime('now'))
+        )
+    """)
+    con.execute("CREATE INDEX IF NOT EXISTS idx_ip_allowlist_org ON ip_allowlist(org_id)")
+
+    # ── Phase 6: Organizations ──
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS organizations (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            name          TEXT    NOT NULL,
+            slug          TEXT    NOT NULL UNIQUE,
+            owner_id      INTEGER,
+            settings_json TEXT    NOT NULL DEFAULT '{}',
+            created_at    TEXT    NOT NULL DEFAULT (datetime('now'))
+        )
+    """)
+    con.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_org_slug ON organizations(slug)")
+
+    # ── Phase 6: Organization Members ──
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS org_members (
+            id      INTEGER PRIMARY KEY AUTOINCREMENT,
+            org_id  INTEGER NOT NULL,
+            user_id INTEGER NOT NULL,
+            role    TEXT    NOT NULL DEFAULT 'member',
+            UNIQUE(org_id, user_id)
+        )
+    """)
+    con.execute("CREATE INDEX IF NOT EXISTS idx_org_members_org ON org_members(org_id)")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_org_members_user ON org_members(user_id)")
+
+    # ── Phase 6: Branding Config ──
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS branding_configs (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            org_id          INTEGER NOT NULL UNIQUE,
+            logo_url        TEXT    NOT NULL DEFAULT '',
+            primary_color   TEXT    NOT NULL DEFAULT '#1a1a2e',
+            secondary_color TEXT    NOT NULL DEFAULT '#16213e',
+            app_name        TEXT    NOT NULL DEFAULT 'teb',
+            favicon_url     TEXT    NOT NULL DEFAULT '',
+            created_at      TEXT    NOT NULL DEFAULT (datetime('now'))
+        )
+    """)
+    con.execute("CREATE INDEX IF NOT EXISTS idx_branding_org ON branding_configs(org_id)")
+
+    # ─── Phase 3: Saved Views ────────────────────────────────────────────
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS saved_views (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            name         TEXT    NOT NULL,
+            view_type    TEXT    NOT NULL DEFAULT 'list',
+            filters_json TEXT    NOT NULL DEFAULT '{}',
+            sort_json    TEXT    NOT NULL DEFAULT '{}',
+            group_by     TEXT    NOT NULL DEFAULT '',
+            created_at   TEXT    NOT NULL
+        )
+    """)
+    con.execute("CREATE INDEX IF NOT EXISTS idx_saved_views_user ON saved_views(user_id)")
+
+    # ─── Phase 3: Dashboard Layouts ──────────────────────────────────────
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS dashboard_layouts (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id      INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            name         TEXT    NOT NULL,
+            widgets_json TEXT    NOT NULL DEFAULT '[]',
+            created_at   TEXT    NOT NULL
+        )
+    """)
+    con.execute("CREATE INDEX IF NOT EXISTS idx_dashboard_layouts_user ON dashboard_layouts(user_id)")
+
+    # ─── Phase 3: Scheduled Reports ──────────────────────────────────────
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS scheduled_reports (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id         INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            report_type     TEXT    NOT NULL DEFAULT 'progress',
+            frequency       TEXT    NOT NULL DEFAULT 'weekly',
+            recipients_json TEXT    NOT NULL DEFAULT '[]',
+            created_at      TEXT    NOT NULL,
+            last_sent_at    TEXT    NOT NULL DEFAULT ''
+        )
+    """)
+    con.execute("CREATE INDEX IF NOT EXISTS idx_scheduled_reports_user ON scheduled_reports(user_id)")
+
+    # ─── Safe column migrations (version, assigned_to) ───────────────────
+    _safe_add_column(con, "goals", "version", "INTEGER NOT NULL DEFAULT 1")
+    _safe_add_column(con, "tasks", "version", "INTEGER NOT NULL DEFAULT 1")
+    _safe_add_column(con, "tasks", "assigned_to", "INTEGER DEFAULT NULL")
+
+
+def _safe_add_column(con: sqlite3.Connection, table: str, column: str, col_type: str) -> None:
+    """Add a column to a table if it doesn't already exist."""
+    cols = {row[1] for row in con.execute(f"PRAGMA table_info({table})").fetchall()}
+    if column not in cols:
+        con.execute(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}")
+
 
 # ─── Credential Encryption ───────────────────────────────────────────────────
 
@@ -1125,6 +1517,7 @@ def _row_to_goal(row: sqlite3.Row) -> Goal:
     g.parent_goal_id = row["parent_goal_id"] if "parent_goal_id" in row.keys() else None
     g.auto_execute = bool(row["auto_execute"]) if "auto_execute" in row.keys() else False
     g.tags = row["tags"] if "tags" in row.keys() else ""
+    g.version = row["version"] if "version" in row.keys() else 1
     g.created_at = datetime.fromisoformat(row["created_at"])
     g.updated_at = datetime.fromisoformat(row["updated_at"])
     return g
@@ -1169,13 +1562,24 @@ def list_goals(user_id: Optional[int] = None) -> List[Goal]:
 def update_goal(goal: Goal) -> Goal:
     now = datetime.now(timezone.utc).isoformat()
     with _conn() as con:
-        con.execute(
-            "UPDATE goals SET title=?, description=?, status=?, answers=?, auto_execute=?, tags=?, updated_at=? WHERE id=?",
+        cur = con.execute(
+            "UPDATE goals SET title=?, description=?, status=?, answers=?, auto_execute=?, tags=?, version=version+1, updated_at=? "
+            "WHERE id=? AND version=?",
             (goal.title, goal.description, goal.status, json.dumps(goal.answers),
-             int(goal.auto_execute), goal.tags, now, goal.id),
+             int(goal.auto_execute), goal.tags, now, goal.id, goal.version),
         )
+        if cur.rowcount == 0:
+            existing = con.execute("SELECT id FROM goals WHERE id=?", (goal.id,)).fetchone()
+            if existing:
+                raise VersionConflictError("Goal has been modified by another request")
+    goal.version += 1
     goal.updated_at = datetime.fromisoformat(now)
     return goal
+
+
+class VersionConflictError(Exception):
+    """Raised when an optimistic concurrency version check fails."""
+    pass
 
 
 # ─── Tasks ────────────────────────────────────────────────────────────────────
@@ -1194,6 +1598,8 @@ def _row_to_task(row: sqlite3.Row) -> Task:
     t.due_date = row["due_date"] if "due_date" in row.keys() else ""
     t.depends_on = row["depends_on"] if "depends_on" in row.keys() else "[]"
     t.tags = row["tags"] if "tags" in row.keys() else ""
+    t.assigned_to = row["assigned_to"] if "assigned_to" in row.keys() else None
+    t.version = row["version"] if "version" in row.keys() else 1
     t.created_at = datetime.fromisoformat(row["created_at"])
     t.updated_at = datetime.fromisoformat(row["updated_at"])
     return t
@@ -1244,15 +1650,21 @@ def list_tasks(goal_id: Optional[int] = None, status: Optional[str] = None) -> L
 def update_task(task: Task) -> Task:
     now = datetime.now(timezone.utc).isoformat()
     with _conn() as con:
-        con.execute(
+        cur = con.execute(
             "UPDATE tasks SET title=?, description=?, estimated_minutes=?, status=?, "
-            "order_index=?, parent_id=?, due_date=?, depends_on=?, tags=?, updated_at=? WHERE id=?",
+            "order_index=?, parent_id=?, due_date=?, depends_on=?, tags=?, assigned_to=?, version=version+1, updated_at=? "
+            "WHERE id=? AND version=?",
             (
                 task.title, task.description, task.estimated_minutes,
                 task.status, task.order_index, task.parent_id,
-                task.due_date, task.depends_on, task.tags, now, task.id,
+                task.due_date, task.depends_on, task.tags, task.assigned_to, now, task.id, task.version,
             ),
         )
+        if cur.rowcount == 0:
+            existing = con.execute("SELECT id FROM tasks WHERE id=?", (task.id,)).fetchone()
+            if existing:
+                raise VersionConflictError("Task has been modified by another request")
+    task.version += 1
     task.updated_at = datetime.fromisoformat(now)
     return task
 
@@ -4331,3 +4743,1962 @@ def _row_to_widget(row: sqlite3.Row) -> DashboardWidget:
         enabled=bool(row["enabled"]),
         created_at=datetime.fromisoformat(row["created_at"]),
     )
+
+
+# ─── Phase 2: Workspace CRUD ────────────────────────────────────────────────
+
+@_with_retry
+def create_workspace(ws: Workspace) -> Workspace:
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        cur = con.execute(
+            "INSERT INTO workspaces (name, owner_id, description, invite_code, plan, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (ws.name, ws.owner_id, ws.description, ws.invite_code, ws.plan, now),
+        )
+        ws.id = cur.lastrowid
+        ws.created_at = datetime.fromisoformat(now)
+    return ws
+
+
+def get_workspace(ws_id: int) -> Optional[Workspace]:
+    with _conn() as con:
+        row = con.execute("SELECT * FROM workspaces WHERE id = ?", (ws_id,)).fetchone()
+    return _row_to_workspace(row) if row else None
+
+
+def list_user_workspaces(user_id: int) -> List[Workspace]:
+    with _conn() as con:
+        rows = con.execute(
+            "SELECT w.* FROM workspaces w "
+            "JOIN workspace_members wm ON w.id = wm.workspace_id "
+            "WHERE wm.user_id = ? ORDER BY w.created_at DESC",
+            (user_id,),
+        ).fetchall()
+    return [_row_to_workspace(r) for r in rows]
+
+
+@_with_retry
+def add_workspace_member(member: WorkspaceMember) -> WorkspaceMember:
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        cur = con.execute(
+            "INSERT INTO workspace_members (workspace_id, user_id, role, joined_at) "
+            "VALUES (?, ?, ?, ?)",
+            (member.workspace_id, member.user_id, member.role, now),
+        )
+        member.id = cur.lastrowid
+        member.joined_at = datetime.fromisoformat(now)
+    return member
+
+
+def list_workspace_members(ws_id: int) -> List[WorkspaceMember]:
+    with _conn() as con:
+        rows = con.execute(
+            "SELECT * FROM workspace_members WHERE workspace_id = ? ORDER BY joined_at ASC",
+            (ws_id,),
+        ).fetchall()
+    return [_row_to_workspace_member(r) for r in rows]
+
+
+@_with_retry
+def remove_workspace_member(ws_id: int, user_id: int) -> bool:
+    with _conn() as con:
+        cur = con.execute(
+            "DELETE FROM workspace_members WHERE workspace_id = ? AND user_id = ?",
+            (ws_id, user_id),
+        )
+        return cur.rowcount > 0
+
+
+def get_workspace_by_invite_code(code: str) -> Optional[Workspace]:
+    with _conn() as con:
+        row = con.execute(
+            "SELECT * FROM workspaces WHERE invite_code = ?", (code,)
+        ).fetchone()
+    return _row_to_workspace(row) if row else None
+
+
+def _row_to_workspace(row: sqlite3.Row) -> Workspace:
+    return Workspace(
+        id=row["id"],
+        name=row["name"],
+        owner_id=row["owner_id"],
+        description=row["description"],
+        invite_code=row["invite_code"],
+        plan=row["plan"],
+        created_at=datetime.fromisoformat(row["created_at"]),
+    )
+
+
+def _row_to_workspace_member(row: sqlite3.Row) -> WorkspaceMember:
+    return WorkspaceMember(
+        id=row["id"],
+        workspace_id=row["workspace_id"],
+        user_id=row["user_id"],
+        role=row["role"],
+        joined_at=datetime.fromisoformat(row["joined_at"]),
+    )
+
+
+# ─── Phase 2: Notifications CRUD ────────────────────────────────────────────
+
+@_with_retry
+def create_notification(notif: Notification) -> Notification:
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        cur = con.execute(
+            "INSERT INTO notifications (user_id, title, body, notification_type, source_type, source_id, read, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (notif.user_id, notif.title, notif.body, notif.notification_type,
+             notif.source_type, notif.source_id, int(notif.read), now),
+        )
+        notif.id = cur.lastrowid
+        notif.created_at = datetime.fromisoformat(now)
+    return notif
+
+
+def list_user_notifications(user_id: int, unread_only: bool = False, limit: int = 50) -> List[Notification]:
+    query = "SELECT * FROM notifications WHERE user_id = ?"
+    params: list = [user_id]
+    if unread_only:
+        query += " AND read = 0"
+    query += " ORDER BY created_at DESC LIMIT ?"
+    params.append(limit)
+    with _conn() as con:
+        rows = con.execute(query, params).fetchall()
+    return [_row_to_notification(r) for r in rows]
+
+
+@_with_retry
+def mark_notification_read(notif_id: int, user_id: int) -> bool:
+    with _conn() as con:
+        cur = con.execute(
+            "UPDATE notifications SET read = 1 WHERE id = ? AND user_id = ?",
+            (notif_id, user_id),
+        )
+        return cur.rowcount > 0
+
+
+@_with_retry
+def mark_all_notifications_read(user_id: int) -> int:
+    with _conn() as con:
+        cur = con.execute(
+            "UPDATE notifications SET read = 1 WHERE user_id = ? AND read = 0",
+            (user_id,),
+        )
+        return cur.rowcount
+
+
+def count_unread_notifications(user_id: int) -> int:
+    with _conn() as con:
+        row = con.execute(
+            "SELECT COUNT(*) as cnt FROM notifications WHERE user_id = ? AND read = 0",
+            (user_id,),
+        ).fetchone()
+    return row["cnt"] if row else 0
+
+
+def _row_to_notification(row: sqlite3.Row) -> Notification:
+    return Notification(
+        id=row["id"],
+        user_id=row["user_id"],
+        title=row["title"],
+        body=row["body"],
+        notification_type=row["notification_type"],
+        source_type=row["source_type"],
+        source_id=row["source_id"],
+        read=bool(row["read"]),
+        created_at=datetime.fromisoformat(row["created_at"]),
+    )
+
+
+# ─── Phase 2: Activity Feed CRUD ────────────────────────────────────────────
+
+@_with_retry
+def create_activity_entry(entry: ActivityFeedEntry) -> ActivityFeedEntry:
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        cur = con.execute(
+            "INSERT INTO activity_feed (user_id, action, entity_type, entity_id, entity_title, details, workspace_id, goal_id, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (entry.user_id, entry.action, entry.entity_type, entry.entity_id,
+             entry.entity_title, entry.details, entry.workspace_id, entry.goal_id, now),
+        )
+        entry.id = cur.lastrowid
+        entry.created_at = datetime.fromisoformat(now)
+    return entry
+
+
+def list_activity_feed(
+    user_id: Optional[int] = None,
+    goal_id: Optional[int] = None,
+    workspace_id: Optional[int] = None,
+    limit: int = 50,
+) -> List[ActivityFeedEntry]:
+    query = "SELECT * FROM activity_feed WHERE 1=1"
+    params: list = []
+    if user_id is not None:
+        query += " AND user_id = ?"
+        params.append(user_id)
+    if goal_id is not None:
+        query += " AND goal_id = ?"
+        params.append(goal_id)
+    if workspace_id is not None:
+        query += " AND workspace_id = ?"
+        params.append(workspace_id)
+    query += " ORDER BY created_at DESC LIMIT ?"
+    params.append(limit)
+    with _conn() as con:
+        rows = con.execute(query, params).fetchall()
+    return [_row_to_activity_entry(r) for r in rows]
+
+
+def _row_to_activity_entry(row: sqlite3.Row) -> ActivityFeedEntry:
+    return ActivityFeedEntry(
+        id=row["id"],
+        user_id=row["user_id"],
+        action=row["action"],
+        entity_type=row["entity_type"],
+        entity_id=row["entity_id"],
+        entity_title=row["entity_title"],
+        details=row["details"],
+        workspace_id=row["workspace_id"],
+        goal_id=row["goal_id"],
+        created_at=datetime.fromisoformat(row["created_at"]),
+    )
+
+
+# ─── Phase 2: Comment Reactions CRUD ────────────────────────────────────────
+
+@_with_retry
+def add_comment_reaction(reaction: CommentReaction) -> CommentReaction:
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        cur = con.execute(
+            "INSERT INTO comment_reactions (comment_id, user_id, emoji, created_at) "
+            "VALUES (?, ?, ?, ?)",
+            (reaction.comment_id, reaction.user_id, reaction.emoji, now),
+        )
+        reaction.id = cur.lastrowid
+        reaction.created_at = datetime.fromisoformat(now)
+    return reaction
+
+
+@_with_retry
+def remove_comment_reaction(comment_id: int, user_id: int, emoji: str) -> bool:
+    with _conn() as con:
+        cur = con.execute(
+            "DELETE FROM comment_reactions WHERE comment_id = ? AND user_id = ? AND emoji = ?",
+            (comment_id, user_id, emoji),
+        )
+        return cur.rowcount > 0
+
+
+def list_comment_reactions(comment_id: int) -> List[CommentReaction]:
+    with _conn() as con:
+        rows = con.execute(
+            "SELECT * FROM comment_reactions WHERE comment_id = ? ORDER BY created_at ASC",
+            (comment_id,),
+        ).fetchall()
+    return [_row_to_comment_reaction(r) for r in rows]
+
+
+def _row_to_comment_reaction(row: sqlite3.Row) -> CommentReaction:
+    return CommentReaction(
+        id=row["id"],
+        comment_id=row["comment_id"],
+        user_id=row["user_id"],
+        emoji=row["emoji"],
+        created_at=datetime.fromisoformat(row["created_at"]),
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Phase 6 — Enterprise: Sessions & 2FA CRUD
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def create_session(session) -> "UserSession":
+    from teb.models import UserSession
+    with _conn() as con:
+        cur = con.execute(
+            "INSERT INTO user_sessions (user_id, session_token, ip_address, user_agent, is_active, last_activity) VALUES (?,?,?,?,1,?)",
+            (session.user_id, session.session_token, session.ip_address, session.user_agent, session.last_activity),
+        )
+        session.id = cur.lastrowid
+    return session
+
+
+def list_user_sessions(user_id: int) -> list:
+    from teb.models import UserSession
+    with _conn() as con:
+        rows = con.execute(
+            "SELECT * FROM user_sessions WHERE user_id = ? AND is_active = 1 ORDER BY created_at DESC",
+            (user_id,),
+        ).fetchall()
+    return [UserSession(
+        id=r["id"], user_id=r["user_id"], session_token=r["session_token"],
+        ip_address=r["ip_address"], user_agent=r["user_agent"],
+        is_active=bool(r["is_active"]), last_activity=r["last_activity"] or "",
+        created_at=datetime.fromisoformat(r["created_at"]),
+    ) for r in rows]
+
+
+def revoke_session(session_id: int, user_id: int) -> bool:
+    with _conn() as con:
+        cur = con.execute(
+            "UPDATE user_sessions SET is_active = 0 WHERE id = ? AND user_id = ?",
+            (session_id, user_id),
+        )
+    return cur.rowcount > 0
+
+
+def revoke_all_sessions(user_id: int, except_session_id: int = None) -> int:
+    with _conn() as con:
+        if except_session_id:
+            cur = con.execute(
+                "UPDATE user_sessions SET is_active = 0 WHERE user_id = ? AND id != ?",
+                (user_id, except_session_id),
+            )
+        else:
+            cur = con.execute(
+                "UPDATE user_sessions SET is_active = 0 WHERE user_id = ?",
+                (user_id,),
+            )
+    return cur.rowcount
+
+
+def update_session_activity(session_id: int) -> None:
+    with _conn() as con:
+        con.execute(
+            "UPDATE user_sessions SET last_activity = ? WHERE id = ?",
+            (datetime.now().isoformat(), session_id),
+        )
+
+
+def get_two_factor_config(user_id: int):
+    from teb.models import TwoFactorConfig
+    with _conn() as con:
+        row = con.execute(
+            "SELECT * FROM two_factor_config WHERE user_id = ?", (user_id,),
+        ).fetchone()
+    if not row:
+        return None
+    return TwoFactorConfig(
+        id=row["id"], user_id=row["user_id"], totp_secret=row["totp_secret"],
+        is_enabled=bool(row["is_enabled"]), backup_codes_hash=row["backup_codes_hash"] or "",
+        created_at=datetime.fromisoformat(row["created_at"]),
+    )
+
+
+def save_two_factor_config(config) -> "TwoFactorConfig":
+    with _conn() as con:
+        existing = con.execute(
+            "SELECT id FROM two_factor_config WHERE user_id = ?", (config.user_id,),
+        ).fetchone()
+        if existing:
+            con.execute(
+                "UPDATE two_factor_config SET totp_secret=?, is_enabled=?, backup_codes_hash=? WHERE user_id=?",
+                (config.totp_secret, int(config.is_enabled), config.backup_codes_hash, config.user_id),
+            )
+            config.id = existing["id"]
+        else:
+            cur = con.execute(
+                "INSERT INTO two_factor_config (user_id, totp_secret, is_enabled, backup_codes_hash) VALUES (?,?,?,?)",
+                (config.user_id, config.totp_secret, int(config.is_enabled), config.backup_codes_hash),
+            )
+            config.id = cur.lastrowid
+    return config
+
+
+def disable_two_factor(user_id: int) -> bool:
+    with _conn() as con:
+        cur = con.execute(
+            "UPDATE two_factor_config SET is_enabled = 0, totp_secret = '' WHERE user_id = ?",
+            (user_id,),
+        )
+    return cur.rowcount > 0
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Phase 2 — Remaining Collaboration Features
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# ─── Goal Sharing (GoalCollaborator CRUD) ────────────────────────────────────
+
+@_with_retry
+def share_goal(goal_id: int, user_id: int, role: str = "viewer") -> GoalCollaborator:
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        cur = con.execute(
+            "INSERT OR REPLACE INTO goal_collaborators (goal_id, user_id, role, created_at) "
+            "VALUES (?, ?, ?, ?)",
+            (goal_id, user_id, role, now),
+        )
+        collab = GoalCollaborator(
+            id=cur.lastrowid, goal_id=goal_id, user_id=user_id,
+            role=role, created_at=datetime.fromisoformat(now),
+        )
+    return collab
+
+
+def list_goal_collaborators(goal_id: int) -> List[GoalCollaborator]:
+    with _conn() as con:
+        rows = con.execute(
+            "SELECT * FROM goal_collaborators WHERE goal_id = ? ORDER BY created_at ASC",
+            (goal_id,),
+        ).fetchall()
+    return [_row_to_goal_collaborator(r) for r in rows]
+
+
+@_with_retry
+def unshare_goal(goal_id: int, user_id: int) -> bool:
+    with _conn() as con:
+        cur = con.execute(
+            "DELETE FROM goal_collaborators WHERE goal_id = ? AND user_id = ?",
+            (goal_id, user_id),
+        )
+        return cur.rowcount > 0
+
+
+def _row_to_goal_collaborator(row: sqlite3.Row) -> GoalCollaborator:
+    return GoalCollaborator(
+        id=row["id"],
+        goal_id=row["goal_id"],
+        user_id=row["user_id"],
+        role=row["role"],
+        created_at=datetime.fromisoformat(row["created_at"]),
+    )
+
+
+# ─── @mentions extraction ───────────────────────────────────────────────────
+
+_MENTION_RE = re.compile(r"@(\w+)")
+
+
+def extract_mentions(text: str) -> List[str]:
+    """Extract @username mentions from text. Returns list of usernames."""
+    return _MENTION_RE.findall(text)
+
+
+# ─── Task Assignment ────────────────────────────────────────────────────────
+
+@_with_retry
+def assign_task(task_id: int, user_id: Optional[int]) -> Task:
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        con.execute(
+            "UPDATE tasks SET assigned_to = ?, updated_at = ? WHERE id = ?",
+            (user_id, now, task_id),
+        )
+    task = get_task(task_id)
+    return task  # type: ignore[return-value]
+
+
+def list_tasks_assigned_to(user_id: int) -> List[Task]:
+    with _conn() as con:
+        rows = con.execute(
+            "SELECT * FROM tasks WHERE assigned_to = ? ORDER BY order_index ASC, id ASC",
+            (user_id,),
+        ).fetchall()
+    return [_row_to_task(r) for r in rows]
+
+
+# ─── Direct Messaging ───────────────────────────────────────────────────────
+
+@_with_retry
+def send_message(msg: DirectMessage) -> DirectMessage:
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        cur = con.execute(
+            "INSERT INTO direct_messages (sender_id, recipient_id, content, read, created_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (msg.sender_id, msg.recipient_id, msg.content, int(msg.read), now),
+        )
+        msg.id = cur.lastrowid
+        msg.created_at = datetime.fromisoformat(now)
+    return msg
+
+
+def list_conversations(user_id: int) -> List[dict]:
+    """List distinct conversation partners with last message preview."""
+    with _conn() as con:
+        rows = con.execute(
+            "SELECT CASE WHEN sender_id = ? THEN recipient_id ELSE sender_id END AS other_user_id, "
+            "MAX(created_at) AS last_message_at, content AS last_content "
+            "FROM direct_messages WHERE sender_id = ? OR recipient_id = ? "
+            "GROUP BY other_user_id ORDER BY last_message_at DESC",
+            (user_id, user_id, user_id),
+        ).fetchall()
+    return [{"other_user_id": r["other_user_id"], "last_message_at": r["last_message_at"],
+             "last_content": r["last_content"]} for r in rows]
+
+
+def list_messages(user_id: int, other_user_id: int, limit: int = 50) -> List[DirectMessage]:
+    with _conn() as con:
+        rows = con.execute(
+            "SELECT * FROM direct_messages WHERE "
+            "(sender_id = ? AND recipient_id = ?) OR (sender_id = ? AND recipient_id = ?) "
+            "ORDER BY created_at ASC LIMIT ?",
+            (user_id, other_user_id, other_user_id, user_id, limit),
+        ).fetchall()
+    return [_row_to_direct_message(r) for r in rows]
+
+
+@_with_retry
+def mark_message_read(message_id: int, user_id: int) -> bool:
+    with _conn() as con:
+        cur = con.execute(
+            "UPDATE direct_messages SET read = 1 WHERE id = ? AND recipient_id = ?",
+            (message_id, user_id),
+        )
+        return cur.rowcount > 0
+
+
+def _row_to_direct_message(row: sqlite3.Row) -> DirectMessage:
+    return DirectMessage(
+        id=row["id"],
+        sender_id=row["sender_id"],
+        recipient_id=row["recipient_id"],
+        content=row["content"],
+        read=bool(row["read"]),
+        created_at=datetime.fromisoformat(row["created_at"]),
+    )
+
+
+# ─── Goal Chat Messages ─────────────────────────────────────────────────────
+
+@_with_retry
+def create_goal_chat_message(msg: GoalChatMessage) -> GoalChatMessage:
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        cur = con.execute(
+            "INSERT INTO goal_chat_messages (goal_id, user_id, content, created_at) "
+            "VALUES (?, ?, ?, ?)",
+            (msg.goal_id, msg.user_id, msg.content, now),
+        )
+        msg.id = cur.lastrowid
+        msg.created_at = datetime.fromisoformat(now)
+    return msg
+
+
+def list_goal_chat_messages(goal_id: int, limit: int = 100) -> List[GoalChatMessage]:
+    with _conn() as con:
+        rows = con.execute(
+            "SELECT * FROM goal_chat_messages WHERE goal_id = ? ORDER BY created_at ASC LIMIT ?",
+            (goal_id, limit),
+        ).fetchall()
+    return [_row_to_goal_chat_message(r) for r in rows]
+
+
+def _row_to_goal_chat_message(row: sqlite3.Row) -> GoalChatMessage:
+    return GoalChatMessage(
+        id=row["id"],
+        goal_id=row["goal_id"],
+        user_id=row["user_id"],
+        content=row["content"],
+        created_at=datetime.fromisoformat(row["created_at"]),
+    )
+
+
+# ─── Email Notification Config ──────────────────────────────────────────────
+
+def get_email_notification_config(user_id: int) -> Optional[EmailNotificationConfig]:
+    with _conn() as con:
+        row = con.execute(
+            "SELECT * FROM email_notification_config WHERE user_id = ?", (user_id,),
+        ).fetchone()
+    if not row:
+        return None
+    return _row_to_email_notification_config(row)
+
+
+@_with_retry
+def upsert_email_notification_config(cfg: EmailNotificationConfig) -> EmailNotificationConfig:
+    with _conn() as con:
+        existing = con.execute(
+            "SELECT id FROM email_notification_config WHERE user_id = ?", (cfg.user_id,),
+        ).fetchone()
+        if existing:
+            con.execute(
+                "UPDATE email_notification_config SET digest_frequency=?, notify_on_mention=?, "
+                "notify_on_assignment=?, notify_on_comment=? WHERE user_id=?",
+                (cfg.digest_frequency, int(cfg.notify_on_mention), int(cfg.notify_on_assignment),
+                 int(cfg.notify_on_comment), cfg.user_id),
+            )
+            cfg.id = existing["id"]
+        else:
+            cur = con.execute(
+                "INSERT INTO email_notification_config (user_id, digest_frequency, notify_on_mention, "
+                "notify_on_assignment, notify_on_comment) VALUES (?, ?, ?, ?, ?)",
+                (cfg.user_id, cfg.digest_frequency, int(cfg.notify_on_mention),
+                 int(cfg.notify_on_assignment), int(cfg.notify_on_comment)),
+            )
+            cfg.id = cur.lastrowid
+    return cfg
+
+
+def _row_to_email_notification_config(row: sqlite3.Row) -> EmailNotificationConfig:
+    return EmailNotificationConfig(
+        id=row["id"],
+        user_id=row["user_id"],
+        digest_frequency=row["digest_frequency"],
+        notify_on_mention=bool(row["notify_on_mention"]),
+        notify_on_assignment=bool(row["notify_on_assignment"]),
+        notify_on_comment=bool(row["notify_on_comment"]),
+    )
+
+
+# ─── Push Subscriptions ─────────────────────────────────────────────────────
+
+@_with_retry
+def save_push_subscription(sub: PushSubscription) -> PushSubscription:
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        cur = con.execute(
+            "INSERT OR REPLACE INTO push_subscriptions (user_id, endpoint, p256dh, auth, created_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (sub.user_id, sub.endpoint, sub.p256dh, sub.auth, now),
+        )
+        sub.id = cur.lastrowid
+        sub.created_at = datetime.fromisoformat(now)
+    return sub
+
+
+def list_push_subscriptions(user_id: int) -> List[PushSubscription]:
+    with _conn() as con:
+        rows = con.execute(
+            "SELECT * FROM push_subscriptions WHERE user_id = ? ORDER BY created_at DESC",
+            (user_id,),
+        ).fetchall()
+    return [_row_to_push_subscription(r) for r in rows]
+
+
+@_with_retry
+def delete_push_subscription(endpoint: str, user_id: int) -> bool:
+    with _conn() as con:
+        cur = con.execute(
+            "DELETE FROM push_subscriptions WHERE endpoint = ? AND user_id = ?",
+            (endpoint, user_id),
+        )
+        return cur.rowcount > 0
+
+
+def _row_to_push_subscription(row: sqlite3.Row) -> PushSubscription:
+    return PushSubscription(
+        id=row["id"],
+        user_id=row["user_id"],
+        endpoint=row["endpoint"],
+        p256dh=row["p256dh"],
+        auth=row["auth"],
+        created_at=datetime.fromisoformat(row["created_at"]),
+    )
+
+
+# ─── Saved Views (Phase 3) ──────────────────────────────────────────────────
+
+@_with_retry
+def save_view(view: SavedView) -> SavedView:
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        cur = con.execute(
+            """INSERT INTO saved_views (user_id, name, view_type, filters_json, sort_json, group_by, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (view.user_id, view.name, view.view_type, view.filters_json,
+             view.sort_json, view.group_by, now),
+        )
+        view.id = cur.lastrowid
+        view.created_at = datetime.fromisoformat(now)
+    return view
+
+
+@_with_retry
+def list_saved_views(user_id: int) -> List[SavedView]:
+    with _conn() as con:
+        rows = con.execute(
+            "SELECT * FROM saved_views WHERE user_id = ? ORDER BY created_at DESC",
+            (user_id,),
+        ).fetchall()
+    return [_row_to_saved_view(r) for r in rows]
+
+
+@_with_retry
+def get_saved_view(view_id: int) -> Optional[SavedView]:
+    with _conn() as con:
+        row = con.execute("SELECT * FROM saved_views WHERE id = ?", (view_id,)).fetchone()
+    return _row_to_saved_view(row) if row else None
+
+
+@_with_retry
+def delete_saved_view(view_id: int, user_id: int) -> None:
+    with _conn() as con:
+        con.execute("DELETE FROM saved_views WHERE id = ? AND user_id = ?", (view_id, user_id))
+
+
+def _row_to_saved_view(row: sqlite3.Row) -> SavedView:
+    return SavedView(
+        id=row["id"], user_id=row["user_id"], name=row["name"],
+        view_type=row["view_type"], filters_json=row["filters_json"],
+        sort_json=row["sort_json"], group_by=row["group_by"],
+        created_at=datetime.fromisoformat(row["created_at"]),
+    )
+
+
+# ─── Dashboard Layouts (Phase 3) ────────────────────────────────────────────
+
+@_with_retry
+def save_dashboard(layout: DashboardLayout) -> DashboardLayout:
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        cur = con.execute(
+            """INSERT INTO dashboard_layouts (user_id, name, widgets_json, created_at)
+               VALUES (?, ?, ?, ?)""",
+            (layout.user_id, layout.name, layout.widgets_json, now),
+        )
+        layout.id = cur.lastrowid
+        layout.created_at = datetime.fromisoformat(now)
+    return layout
+
+
+@_with_retry
+def list_dashboards(user_id: int) -> List[DashboardLayout]:
+    with _conn() as con:
+        rows = con.execute(
+            "SELECT * FROM dashboard_layouts WHERE user_id = ? ORDER BY created_at DESC",
+            (user_id,),
+        ).fetchall()
+    return [_row_to_dashboard_layout(r) for r in rows]
+
+
+@_with_retry
+def get_dashboard(dashboard_id: int) -> Optional[DashboardLayout]:
+    with _conn() as con:
+        row = con.execute("SELECT * FROM dashboard_layouts WHERE id = ?", (dashboard_id,)).fetchone()
+    return _row_to_dashboard_layout(row) if row else None
+
+
+@_with_retry
+def update_dashboard(dashboard_id: int, user_id: int, **kwargs) -> Optional[DashboardLayout]:
+    set_parts = []
+    values = []
+    for key in ("name", "widgets_json"):
+        if key in kwargs:
+            set_parts.append(f"{key} = ?")
+            values.append(kwargs[key])
+    if not set_parts:
+        return get_dashboard(dashboard_id)
+    values.extend([dashboard_id, user_id])
+    query = "UPDATE dashboard_layouts SET " + ", ".join(set_parts) + " WHERE id = ? AND user_id = ?"
+    with _conn() as con:
+        con.execute(query, values)
+        row = con.execute("SELECT * FROM dashboard_layouts WHERE id = ?", (dashboard_id,)).fetchone()
+    return _row_to_dashboard_layout(row) if row else None
+
+
+@_with_retry
+def delete_dashboard(dashboard_id: int, user_id: int) -> None:
+    with _conn() as con:
+        con.execute("DELETE FROM dashboard_layouts WHERE id = ? AND user_id = ?", (dashboard_id, user_id))
+
+
+def _row_to_dashboard_layout(row: sqlite3.Row) -> DashboardLayout:
+    return DashboardLayout(
+        id=row["id"], user_id=row["user_id"], name=row["name"],
+        widgets_json=row["widgets_json"],
+        created_at=datetime.fromisoformat(row["created_at"]),
+    )
+
+
+# ─── Goal Progress Timeline (Phase 3, Item 7) ───────────────────────────────
+
+@_with_retry
+def get_goal_progress_timeline(goal_id: int) -> List[ProgressSnapshot]:
+    """Return progress snapshots ordered by date (ascending) for timeline chart."""
+    with _conn() as con:
+        rows = con.execute(
+            "SELECT * FROM progress_snapshots WHERE goal_id = ? ORDER BY captured_at ASC",
+            (goal_id,),
+        ).fetchall()
+    return [_row_to_snapshot(r) for r in rows]
+
+
+# ─── Burndown / Burnup Data (Phase 3, Item 10) ──────────────────────────────
+
+@_with_retry
+def get_burndown_data(goal_id: int) -> list:
+    """Return daily counts of completed vs remaining tasks for burndown chart."""
+    with _conn() as con:
+        tasks = con.execute(
+            "SELECT status, updated_at FROM tasks WHERE goal_id = ?", (goal_id,),
+        ).fetchall()
+
+    total = len(tasks)
+    if not total:
+        return []
+
+    # Build daily cumulative completed count
+    completed_dates: dict = {}
+    for t in tasks:
+        if t["status"] in ("done", "skipped") and t["updated_at"]:
+            day = t["updated_at"][:10]
+            completed_dates[day] = completed_dates.get(day, 0) + 1
+
+    if not completed_dates:
+        today = date.today().isoformat()
+        return [{"date": today, "completed": 0, "remaining": total, "total": total}]
+
+    sorted_days = sorted(completed_dates.keys())
+    result = []
+    cumulative = 0
+    for day in sorted_days:
+        cumulative += completed_dates[day]
+        result.append({
+            "date": day,
+            "completed": cumulative,
+            "remaining": total - cumulative,
+            "total": total,
+        })
+    return result
+
+
+# ─── Time Tracking Reports (Phase 3, Item 11) ───────────────────────────────
+
+@_with_retry
+def get_time_tracking_report(goal_id: int) -> dict:
+    """Aggregate TimeEntry data by task and user for a goal."""
+    with _conn() as con:
+        rows = con.execute(
+            """SELECT te.task_id, te.user_id, t.title as task_title,
+                      SUM(te.duration_minutes) as total_minutes
+               FROM time_entries te
+               JOIN tasks t ON t.id = te.task_id
+               WHERE t.goal_id = ?
+               GROUP BY te.task_id, te.user_id""",
+            (goal_id,),
+        ).fetchall()
+
+    by_task: dict = {}
+    by_user: dict = {}
+    for r in rows:
+        tid = r["task_id"]
+        uid = r["user_id"]
+        mins = r["total_minutes"]
+        title = r["task_title"]
+        by_task.setdefault(tid, {"task_id": tid, "title": title, "total_minutes": 0})
+        by_task[tid]["total_minutes"] += mins
+        by_user.setdefault(uid, {"user_id": uid, "total_minutes": 0})
+        by_user[uid]["total_minutes"] += mins
+
+    return {
+        "by_task": list(by_task.values()),
+        "by_user": list(by_user.values()),
+    }
+
+
+# ─── Scheduled Reports (Phase 3, Item 9) ────────────────────────────────────
+
+@_with_retry
+def create_scheduled_report(report: ScheduledReport) -> ScheduledReport:
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        cur = con.execute(
+            """INSERT INTO scheduled_reports (user_id, report_type, frequency, recipients_json, created_at, last_sent_at)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (report.user_id, report.report_type, report.frequency,
+             report.recipients_json, now, ""),
+        )
+        report.id = cur.lastrowid
+        report.created_at = datetime.fromisoformat(now)
+    return report
+
+
+@_with_retry
+def list_scheduled_reports(user_id: int) -> List[ScheduledReport]:
+    with _conn() as con:
+        rows = con.execute(
+            "SELECT * FROM scheduled_reports WHERE user_id = ? ORDER BY created_at DESC",
+            (user_id,),
+        ).fetchall()
+    return [_row_to_scheduled_report(r) for r in rows]
+
+
+@_with_retry
+def get_scheduled_report(report_id: int) -> Optional[ScheduledReport]:
+    with _conn() as con:
+        row = con.execute("SELECT * FROM scheduled_reports WHERE id = ?", (report_id,)).fetchone()
+    return _row_to_scheduled_report(row) if row else None
+
+
+@_with_retry
+def delete_scheduled_report(report_id: int, user_id: int) -> None:
+    with _conn() as con:
+        con.execute("DELETE FROM scheduled_reports WHERE id = ? AND user_id = ?", (report_id, user_id))
+
+
+def _row_to_scheduled_report(row: sqlite3.Row) -> ScheduledReport:
+    return ScheduledReport(
+        id=row["id"], user_id=row["user_id"], report_type=row["report_type"],
+        frequency=row["frequency"], recipients_json=row["recipients_json"],
+        created_at=datetime.fromisoformat(row["created_at"]),
+        last_sent_at=datetime.fromisoformat(row["last_sent_at"]) if row["last_sent_at"] else None,
+    )
+
+
+# ─── Phase 5: Integration Marketplace ────────────────────────────────────────
+
+@_with_retry
+def create_integration_listing(il: IntegrationListing) -> IntegrationListing:
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        cur = con.execute(
+            "INSERT INTO integration_listings (name, category, description, icon_url, auth_type, enabled, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (il.name, il.category, il.description, il.icon_url, il.auth_type, int(il.enabled), now),
+        )
+        il.id = cur.lastrowid
+        il.created_at = datetime.fromisoformat(now)
+    return il
+
+
+@_with_retry
+def list_integration_listings(category: Optional[str] = None) -> List[IntegrationListing]:
+    with _conn() as con:
+        if category:
+            rows = con.execute(
+                "SELECT * FROM integration_listings WHERE category = ? ORDER BY name", (category,)
+            ).fetchall()
+        else:
+            rows = con.execute("SELECT * FROM integration_listings ORDER BY name").fetchall()
+    return [_row_to_integration_listing(r) for r in rows]
+
+
+@_with_retry
+def get_integration_listing(listing_id: int) -> Optional[IntegrationListing]:
+    with _conn() as con:
+        row = con.execute("SELECT * FROM integration_listings WHERE id = ?", (listing_id,)).fetchone()
+    return _row_to_integration_listing(row) if row else None
+
+
+def _row_to_integration_listing(row: sqlite3.Row) -> IntegrationListing:
+    return IntegrationListing(
+        id=row["id"], name=row["name"], category=row["category"],
+        description=row["description"], icon_url=row["icon_url"],
+        auth_type=row["auth_type"], enabled=bool(row["enabled"]),
+        created_at=datetime.fromisoformat(row["created_at"]),
+    )
+
+
+# ─── OAuth Connections ───────────────────────────────────────────────────────
+
+@_with_retry
+def create_oauth_connection(oc: OAuthConnection) -> OAuthConnection:
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        cur = con.execute(
+            "INSERT INTO oauth_connections (user_id, provider, access_token_encrypted, "
+            "refresh_token_encrypted, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+            (oc.user_id, oc.provider, oc.access_token_encrypted,
+             oc.refresh_token_encrypted,
+             oc.expires_at.isoformat() if oc.expires_at else None, now),
+        )
+        oc.id = cur.lastrowid
+        oc.created_at = datetime.fromisoformat(now)
+    return oc
+
+
+@_with_retry
+def get_oauth_connection(user_id: int, provider: str) -> Optional[OAuthConnection]:
+    with _conn() as con:
+        row = con.execute(
+            "SELECT * FROM oauth_connections WHERE user_id = ? AND provider = ? ORDER BY id DESC LIMIT 1",
+            (user_id, provider),
+        ).fetchone()
+    return _row_to_oauth_connection(row) if row else None
+
+
+@_with_retry
+def upsert_oauth_connection(oc: OAuthConnection) -> OAuthConnection:
+    """Insert or update an OAuth connection for user+provider."""
+    with _conn() as con:
+        existing = con.execute(
+            "SELECT id FROM oauth_connections WHERE user_id = ? AND provider = ?",
+            (oc.user_id, oc.provider),
+        ).fetchone()
+        now = datetime.now(timezone.utc).isoformat()
+        if existing:
+            con.execute(
+                "UPDATE oauth_connections SET access_token_encrypted=?, refresh_token_encrypted=?, "
+                "expires_at=? WHERE id=?",
+                (oc.access_token_encrypted, oc.refresh_token_encrypted,
+                 oc.expires_at.isoformat() if oc.expires_at else None, existing["id"]),
+            )
+            oc.id = existing["id"]
+        else:
+            cur = con.execute(
+                "INSERT INTO oauth_connections (user_id, provider, access_token_encrypted, "
+                "refresh_token_encrypted, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                (oc.user_id, oc.provider, oc.access_token_encrypted,
+                 oc.refresh_token_encrypted,
+                 oc.expires_at.isoformat() if oc.expires_at else None, now),
+            )
+            oc.id = cur.lastrowid
+        oc.created_at = datetime.fromisoformat(now)
+    return oc
+
+
+def _row_to_oauth_connection(row: sqlite3.Row) -> OAuthConnection:
+    return OAuthConnection(
+        id=row["id"], user_id=row["user_id"], provider=row["provider"],
+        access_token_encrypted=row["access_token_encrypted"],
+        refresh_token_encrypted=row["refresh_token_encrypted"],
+        expires_at=datetime.fromisoformat(row["expires_at"]) if row["expires_at"] else None,
+        created_at=datetime.fromisoformat(row["created_at"]),
+    )
+
+
+# ─── Integration Templates ──────────────────────────────────────────────────
+
+@_with_retry
+def create_integration_template(t: IntegrationTemplate) -> IntegrationTemplate:
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        cur = con.execute(
+            "INSERT INTO integration_templates (name, description, source_service, target_service, mapping_json, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (t.name, t.description, t.source_service, t.target_service, t.mapping_json, now),
+        )
+        t.id = cur.lastrowid
+        t.created_at = datetime.fromisoformat(now)
+    return t
+
+
+@_with_retry
+def list_integration_templates() -> List[IntegrationTemplate]:
+    with _conn() as con:
+        rows = con.execute("SELECT * FROM integration_templates ORDER BY name").fetchall()
+    return [_row_to_integration_template(r) for r in rows]
+
+
+@_with_retry
+def get_integration_template(template_id: int) -> Optional[IntegrationTemplate]:
+    with _conn() as con:
+        row = con.execute("SELECT * FROM integration_templates WHERE id = ?", (template_id,)).fetchone()
+    return _row_to_integration_template(row) if row else None
+
+
+def _row_to_integration_template(row: sqlite3.Row) -> IntegrationTemplate:
+    return IntegrationTemplate(
+        id=row["id"], name=row["name"], description=row["description"],
+        source_service=row["source_service"], target_service=row["target_service"],
+        mapping_json=row["mapping_json"],
+        created_at=datetime.fromisoformat(row["created_at"]),
+    )
+
+
+# ─── Webhook Rules ──────────────────────────────────────────────────────────
+
+@_with_retry
+def create_webhook_rule(wr: WebhookRule) -> WebhookRule:
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        cur = con.execute(
+            "INSERT INTO webhook_rules (user_id, name, event_type, filter_json, target_url, headers_json, active, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (wr.user_id, wr.name, wr.event_type, wr.filter_json, wr.target_url,
+             wr.headers_json, int(wr.active), now),
+        )
+        wr.id = cur.lastrowid
+        wr.created_at = datetime.fromisoformat(now)
+    return wr
+
+
+@_with_retry
+def list_webhook_rules(user_id: int) -> List[WebhookRule]:
+    with _conn() as con:
+        rows = con.execute(
+            "SELECT * FROM webhook_rules WHERE user_id = ? ORDER BY created_at DESC", (user_id,)
+        ).fetchall()
+    return [_row_to_webhook_rule(r) for r in rows]
+
+
+@_with_retry
+def get_webhook_rule(rule_id: int) -> Optional[WebhookRule]:
+    with _conn() as con:
+        row = con.execute("SELECT * FROM webhook_rules WHERE id = ?", (rule_id,)).fetchone()
+    return _row_to_webhook_rule(row) if row else None
+
+
+@_with_retry
+def update_webhook_rule(wr: WebhookRule) -> WebhookRule:
+    with _conn() as con:
+        con.execute(
+            "UPDATE webhook_rules SET name=?, event_type=?, filter_json=?, target_url=?, "
+            "headers_json=?, active=? WHERE id=?",
+            (wr.name, wr.event_type, wr.filter_json, wr.target_url,
+             wr.headers_json, int(wr.active), wr.id),
+        )
+    return wr
+
+
+@_with_retry
+def delete_webhook_rule(rule_id: int, user_id: int) -> None:
+    with _conn() as con:
+        con.execute("DELETE FROM webhook_rules WHERE id = ? AND user_id = ?", (rule_id, user_id))
+
+
+def _row_to_webhook_rule(row: sqlite3.Row) -> WebhookRule:
+    return WebhookRule(
+        id=row["id"], user_id=row["user_id"], name=row["name"],
+        event_type=row["event_type"], filter_json=row["filter_json"],
+        target_url=row["target_url"], headers_json=row["headers_json"],
+        active=bool(row["active"]),
+        created_at=datetime.fromisoformat(row["created_at"]),
+    )
+
+
+# ─── Plugin Marketplace ─────────────────────────────────────────────────────
+
+@_with_retry
+def create_plugin_listing(pl: PluginListing) -> PluginListing:
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        cur = con.execute(
+            "INSERT INTO plugin_listings (name, description, author, version, downloads, rating, manifest_json, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (pl.name, pl.description, pl.author, pl.version, pl.downloads, pl.rating, pl.manifest_json, now),
+        )
+        pl.id = cur.lastrowid
+        pl.created_at = datetime.fromisoformat(now)
+    return pl
+
+
+@_with_retry
+def list_plugin_listings() -> List[PluginListing]:
+    with _conn() as con:
+        rows = con.execute("SELECT * FROM plugin_listings ORDER BY downloads DESC, name").fetchall()
+    return [_row_to_plugin_listing(r) for r in rows]
+
+
+@_with_retry
+def get_plugin_listing(listing_id: int) -> Optional[PluginListing]:
+    with _conn() as con:
+        row = con.execute("SELECT * FROM plugin_listings WHERE id = ?", (listing_id,)).fetchone()
+    return _row_to_plugin_listing(row) if row else None
+
+
+@_with_retry
+def increment_plugin_downloads(listing_id: int) -> None:
+    with _conn() as con:
+        con.execute("UPDATE plugin_listings SET downloads = downloads + 1 WHERE id = ?", (listing_id,))
+
+
+def _row_to_plugin_listing(row: sqlite3.Row) -> PluginListing:
+    return PluginListing(
+        id=row["id"], name=row["name"], description=row["description"],
+        author=row["author"], version=row["version"], downloads=row["downloads"],
+        rating=row["rating"], manifest_json=row["manifest_json"],
+        created_at=datetime.fromisoformat(row["created_at"]),
+    )
+
+
+# ─── Custom Field Definitions ───────────────────────────────────────────────
+
+@_with_retry
+def create_custom_field_definition(cfd: CustomFieldDefinition) -> CustomFieldDefinition:
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        cur = con.execute(
+            "INSERT INTO custom_field_definitions (plugin_id, field_type, label, options_json, created_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (cfd.plugin_id, cfd.field_type, cfd.label, cfd.options_json, now),
+        )
+        cfd.id = cur.lastrowid
+        cfd.created_at = datetime.fromisoformat(now)
+    return cfd
+
+
+@_with_retry
+def list_custom_field_definitions(plugin_id: Optional[int] = None) -> List[CustomFieldDefinition]:
+    with _conn() as con:
+        if plugin_id is not None:
+            rows = con.execute(
+                "SELECT * FROM custom_field_definitions WHERE plugin_id = ? ORDER BY id", (plugin_id,)
+            ).fetchall()
+        else:
+            rows = con.execute("SELECT * FROM custom_field_definitions ORDER BY id").fetchall()
+    return [_row_to_custom_field_definition(r) for r in rows]
+
+
+def _row_to_custom_field_definition(row: sqlite3.Row) -> CustomFieldDefinition:
+    return CustomFieldDefinition(
+        id=row["id"], plugin_id=row["plugin_id"], field_type=row["field_type"],
+        label=row["label"], options_json=row["options_json"],
+        created_at=datetime.fromisoformat(row["created_at"]),
+    )
+
+
+# ─── Plugin Views ───────────────────────────────────────────────────────────
+
+@_with_retry
+def create_plugin_view(pv: PluginView) -> PluginView:
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        cur = con.execute(
+            "INSERT INTO plugin_views (plugin_id, name, view_type, config_json, created_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (pv.plugin_id, pv.name, pv.view_type, pv.config_json, now),
+        )
+        pv.id = cur.lastrowid
+        pv.created_at = datetime.fromisoformat(now)
+    return pv
+
+
+@_with_retry
+def list_plugin_views(plugin_id: Optional[int] = None) -> List[PluginView]:
+    with _conn() as con:
+        if plugin_id is not None:
+            rows = con.execute(
+                "SELECT * FROM plugin_views WHERE plugin_id = ? ORDER BY id", (plugin_id,)
+            ).fetchall()
+        else:
+            rows = con.execute("SELECT * FROM plugin_views ORDER BY id").fetchall()
+    return [_row_to_plugin_view(r) for r in rows]
+
+
+def _row_to_plugin_view(row: sqlite3.Row) -> PluginView:
+    return PluginView(
+        id=row["id"], plugin_id=row["plugin_id"], name=row["name"],
+        view_type=row["view_type"], config_json=row["config_json"],
+        created_at=datetime.fromisoformat(row["created_at"]),
+    )
+
+
+# ─── Themes ─────────────────────────────────────────────────────────────────
+
+@_with_retry
+def create_theme(theme: Theme) -> Theme:
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        cur = con.execute(
+            "INSERT INTO themes (name, author, css_variables_json, is_active, created_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (theme.name, theme.author, theme.css_variables_json, int(theme.is_active), now),
+        )
+        theme.id = cur.lastrowid
+        theme.created_at = datetime.fromisoformat(now)
+    return theme
+
+
+@_with_retry
+def list_themes() -> List[Theme]:
+    with _conn() as con:
+        rows = con.execute("SELECT * FROM themes ORDER BY name").fetchall()
+    return [_row_to_theme(r) for r in rows]
+
+
+@_with_retry
+def get_active_theme() -> Optional[Theme]:
+    with _conn() as con:
+        row = con.execute("SELECT * FROM themes WHERE is_active = 1 LIMIT 1").fetchone()
+    return _row_to_theme(row) if row else None
+
+
+@_with_retry
+def activate_theme(theme_id: int) -> None:
+    with _conn() as con:
+        con.execute("UPDATE themes SET is_active = 0")
+        con.execute("UPDATE themes SET is_active = 1 WHERE id = ?", (theme_id,))
+
+
+@_with_retry
+def get_theme(theme_id: int) -> Optional[Theme]:
+    with _conn() as con:
+        row = con.execute("SELECT * FROM themes WHERE id = ?", (theme_id,)).fetchone()
+    return _row_to_theme(row) if row else None
+
+
+def _row_to_theme(row: sqlite3.Row) -> Theme:
+    return Theme(
+        id=row["id"], name=row["name"], author=row["author"],
+        css_variables_json=row["css_variables_json"], is_active=bool(row["is_active"]),
+        created_at=datetime.fromisoformat(row["created_at"]),
+    )
+
+
+# ─── Zapier Subscriptions ───────────────────────────────────────────────────
+
+@_with_retry
+def create_zapier_subscription(user_id: int, event_type: str, target_url: str) -> int:
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        cur = con.execute(
+            "INSERT INTO zapier_subscriptions (user_id, event_type, target_url, created_at) VALUES (?, ?, ?, ?)",
+            (user_id, event_type, target_url, now),
+        )
+        return cur.lastrowid
+
+
+@_with_retry
+def delete_zapier_subscription(sub_id: int, user_id: int) -> None:
+    with _conn() as con:
+        con.execute("DELETE FROM zapier_subscriptions WHERE id = ? AND user_id = ?", (sub_id, user_id))
+
+
+@_with_retry
+def list_zapier_subscriptions(user_id: int) -> list:
+    with _conn() as con:
+        rows = con.execute(
+            "SELECT * FROM zapier_subscriptions WHERE user_id = ? ORDER BY created_at DESC", (user_id,)
+        ).fetchall()
+    return [{"id": r["id"], "event_type": r["event_type"], "target_url": r["target_url"],
+             "created_at": r["created_at"]} for r in rows]
+
+
+# ─── API Rate Limit Usage ───────────────────────────────────────────────────
+
+@_with_retry
+def record_api_usage(user_id: int, integration: str = "", endpoint: str = "") -> None:
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        con.execute(
+            "INSERT INTO api_usage_log (user_id, integration, endpoint, created_at) VALUES (?, ?, ?, ?)",
+            (user_id, integration, endpoint, now),
+        )
+
+
+@_with_retry
+def get_api_rate_limit_usage(user_id: int) -> dict:
+    """Count recent API calls per integration for the given user (last 24h)."""
+    with _conn() as con:
+        rows = con.execute(
+            "SELECT integration, COUNT(*) as cnt FROM api_usage_log "
+            "WHERE user_id = ? AND created_at >= datetime('now', '-1 day') "
+            "GROUP BY integration ORDER BY cnt DESC",
+            (user_id,),
+        ).fetchall()
+        total = con.execute(
+            "SELECT COUNT(*) as cnt FROM api_usage_log "
+            "WHERE user_id = ? AND created_at >= datetime('now', '-1 day')",
+            (user_id,),
+        ).fetchone()
+    return {
+        "user_id": user_id,
+        "window": "24h",
+        "total_calls": total["cnt"] if total else 0,
+        "by_integration": [{"integration": r["integration"] or "general", "calls": r["cnt"]} for r in rows],
+    }
+
+
+# ─── Full Project Export ─────────────────────────────────────────────────────
+
+@_with_retry
+def export_project(goal_id: int) -> dict:
+    """Export a full goal with all tasks, comments, and artifacts as JSON."""
+    with _conn() as con:
+        goal_row = con.execute("SELECT * FROM goals WHERE id = ?", (goal_id,)).fetchone()
+        if not goal_row:
+            return {}
+        goal = _row_to_goal(goal_row)
+
+        task_rows = con.execute("SELECT * FROM tasks WHERE goal_id = ? ORDER BY order_index", (goal_id,)).fetchall()
+        tasks = [_row_to_task(r) for r in task_rows]
+
+        task_ids = [t.id for t in tasks]
+        comments = []
+        artifacts = []
+        for tid in task_ids:
+            comment_rows = con.execute("SELECT * FROM task_comments WHERE task_id = ?", (tid,)).fetchall()
+            for cr in comment_rows:
+                comments.append({
+                    "id": cr["id"], "task_id": cr["task_id"],
+                    "content": cr["content"], "author": cr["author"],
+                    "created_at": cr["created_at"],
+                })
+            artifact_rows = con.execute("SELECT * FROM task_artifacts WHERE task_id = ?", (tid,)).fetchall()
+            for ar in artifact_rows:
+                artifacts.append({
+                    "id": ar["id"], "task_id": ar["task_id"],
+                    "artifact_type": ar["artifact_type"], "content": ar["content"],
+                    "created_at": ar["created_at"],
+                })
+
+    return {
+        "goal": goal.to_dict(),
+        "tasks": [t.to_dict() for t in tasks],
+        "comments": comments,
+        "artifacts": artifacts,
+    }
+
+
+# ─── Phase 6: Enterprise — SSO Config ───────────────────────────────────────
+
+@_with_retry
+def create_sso_config(cfg: SSOConfig) -> SSOConfig:
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        cur = con.execute(
+            "INSERT INTO sso_configs (org_id, provider, entity_id, sso_url, certificate, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (cfg.org_id, cfg.provider, cfg.entity_id, cfg.sso_url, cfg.certificate, now),
+        )
+        cfg.id = cur.lastrowid
+        cfg.created_at = datetime.fromisoformat(now)
+    return cfg
+
+
+@_with_retry
+def get_sso_config(org_id: int) -> Optional[SSOConfig]:
+    with _conn() as con:
+        row = con.execute("SELECT * FROM sso_configs WHERE org_id = ? ORDER BY id DESC LIMIT 1", (org_id,)).fetchone()
+    if not row:
+        return None
+    return SSOConfig(
+        id=row["id"], org_id=row["org_id"], provider=row["provider"],
+        entity_id=row["entity_id"], sso_url=row["sso_url"], certificate=row["certificate"],
+        created_at=datetime.fromisoformat(row["created_at"]),
+    )
+
+
+@_with_retry
+def update_sso_config(cfg: SSOConfig) -> SSOConfig:
+    with _conn() as con:
+        con.execute(
+            "UPDATE sso_configs SET provider=?, entity_id=?, sso_url=?, certificate=? WHERE id=?",
+            (cfg.provider, cfg.entity_id, cfg.sso_url, cfg.certificate, cfg.id),
+        )
+    return cfg
+
+
+# ─── Phase 6: Enterprise — IP Allowlist ─────────────────────────────────────
+
+@_with_retry
+def create_ip_allowlist_entry(entry: IPAllowlist) -> IPAllowlist:
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        cur = con.execute(
+            "INSERT INTO ip_allowlist (org_id, cidr_range, description, created_at) VALUES (?, ?, ?, ?)",
+            (entry.org_id, entry.cidr_range, entry.description, now),
+        )
+        entry.id = cur.lastrowid
+        entry.created_at = datetime.fromisoformat(now)
+    return entry
+
+
+@_with_retry
+def list_ip_allowlist(org_id: int) -> list[IPAllowlist]:
+    with _conn() as con:
+        rows = con.execute("SELECT * FROM ip_allowlist WHERE org_id = ? ORDER BY id", (org_id,)).fetchall()
+    return [
+        IPAllowlist(id=r["id"], org_id=r["org_id"], cidr_range=r["cidr_range"],
+                    description=r["description"], created_at=datetime.fromisoformat(r["created_at"]))
+        for r in rows
+    ]
+
+
+@_with_retry
+def delete_ip_allowlist_entry(entry_id: int, org_id: int) -> bool:
+    with _conn() as con:
+        cur = con.execute("DELETE FROM ip_allowlist WHERE id = ? AND org_id = ?", (entry_id, org_id))
+    return cur.rowcount > 0
+
+
+def check_ip_allowed(ip: str, org_id: int) -> bool:
+    """Check if an IP address is allowed for the given org.
+
+    Returns True if there are no allowlist entries (open access)
+    or if the IP matches any CIDR range in the allowlist.
+    """
+    import ipaddress
+    entries = list_ip_allowlist(org_id)
+    if not entries:
+        return True  # No allowlist = open access
+    try:
+        addr = ipaddress.ip_address(ip)
+    except ValueError:
+        return False
+    for entry in entries:
+        try:
+            network = ipaddress.ip_network(entry.cidr_range, strict=False)
+            if addr in network:
+                return True
+        except ValueError:
+            continue
+    return False
+
+
+# ─── Phase 6: Enterprise — Data Encryption at Rest ──────────────────────────
+
+def encrypt_field(value: str) -> str:
+    """Encrypt a field value using TEB_ENCRYPTION_KEY if set, passthrough otherwise."""
+    from teb import config as _cfg
+    key = _cfg.TEB_ENCRYPTION_KEY
+    if not key or not value:
+        return value
+    try:
+        from cryptography.fernet import Fernet
+        f = Fernet(key.encode() if isinstance(key, str) else key)
+        return f.encrypt(value.encode()).decode()
+    except Exception:
+        return value
+
+
+def decrypt_field(value: str) -> str:
+    """Decrypt a field value using TEB_ENCRYPTION_KEY if set, passthrough otherwise."""
+    from teb import config as _cfg
+    key = _cfg.TEB_ENCRYPTION_KEY
+    if not key or not value:
+        return value
+    try:
+        from cryptography.fernet import Fernet
+        f = Fernet(key.encode() if isinstance(key, str) else key)
+        return f.decrypt(value.encode()).decode()
+    except Exception:
+        return value
+
+
+# ─── Phase 6: Enterprise — Audit Log Search ─────────────────────────────────
+
+@_with_retry
+def search_audit_events(
+    user_id: Optional[str] = None,
+    event_type: Optional[str] = None,
+    since: Optional[str] = None,
+    until: Optional[str] = None,
+    limit: int = 100,
+) -> list[AuditEvent]:
+    """Search audit events with flexible filtering."""
+    clauses: list[str] = []
+    params: list = []
+    if user_id is not None:
+        clauses.append("actor_id = ?")
+        params.append(str(user_id))
+    if event_type:
+        clauses.append("event_type = ?")
+        params.append(event_type)
+    if since:
+        clauses.append("created_at >= ?")
+        params.append(since)
+    if until:
+        clauses.append("created_at <= ?")
+        params.append(until)
+    where = ("WHERE " + " AND ".join(clauses)) if clauses else ""
+    with _conn() as con:
+        rows = con.execute(
+            f"SELECT * FROM audit_events {where} ORDER BY created_at DESC LIMIT ?",
+            params + [limit],
+        ).fetchall()
+    return [
+        AuditEvent(
+            id=r["id"], goal_id=r["goal_id"], event_type=r["event_type"],
+            actor_type=r["actor_type"], actor_id=r["actor_id"],
+            context_json=r["context_json"],
+            created_at=datetime.fromisoformat(r["created_at"]),
+        )
+        for r in rows
+    ]
+
+
+# ─── Phase 6: Enterprise — Organization Management ──────────────────────────
+
+@_with_retry
+def create_org(org: Organization) -> Organization:
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        cur = con.execute(
+            "INSERT INTO organizations (name, slug, owner_id, settings_json, created_at) VALUES (?, ?, ?, ?, ?)",
+            (org.name, org.slug, org.owner_id, org.settings_json, now),
+        )
+        org.id = cur.lastrowid
+        org.created_at = datetime.fromisoformat(now)
+    return org
+
+
+@_with_retry
+def get_org(org_id: int) -> Optional[Organization]:
+    with _conn() as con:
+        row = con.execute("SELECT * FROM organizations WHERE id = ?", (org_id,)).fetchone()
+    if not row:
+        return None
+    return Organization(
+        id=row["id"], name=row["name"], slug=row["slug"],
+        owner_id=row["owner_id"], settings_json=row["settings_json"],
+        created_at=datetime.fromisoformat(row["created_at"]),
+    )
+
+
+@_with_retry
+def update_org(org: Organization) -> Organization:
+    with _conn() as con:
+        con.execute(
+            "UPDATE organizations SET name=?, slug=?, settings_json=? WHERE id=?",
+            (org.name, org.slug, org.settings_json, org.id),
+        )
+    return org
+
+
+@_with_retry
+def list_orgs() -> list[Organization]:
+    with _conn() as con:
+        rows = con.execute("SELECT * FROM organizations ORDER BY name").fetchall()
+    return [
+        Organization(id=r["id"], name=r["name"], slug=r["slug"],
+                     owner_id=r["owner_id"], settings_json=r["settings_json"],
+                     created_at=datetime.fromisoformat(r["created_at"]))
+        for r in rows
+    ]
+
+
+@_with_retry
+def add_org_member(org_id: int, user_id: int, role: str = "member") -> dict:
+    with _conn() as con:
+        con.execute(
+            "INSERT OR REPLACE INTO org_members (org_id, user_id, role) VALUES (?, ?, ?)",
+            (org_id, user_id, role),
+        )
+    return {"org_id": org_id, "user_id": user_id, "role": role}
+
+
+@_with_retry
+def list_org_members(org_id: int) -> list[dict]:
+    with _conn() as con:
+        rows = con.execute(
+            "SELECT om.user_id, om.role, u.email FROM org_members om "
+            "LEFT JOIN users u ON om.user_id = u.id WHERE om.org_id = ?",
+            (org_id,),
+        ).fetchall()
+    return [{"user_id": r["user_id"], "role": r["role"], "email": r["email"]} for r in rows]
+
+
+# ─── Phase 6: Enterprise — Usage Analytics ──────────────────────────────────
+
+@_with_retry
+def get_usage_analytics(org_id: Optional[int] = None, since: Optional[str] = None) -> dict:
+    """Aggregate usage analytics across the platform."""
+    with _conn() as con:
+        since_clause = f"AND created_at >= '{since}'" if since else ""
+
+        active_users = con.execute(
+            f"SELECT COUNT(DISTINCT user_id) as cnt FROM goals WHERE user_id IS NOT NULL {since_clause}"
+        ).fetchone()["cnt"]
+
+        goals_created = con.execute(
+            f"SELECT COUNT(*) as cnt FROM goals WHERE 1=1 {since_clause}"
+        ).fetchone()["cnt"]
+
+        tasks_completed = con.execute(
+            f"SELECT COUNT(*) as cnt FROM tasks WHERE status = 'done' {('AND updated_at >= ' + repr(since)) if since else ''}"
+        ).fetchone()["cnt"]
+
+        api_calls = con.execute(
+            f"SELECT COUNT(*) as cnt FROM api_usage_log WHERE 1=1 {since_clause}"
+        ).fetchone()["cnt"]
+
+    return {
+        "active_users": active_users,
+        "goals_created": goals_created,
+        "tasks_completed": tasks_completed,
+        "api_calls": api_calls,
+    }
+
+
+# ─── Phase 6: Enterprise — Branding Config ──────────────────────────────────
+
+@_with_retry
+def get_branding_config(org_id: int) -> Optional[BrandingConfig]:
+    with _conn() as con:
+        row = con.execute("SELECT * FROM branding_configs WHERE org_id = ?", (org_id,)).fetchone()
+    if not row:
+        return None
+    return BrandingConfig(
+        id=row["id"], org_id=row["org_id"], logo_url=row["logo_url"],
+        primary_color=row["primary_color"], secondary_color=row["secondary_color"],
+        app_name=row["app_name"], favicon_url=row["favicon_url"],
+        created_at=datetime.fromisoformat(row["created_at"]),
+    )
+
+
+@_with_retry
+def upsert_branding_config(cfg: BrandingConfig) -> BrandingConfig:
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        existing = con.execute("SELECT id FROM branding_configs WHERE org_id = ?", (cfg.org_id,)).fetchone()
+        if existing:
+            con.execute(
+                "UPDATE branding_configs SET logo_url=?, primary_color=?, secondary_color=?, "
+                "app_name=?, favicon_url=? WHERE org_id=?",
+                (cfg.logo_url, cfg.primary_color, cfg.secondary_color, cfg.app_name, cfg.favicon_url, cfg.org_id),
+            )
+            cfg.id = existing["id"]
+        else:
+            cur = con.execute(
+                "INSERT INTO branding_configs (org_id, logo_url, primary_color, secondary_color, app_name, favicon_url, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (cfg.org_id, cfg.logo_url, cfg.primary_color, cfg.secondary_color, cfg.app_name, cfg.favicon_url, now),
+            )
+            cfg.id = cur.lastrowid
+            cfg.created_at = datetime.fromisoformat(now)
+    return cfg
+
+
+# ─── Phase 6: Enterprise — Database Status ──────────────────────────────────
+
+@_with_retry
+def get_database_status() -> dict:
+    """Return current database status including type, size, and table counts."""
+    import os as _os
+    db = _db_path()
+    db_size = 0
+    try:
+        db_size = _os.path.getsize(db)
+    except OSError:
+        pass
+
+    with _conn() as con:
+        tables = con.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+        ).fetchall()
+        table_counts = {}
+        for t in tables:
+            name = t["name"]
+            cnt = con.execute(f"SELECT COUNT(*) as cnt FROM [{name}]").fetchone()["cnt"]
+            table_counts[name] = cnt
+
+    return {
+        "database_type": "sqlite",
+        "database_path": db,
+        "size_bytes": db_size,
+        "size_mb": round(db_size / (1024 * 1024), 2),
+        "table_count": len(table_counts),
+        "tables": table_counts,
+    }
+
+
+# ─── Phase 6: Enterprise — Compliance Report ────────────────────────────────
+
+@_with_retry
+def get_compliance_report() -> dict:
+    """Generate a compliance report with security settings and audit summary."""
+    from teb import config as _cfg
+
+    with _conn() as con:
+        total_users = con.execute("SELECT COUNT(*) as cnt FROM users").fetchone()["cnt"]
+        admin_users = con.execute("SELECT COUNT(*) as cnt FROM users WHERE role = 'admin'").fetchone()["cnt"]
+        locked_users = con.execute(
+            "SELECT COUNT(*) as cnt FROM users WHERE locked_until IS NOT NULL AND locked_until > datetime('now')"
+        ).fetchone()["cnt"]
+        two_fa_enabled = con.execute(
+            "SELECT COUNT(*) as cnt FROM two_factor_config WHERE is_enabled = 1"
+        ).fetchone()["cnt"]
+        recent_audit = con.execute(
+            "SELECT COUNT(*) as cnt FROM audit_events WHERE created_at >= datetime('now', '-30 days')"
+        ).fetchone()["cnt"]
+        audit_types = con.execute(
+            "SELECT event_type, COUNT(*) as cnt FROM audit_events GROUP BY event_type ORDER BY cnt DESC LIMIT 10"
+        ).fetchall()
+
+    return {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "security_settings": {
+            "jwt_algorithm": _cfg.JWT_ALGORITHM,
+            "jwt_expire_hours": _cfg.JWT_EXPIRE_HOURS,
+            "encryption_at_rest": bool(_cfg.TEB_ENCRYPTION_KEY),
+            "cors_origins": _cfg.CORS_ORIGINS,
+        },
+        "user_access": {
+            "total_users": total_users,
+            "admin_users": admin_users,
+            "locked_users": locked_users,
+            "two_factor_enabled": two_fa_enabled,
+            "two_factor_coverage": round(two_fa_enabled / max(total_users, 1) * 100, 1),
+        },
+        "audit_summary": {
+            "events_last_30_days": recent_audit,
+            "top_event_types": [{"type": r["event_type"], "count": r["cnt"]} for r in audit_types],
+        },
+        "data_retention": {
+            "policy": "indefinite",
+            "audit_events_retained": True,
+        },
+    }
+
+
+# ─── Phase 7: Community tables & CRUD ─────────────────────────────────────────
+
+def _ensure_phase7_tables() -> None:
+    """Create Phase 7 community tables if they don't exist."""
+    with _conn() as con:
+        con.executescript("""
+            CREATE TABLE IF NOT EXISTS template_gallery (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                description TEXT DEFAULT '',
+                author TEXT DEFAULT '',
+                category TEXT DEFAULT '',
+                template_json TEXT DEFAULT '{}',
+                downloads INTEGER DEFAULT 0,
+                rating REAL DEFAULT 0.0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE TABLE IF NOT EXISTS blog_posts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                title TEXT NOT NULL,
+                slug TEXT NOT NULL UNIQUE,
+                content TEXT DEFAULT '',
+                author TEXT DEFAULT '',
+                published INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE TABLE IF NOT EXISTS roadmap_items (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                title TEXT NOT NULL,
+                description TEXT DEFAULT '',
+                status TEXT DEFAULT 'planned',
+                votes INTEGER DEFAULT 0,
+                category TEXT DEFAULT '',
+                target_date TEXT DEFAULT '',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE TABLE IF NOT EXISTS feature_votes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                roadmap_item_id INTEGER NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(user_id, roadmap_item_id)
+            );
+        """)
+
+
+from teb.models import TemplateGalleryEntry, BlogPost, RoadmapItem, FeatureVote
+
+
+@_with_retry
+def create_template_gallery_entry(entry: TemplateGalleryEntry) -> int:
+    _ensure_phase7_tables()
+    with _conn() as con:
+        cur = con.execute(
+            "INSERT INTO template_gallery (name, description, author, category, template_json) VALUES (?,?,?,?,?)",
+            (entry.name, entry.description, entry.author, entry.category, entry.template_json),
+        )
+        return cur.lastrowid
+
+
+@_with_retry
+def list_template_gallery(category: str = "") -> list:
+    _ensure_phase7_tables()
+    with _conn() as con:
+        if category:
+            rows = con.execute("SELECT * FROM template_gallery WHERE category=? ORDER BY downloads DESC", (category,)).fetchall()
+        else:
+            rows = con.execute("SELECT * FROM template_gallery ORDER BY downloads DESC").fetchall()
+    return [TemplateGalleryEntry(id=r["id"], name=r["name"], description=r["description"], author=r["author"],
+            category=r["category"], template_json=r["template_json"], downloads=r["downloads"],
+            rating=r["rating"], created_at=_parse_ts(r["created_at"])) for r in rows]
+
+
+@_with_retry
+def get_template_gallery_entry(entry_id: int) -> "TemplateGalleryEntry | None":
+    _ensure_phase7_tables()
+    with _conn() as con:
+        r = con.execute("SELECT * FROM template_gallery WHERE id=?", (entry_id,)).fetchone()
+    if not r:
+        return None
+    return TemplateGalleryEntry(id=r["id"], name=r["name"], description=r["description"], author=r["author"],
+            category=r["category"], template_json=r["template_json"], downloads=r["downloads"],
+            rating=r["rating"], created_at=_parse_ts(r["created_at"]))
+
+
+@_with_retry
+def create_blog_post(post: BlogPost) -> int:
+    _ensure_phase7_tables()
+    with _conn() as con:
+        cur = con.execute(
+            "INSERT INTO blog_posts (title, slug, content, author, published) VALUES (?,?,?,?,?)",
+            (post.title, post.slug, post.content, post.author, int(post.published)),
+        )
+        return cur.lastrowid
+
+
+@_with_retry
+def list_blog_posts(published_only: bool = True) -> list:
+    _ensure_phase7_tables()
+    with _conn() as con:
+        if published_only:
+            rows = con.execute("SELECT * FROM blog_posts WHERE published=1 ORDER BY created_at DESC").fetchall()
+        else:
+            rows = con.execute("SELECT * FROM blog_posts ORDER BY created_at DESC").fetchall()
+    return [BlogPost(id=r["id"], title=r["title"], slug=r["slug"], content=r["content"],
+            author=r["author"], published=bool(r["published"]),
+            created_at=_parse_ts(r["created_at"])) for r in rows]
+
+
+@_with_retry
+def get_blog_post_by_slug(slug: str) -> "BlogPost | None":
+    _ensure_phase7_tables()
+    with _conn() as con:
+        r = con.execute("SELECT * FROM blog_posts WHERE slug=?", (slug,)).fetchone()
+    if not r:
+        return None
+    return BlogPost(id=r["id"], title=r["title"], slug=r["slug"], content=r["content"],
+            author=r["author"], published=bool(r["published"]),
+            created_at=_parse_ts(r["created_at"]))
+
+
+@_with_retry
+def create_roadmap_item(item: RoadmapItem) -> int:
+    _ensure_phase7_tables()
+    with _conn() as con:
+        cur = con.execute(
+            "INSERT INTO roadmap_items (title, description, status, category, target_date) VALUES (?,?,?,?,?)",
+            (item.title, item.description, item.status, item.category, item.target_date),
+        )
+        return cur.lastrowid
+
+
+@_with_retry
+def list_roadmap_items(status: str = "") -> list:
+    _ensure_phase7_tables()
+    with _conn() as con:
+        if status:
+            rows = con.execute("SELECT * FROM roadmap_items WHERE status=? ORDER BY votes DESC", (status,)).fetchall()
+        else:
+            rows = con.execute("SELECT * FROM roadmap_items ORDER BY votes DESC").fetchall()
+    return [RoadmapItem(id=r["id"], title=r["title"], description=r["description"], status=r["status"],
+            votes=r["votes"], category=r["category"], target_date=r["target_date"],
+            created_at=_parse_ts(r["created_at"])) for r in rows]
+
+
+@_with_retry
+def update_roadmap_item(item_id: int, **kwargs) -> bool:
+    _ensure_phase7_tables()
+    allowed = {"title", "description", "status", "category", "target_date"}
+    updates = {k: v for k, v in kwargs.items() if k in allowed}
+    if not updates:
+        return False
+    set_clause = ", ".join(f"{k}=?" for k in updates)
+    vals = list(updates.values()) + [item_id]
+    with _conn() as con:
+        con.execute(f"UPDATE roadmap_items SET {set_clause} WHERE id=?", vals)
+    return True
+
+
+@_with_retry
+def cast_feature_vote(user_id: int, roadmap_item_id: int) -> bool:
+    _ensure_phase7_tables()
+    with _conn() as con:
+        try:
+            con.execute("INSERT INTO feature_votes (user_id, roadmap_item_id) VALUES (?,?)", (user_id, roadmap_item_id))
+            con.execute("UPDATE roadmap_items SET votes = votes + 1 WHERE id=?", (roadmap_item_id,))
+            return True
+        except Exception:
+            return False
+
+
+@_with_retry
+def remove_feature_vote(user_id: int, roadmap_item_id: int) -> bool:
+    _ensure_phase7_tables()
+    with _conn() as con:
+        cur = con.execute("DELETE FROM feature_votes WHERE user_id=? AND roadmap_item_id=?", (user_id, roadmap_item_id))
+        if cur.rowcount > 0:
+            con.execute("UPDATE roadmap_items SET votes = MAX(votes - 1, 0) WHERE id=?", (roadmap_item_id,))
+            return True
+    return False

@@ -105,6 +105,21 @@ def has_ai() -> bool:
     return get_ai_provider() is not None
 
 
+# ─── Phase 6: Enterprise configuration ───────────────────────────────────────
+
+# Encryption key for data at rest (Fernet-compatible, base64-encoded 32 bytes)
+TEB_ENCRYPTION_KEY: Optional[str] = os.getenv("TEB_ENCRYPTION_KEY")
+
+# CDN URL prefix for static assets (e.g. "https://cdn.example.com/teb")
+TEB_CDN_URL: Optional[str] = os.getenv("TEB_CDN_URL")
+
+# Redis URL for caching layer (e.g. "redis://localhost:6379/0")
+REDIS_URL: Optional[str] = os.getenv("REDIS_URL")
+
+# Region identifier for multi-region deployments
+REGION: str = os.getenv("TEB_REGION", "default")
+
+
 # Base URL path prefix (for mounting behind a reverse proxy, e.g. /teb)
 # Strip trailing slash; treat "/" or "" the same (no prefix)
 _raw_base = os.getenv("TEB_BASE_PATH", "").strip().rstrip("/")

@@ -18,14 +18,17 @@ from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from teb import agents, auth, browser, config, decomposer, deployer, executor, integrations, messaging, provisioning, storage, transcribe
+from teb import agents, auth, browser, config, decomposer, deployer, executor, intelligence, integrations, messaging, provisioning, scheduler, storage, transcribe
 from teb.models import (
-    AgentGoalMemory, ApiCredential, AuditEvent, BrowserAction, CheckIn,
-    CustomField, DashboardWidget, ExecutionLog, Goal, GoalCollaborator,
-    GoalTemplate, MessagingConfig, Milestone, NotificationPreference,
-    NudgeEvent, OutcomeMetric, PersonalApiKey, PluginManifest,
-    ProgressSnapshot, RecurrenceRule, SpendingBudget, SpendingRequest,
-    Task, TaskArtifact, TaskBlocker, TaskComment, TimeEntry, WebhookConfig,
+    ActivityFeedEntry, AgentGoalMemory, ApiCredential, AuditEvent, BrandingConfig, BrowserAction, CheckIn,
+    CommentReaction, CustomField, CustomFieldDefinition, DashboardLayout, DashboardWidget, DirectMessage, EmailNotificationConfig,
+    ExecutionLog, Goal, GoalChatMessage, GoalCollaborator,
+    GoalTemplate, IPAllowlist, IntegrationListing, IntegrationTemplate, MessagingConfig, Milestone, Notification, NotificationPreference,
+    NudgeEvent, OAuthConnection, Organization, OutcomeMetric, PersonalApiKey, PluginListing, PluginManifest, PluginView,
+    ProgressSnapshot, PushSubscription, RecurrenceRule, SSOConfig, SavedView, ScheduledReport,
+    SpendingBudget, SpendingRequest,
+    Task, TaskArtifact, TaskBlocker, TaskComment, Theme, TimeEntry, WebhookConfig, WebhookRule,
+    Workspace, WorkspaceMember,
 )
 
 # ─── Logging ──────────────────────────────────────────────────────────────────
@@ -247,7 +250,26 @@ async def lifespan(app: FastAPI):
             pass
 
 
-app = FastAPI(title="teb — Task Execution Bridge", lifespan=lifespan)
+tags_metadata = [
+    {"name": "auth", "description": "Authentication and user management"},
+    {"name": "goals", "description": "Goal CRUD and decomposition"},
+    {"name": "tasks", "description": "Task management and execution"},
+    {"name": "intelligence", "description": "AI scheduling, prioritization, and risk detection"},
+    {"name": "collaboration", "description": "Workspaces, notifications, activity feed"},
+    {"name": "views", "description": "Kanban, Gantt, calendar, timeline views"},
+    {"name": "integrations", "description": "External service integrations"},
+    {"name": "admin", "description": "Admin panel and platform management"},
+]
+
+app = FastAPI(
+    title="teb API",
+    description="Task Execution Bridge — AI-powered goal decomposition and autonomous execution",
+    version="2.0.0",
+    docs_url="/docs",
+    redoc_url="/redoc",
+    lifespan=lifespan,
+    openapi_tags=tags_metadata,
+)
 
 # ─── CORS ─────────────────────────────────────────────────────────────────────
 app.add_middleware(
@@ -581,9 +603,12 @@ async def auth_logout(request: Request, body: AuthLogout):
 # ─── Frontend ─────────────────────────────────────────────────────────────────
 
 def _render_index() -> str:
-    """Render index.html with BASE_PATH substituted."""
+    """Render index.html with BASE_PATH and CDN_PREFIX substituted."""
     html = (_TEMPLATES_DIR / "index.html").read_text()
-    return html.replace("{{BASE_PATH}}", config.BASE_PATH)
+    html = html.replace("{{BASE_PATH}}", config.BASE_PATH)
+    cdn_prefix = (config.TEB_CDN_URL.rstrip("/") + "/") if config.TEB_CDN_URL else ""
+    html = html.replace("{{CDN_PREFIX}}", cdn_prefix)
+    return html
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -604,6 +629,9 @@ async def create_goal(body: GoalCreate, request: Request):
     if body.tags:
         goal.tags = body.tags
     goal = storage.create_goal(goal)
+    from teb import events as _events
+    if user_id:
+        _events.event_bus.publish(user_id, "goal_created", {"goal_id": goal.id, "title": goal.title})
     return goal.to_dict()
 
 
@@ -839,6 +867,8 @@ async def create_task_manual(body: TaskCreate, request: Request):
     if body.tags is not None:
         task.tags = body.tags
     task = storage.create_task(task)
+    from teb import events as _events
+    _events.event_bus.publish(uid, "task_created", {"task_id": task.id, "title": task.title, "goal_id": task.goal_id})
     return task.to_dict()
 
 
@@ -875,7 +905,13 @@ async def update_task(task_id: int, body: TaskPatch, request: Request):
         task.tags = body.tags
 
     # Update the goal's status if all tasks are done
-    task = storage.update_task(task)
+    try:
+        task = storage.update_task(task)
+    except storage.VersionConflictError:
+        raise HTTPException(status_code=409, detail="Task was modified by another request. Please refresh and try again.")
+
+    from teb import events as _events
+    _events.event_bus.publish(uid, "task_updated", {"task_id": task.id, "status": task.status, "goal_id": task.goal_id})
 
     all_tasks = storage.list_tasks(goal_id=task.goal_id)
     top_level = [t for t in all_tasks if t.parent_id is None]
@@ -883,7 +919,10 @@ async def update_task(task_id: int, body: TaskPatch, request: Request):
         goal = storage.get_goal(task.goal_id)
         if goal and goal.status != "done":
             goal.status = "done"
-            storage.update_goal(goal)
+            try:
+                storage.update_goal(goal)
+            except storage.VersionConflictError:
+                pass
             # Auto-capture success path when goal completes
             sp = decomposer.capture_success_path(goal, all_tasks)
             if sp:
@@ -894,7 +933,10 @@ async def update_task(task_id: int, body: TaskPatch, request: Request):
         goal = storage.get_goal(task.goal_id)
         if goal and goal.status == "decomposed":
             goal.status = "in_progress"
-            storage.update_goal(goal)
+            try:
+                storage.update_goal(goal)
+            except storage.VersionConflictError:
+                pass
 
     # Notify on task completion or failure
     if body.status == "done":
@@ -909,7 +951,10 @@ async def update_task(task_id: int, body: TaskPatch, request: Request):
 async def delete_task(task_id: int, request: Request):
     uid = _require_user(request)
     task = _get_task_for_user(task_id, uid)
+    goal_id = task.goal_id
     storage.delete_task(task_id)
+    from teb import events as _events
+    _events.event_bus.publish(uid, "task_deleted", {"task_id": task_id, "goal_id": goal_id})
     return {"deleted": task_id}
 
 
@@ -3583,6 +3628,25 @@ async def create_task_comment(task_id: int, request: Request):
         author_id=body.get("author_id", str(uid)),
     )
     comment = storage.create_task_comment(comment)
+
+    # Extract @mentions and create notifications for mentioned users
+    mentions = storage.extract_mentions(content)
+    for username in mentions:
+        mentioned_user = storage.get_user_by_email(username)
+        if mentioned_user and mentioned_user.id and mentioned_user.id != uid:
+            storage.create_notification(Notification(
+                user_id=mentioned_user.id,
+                title=f"You were mentioned in a comment on task #{task_id}",
+                body=content[:200],
+                notification_type="mention",
+                source_type="comment",
+                source_id=comment.id,
+            ))
+            from teb import events as _events
+            _events.event_bus.publish(mentioned_user.id, "mention", {
+                "task_id": task_id, "comment_id": comment.id, "by_user_id": uid,
+            })
+
     return comment.to_dict()
 
 
@@ -4720,6 +4784,312 @@ async def delete_widget(widget_id: int, request: Request):
     return {"deleted": True}
 
 
+# ─── Phase 2: Workspace endpoints ────────────────────────────────────────────
+
+@app.post("/api/workspaces", status_code=201)
+async def create_workspace_endpoint(request: Request):
+    """Create a new workspace and auto-add the owner as a member."""
+    uid = _require_user(request)
+    _check_api_rate_limit(request)
+    body = await request.json()
+    name = str(body.get("name", "")).strip()
+    if not name:
+        raise HTTPException(status_code=422, detail="name is required")
+    invite_code = secrets.token_urlsafe(8)
+    ws = Workspace(
+        name=name,
+        owner_id=uid,
+        description=str(body.get("description", "")),
+        invite_code=invite_code,
+        plan=body.get("plan", "free"),
+    )
+    ws = storage.create_workspace(ws)
+    member = WorkspaceMember(workspace_id=ws.id, user_id=uid, role="owner")
+    storage.add_workspace_member(member)
+    storage.create_activity_entry(ActivityFeedEntry(
+        user_id=uid, action="created", entity_type="workspace",
+        entity_id=ws.id, entity_title=ws.name, workspace_id=ws.id,
+    ))
+    return ws.to_dict()
+
+
+@app.get("/api/workspaces")
+async def list_workspaces_endpoint(request: Request):
+    """List workspaces for the current user."""
+    uid = _require_user(request)
+    _check_api_rate_limit(request)
+    return [w.to_dict() for w in storage.list_user_workspaces(uid)]
+
+
+@app.get("/api/workspaces/{ws_id}")
+async def get_workspace_endpoint(ws_id: int, request: Request):
+    """Get workspace details."""
+    uid = _require_user(request)
+    _check_api_rate_limit(request)
+    ws = storage.get_workspace(ws_id)
+    if not ws:
+        raise HTTPException(status_code=404, detail="Workspace not found")
+    members = storage.list_workspace_members(ws_id)
+    member_ids = [m.user_id for m in members]
+    if uid not in member_ids:
+        raise HTTPException(status_code=403, detail="Not a member of this workspace")
+    return ws.to_dict()
+
+
+@app.post("/api/workspaces/{ws_id}/members", status_code=201)
+async def add_workspace_member_endpoint(ws_id: int, request: Request):
+    """Add a member to a workspace."""
+    uid = _require_user(request)
+    _check_api_rate_limit(request)
+    ws = storage.get_workspace(ws_id)
+    if not ws:
+        raise HTTPException(status_code=404, detail="Workspace not found")
+    members = storage.list_workspace_members(ws_id)
+    caller_member = next((m for m in members if m.user_id == uid), None)
+    if not caller_member or caller_member.role not in ("owner", "admin"):
+        raise HTTPException(status_code=403, detail="Only owners and admins can add members")
+    body = await request.json()
+    new_user_id = body.get("user_id")
+    if not new_user_id:
+        raise HTTPException(status_code=422, detail="user_id is required")
+    if any(m.user_id == new_user_id for m in members):
+        raise HTTPException(status_code=409, detail="User is already a member")
+    role = body.get("role", "member")
+    if role not in ("admin", "member", "viewer"):
+        raise HTTPException(status_code=422, detail="Invalid role")
+    member = WorkspaceMember(workspace_id=ws_id, user_id=new_user_id, role=role)
+    member = storage.add_workspace_member(member)
+    storage.create_notification(Notification(
+        user_id=new_user_id, title=f"You were added to workspace '{ws.name}'",
+        notification_type="info", source_type="workspace", source_id=ws_id,
+    ))
+    return member.to_dict()
+
+
+@app.get("/api/workspaces/{ws_id}/members")
+async def list_workspace_members_endpoint(ws_id: int, request: Request):
+    """List members of a workspace."""
+    uid = _require_user(request)
+    _check_api_rate_limit(request)
+    ws = storage.get_workspace(ws_id)
+    if not ws:
+        raise HTTPException(status_code=404, detail="Workspace not found")
+    members = storage.list_workspace_members(ws_id)
+    if not any(m.user_id == uid for m in members):
+        raise HTTPException(status_code=403, detail="Not a member of this workspace")
+    return [m.to_dict() for m in members]
+
+
+@app.delete("/api/workspaces/{ws_id}/members/{member_uid}")
+async def remove_workspace_member_endpoint(ws_id: int, member_uid: int, request: Request):
+    """Remove a member from a workspace."""
+    uid = _require_user(request)
+    _check_api_rate_limit(request)
+    ws = storage.get_workspace(ws_id)
+    if not ws:
+        raise HTTPException(status_code=404, detail="Workspace not found")
+    members = storage.list_workspace_members(ws_id)
+    caller_member = next((m for m in members if m.user_id == uid), None)
+    if not caller_member or caller_member.role not in ("owner", "admin"):
+        raise HTTPException(status_code=403, detail="Only owners and admins can remove members")
+    if member_uid == ws.owner_id:
+        raise HTTPException(status_code=400, detail="Cannot remove workspace owner")
+    removed = storage.remove_workspace_member(ws_id, member_uid)
+    if not removed:
+        raise HTTPException(status_code=404, detail="Member not found")
+    return {"deleted": True}
+
+
+@app.post("/api/workspaces/join")
+async def join_workspace_endpoint(request: Request):
+    """Join a workspace by invite code."""
+    uid = _require_user(request)
+    _check_api_rate_limit(request)
+    body = await request.json()
+    code = str(body.get("invite_code", "")).strip()
+    if not code:
+        raise HTTPException(status_code=422, detail="invite_code is required")
+    ws = storage.get_workspace_by_invite_code(code)
+    if not ws:
+        raise HTTPException(status_code=404, detail="Invalid invite code")
+    members = storage.list_workspace_members(ws.id)
+    if any(m.user_id == uid for m in members):
+        raise HTTPException(status_code=409, detail="Already a member")
+    member = WorkspaceMember(workspace_id=ws.id, user_id=uid, role="member")
+    member = storage.add_workspace_member(member)
+    storage.create_activity_entry(ActivityFeedEntry(
+        user_id=uid, action="created", entity_type="workspace",
+        entity_id=ws.id, entity_title=f"Joined '{ws.name}'", workspace_id=ws.id,
+    ))
+    return member.to_dict()
+
+
+# ─── Phase 2: Notification endpoints ─────────────────────────────────────────
+
+@app.get("/api/notifications")
+async def list_notifications_endpoint(request: Request,
+                                      unread_only: bool = Query(False),
+                                      limit: int = Query(50)):
+    """List notifications for the current user."""
+    uid = _require_user(request)
+    _check_api_rate_limit(request)
+    return [n.to_dict() for n in storage.list_user_notifications(uid, unread_only=unread_only, limit=limit)]
+
+
+@app.post("/api/notifications/{notif_id}/read")
+async def mark_notification_read_endpoint(notif_id: int, request: Request):
+    """Mark a single notification as read."""
+    uid = _require_user(request)
+    _check_api_rate_limit(request)
+    ok = storage.mark_notification_read(notif_id, uid)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Notification not found")
+    return {"read": True}
+
+
+@app.post("/api/notifications/read-all")
+async def mark_all_notifications_read_endpoint(request: Request):
+    """Mark all notifications as read."""
+    uid = _require_user(request)
+    _check_api_rate_limit(request)
+    count = storage.mark_all_notifications_read(uid)
+    return {"marked": count}
+
+
+@app.get("/api/notifications/count")
+async def count_notifications_endpoint(request: Request):
+    """Get unread notification count."""
+    uid = _require_user(request)
+    _check_api_rate_limit(request)
+    return {"unread": storage.count_unread_notifications(uid)}
+
+
+# ─── Phase 2: Activity Feed endpoint ─────────────────────────────────────────
+
+@app.get("/api/activity")
+async def list_activity_endpoint(request: Request,
+                                 goal_id: Optional[int] = Query(None),
+                                 workspace_id: Optional[int] = Query(None),
+                                 limit: int = Query(50)):
+    """List activity feed entries."""
+    uid = _require_user(request)
+    _check_api_rate_limit(request)
+    return [e.to_dict() for e in storage.list_activity_feed(
+        user_id=uid, goal_id=goal_id, workspace_id=workspace_id, limit=limit,
+    )]
+
+
+# ─── Phase 2: Comment Reactions endpoints ─────────────────────────────────────
+
+@app.post("/api/comments/{comment_id}/reactions", status_code=201)
+async def add_comment_reaction_endpoint(comment_id: int, request: Request):
+    """Add an emoji reaction to a comment."""
+    uid = _require_user(request)
+    _check_api_rate_limit(request)
+    body = await request.json()
+    emoji = str(body.get("emoji", "👍")).strip()
+    if not emoji:
+        raise HTTPException(status_code=422, detail="emoji is required")
+    existing = storage.list_comment_reactions(comment_id)
+    if any(r.user_id == uid and r.emoji == emoji for r in existing):
+        raise HTTPException(status_code=409, detail="Reaction already exists")
+    reaction = CommentReaction(comment_id=comment_id, user_id=uid, emoji=emoji)
+    reaction = storage.add_comment_reaction(reaction)
+    return reaction.to_dict()
+
+
+@app.delete("/api/comments/{comment_id}/reactions/{emoji}")
+async def remove_comment_reaction_endpoint(comment_id: int, emoji: str, request: Request):
+    """Remove an emoji reaction from a comment."""
+    uid = _require_user(request)
+    _check_api_rate_limit(request)
+    removed = storage.remove_comment_reaction(comment_id, uid, emoji)
+    if not removed:
+        raise HTTPException(status_code=404, detail="Reaction not found")
+    return {"deleted": True}
+
+
+@app.get("/api/comments/{comment_id}/reactions")
+async def list_comment_reactions_endpoint(comment_id: int, request: Request):
+    """List reactions on a comment."""
+    uid = _require_user(request)
+    _check_api_rate_limit(request)
+    return [r.to_dict() for r in storage.list_comment_reactions(comment_id)]
+
+
+# ── Phase 4: Intelligence ─────────────────────────────────────────────
+
+
+@app.get("/api/goals/{goal_id}/schedule", tags=["intelligence"])
+async def get_ai_schedule(goal_id: int, request: Request):
+    """Auto-schedule tasks into time blocks respecting dependencies and capacity."""
+    uid = _require_user(request)
+    _get_goal_for_user(goal_id, uid)
+    tasks = storage.list_tasks(goal_id=goal_id)
+    return scheduler.auto_schedule_tasks(tasks)
+
+
+@app.get("/api/goals/{goal_id}/smart-priority", tags=["intelligence"])
+async def get_smart_priority(goal_id: int, request: Request):
+    """ML-based priority ranking of tasks."""
+    uid = _require_user(request)
+    _get_goal_for_user(goal_id, uid)
+    tasks = storage.list_tasks(goal_id=goal_id)
+    return scheduler.smart_prioritize(tasks)
+
+
+@app.get("/api/goals/{goal_id}/completion-estimate", tags=["intelligence"])
+async def get_completion_estimate(goal_id: int, request: Request):
+    """Predict goal completion date based on remaining work and velocity."""
+    uid = _require_user(request)
+    _get_goal_for_user(goal_id, uid)
+    tasks = storage.list_tasks(goal_id=goal_id)
+    return scheduler.estimate_completion(tasks)
+
+
+@app.get("/api/goals/{goal_id}/risks", tags=["intelligence"])
+async def get_risks(goal_id: int, request: Request):
+    """Detect at-risk tasks: overdue, blocked, stagnant, overloaded."""
+    uid = _require_user(request)
+    _get_goal_for_user(goal_id, uid)
+    tasks = storage.list_tasks(goal_id=goal_id)
+    return scheduler.detect_risks(tasks)
+
+
+@app.get("/api/goals/{goal_id}/focus-blocks", tags=["intelligence"])
+async def get_focus_blocks(goal_id: int, request: Request, available_hours: int = 4):
+    """Suggest optimal focus work blocks grouped by tags and task size."""
+    uid = _require_user(request)
+    _get_goal_for_user(goal_id, uid)
+    tasks = storage.list_tasks(goal_id=goal_id)
+    return scheduler.suggest_focus_blocks(tasks, available_hours=available_hours)
+
+
+@app.get("/api/goals/{goal_id}/duplicates", tags=["intelligence"])
+async def get_duplicates(goal_id: int, request: Request):
+    """Detect potential duplicate tasks using word overlap similarity."""
+    uid = _require_user(request)
+    _get_goal_for_user(goal_id, uid)
+    tasks = storage.list_tasks(goal_id=goal_id)
+    return scheduler.detect_duplicates(tasks)
+
+
+@app.post("/api/goals/{goal_id}/auto-prioritize", tags=["intelligence"])
+async def auto_prioritize(goal_id: int, request: Request):
+    """Apply smart prioritization to all tasks and update their order_index."""
+    uid = _require_user(request)
+    _get_goal_for_user(goal_id, uid)
+    tasks = storage.list_tasks(goal_id=goal_id)
+    ranked = scheduler.smart_prioritize(tasks)
+    task_map = {t.id: t for t in tasks}
+    for idx, entry in enumerate(ranked):
+        task = task_map.get(entry["task_id"])
+        if task:
+            task.order_index = idx
+            storage.update_task(task)
+    return {"updated": len(ranked), "ranking": ranked}
+
+
 # ─── ASGI app for deployment ──────────────────────────────────────────────────
 # When BASE_PATH is set (e.g., "/teb"), wrap the app so it handles requests
 # routed through a reverse proxy at that sub-path.
@@ -4732,6 +5102,14 @@ class _PrefixMiddleware:
 
     Requests that don't start with the prefix (e.g. GET /health for infra
     probes sent directly to the port) are forwarded unchanged.
+
+    Note: We intentionally do NOT modify ``root_path``.  Starlette's
+    ``get_route_path()`` (used by ``Mount`` and ``StaticFiles``) subtracts
+    ``root_path`` from ``path`` to decide which file to serve.  If we
+    accumulated the prefix into ``root_path``, the subtraction would fail
+    for mounted sub-apps (e.g. ``/teb/static/style.css`` → ``root_path``
+    becomes ``/teb/static`` which is not a prefix of the stripped ``path``
+    ``/static/style.css``), causing every static-file request to 404.
     """
 
     def __init__(self, inner, prefix: str) -> None:
@@ -4745,12 +5123,1865 @@ class _PrefixMiddleware:
             if path == self._prefix or path.startswith(self._prefix_slash):
                 # Strip the prefix so the inner app sees its natural paths
                 new_path = path[len(self._prefix):] or "/"
-                scope = dict(
-                    scope,
-                    path=new_path,
-                    root_path=scope.get("root_path", "") + self._prefix,
-                )
+                scope = dict(scope, path=new_path)
         await self._inner(scope, receive, send)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Phase 6 — Enterprise: 2FA & Session Management
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@app.post("/api/auth/2fa/setup")
+async def setup_2fa(request: Request):
+    """Generate TOTP secret and backup codes for 2FA setup."""
+    _check_api_rate_limit(request)
+    uid = _require_user(request)
+    from teb import totp as _totp  # noqa: E402
+    existing = storage.get_two_factor_config(uid)
+    if existing and existing.is_enabled:
+        raise HTTPException(400, "2FA is already enabled")
+    secret = _totp.generate_secret()
+    backup_codes = _totp.generate_backup_codes()
+    import json as _json, hashlib as _hl
+    hashed = _json.dumps([_hl.sha256(c.encode()).hexdigest() for c in backup_codes])
+    from teb.models import TwoFactorConfig  # noqa: E402
+    cfg = TwoFactorConfig(user_id=uid, totp_secret=secret, is_enabled=False, backup_codes_hash=hashed)
+    storage.save_two_factor_config(cfg)
+    user = storage.get_user(uid)
+    email = user.email if user else "user@teb"
+    uri = _totp.get_totp_uri(secret, email)
+    return {"secret": secret, "uri": uri, "backup_codes": backup_codes}
+
+
+@app.post("/api/auth/2fa/verify")
+async def verify_2fa(request: Request):
+    """Verify TOTP code and enable 2FA."""
+    _check_api_rate_limit(request)
+    uid = _require_user(request)
+    body = await request.json()
+    code = body.get("code", "")
+    from teb import totp as _totp  # noqa: E402
+    cfg = storage.get_two_factor_config(uid)
+    if not cfg or not cfg.totp_secret:
+        raise HTTPException(400, "Run 2FA setup first")
+    if not _totp.verify_totp(cfg.totp_secret, code):
+        raise HTTPException(400, "Invalid TOTP code")
+    cfg.is_enabled = True
+    storage.save_two_factor_config(cfg)
+    return {"enabled": True}
+
+
+@app.post("/api/auth/2fa/disable")
+async def disable_2fa(request: Request):
+    """Disable 2FA (requires current TOTP code)."""
+    _check_api_rate_limit(request)
+    uid = _require_user(request)
+    body = await request.json()
+    code = body.get("code", "")
+    from teb import totp as _totp  # noqa: E402
+    cfg = storage.get_two_factor_config(uid)
+    if not cfg or not cfg.is_enabled:
+        raise HTTPException(400, "2FA is not enabled")
+    if not _totp.verify_totp(cfg.totp_secret, code):
+        raise HTTPException(400, "Invalid TOTP code")
+    storage.disable_two_factor(uid)
+    return {"enabled": False}
+
+
+@app.get("/api/auth/2fa/status")
+async def get_2fa_status(request: Request):
+    """Check 2FA status."""
+    uid = _require_user(request)
+    cfg = storage.get_two_factor_config(uid)
+    return {"enabled": bool(cfg and cfg.is_enabled)}
+
+
+@app.get("/api/auth/sessions")
+async def list_sessions(request: Request):
+    """List active sessions."""
+    uid = _require_user(request)
+    sessions = storage.list_user_sessions(uid)
+    return {"sessions": [s.to_dict() for s in sessions]}
+
+
+@app.delete("/api/auth/sessions/{session_id}")
+async def revoke_session_endpoint(session_id: int, request: Request):
+    """Revoke a specific session."""
+    uid = _require_user(request)
+    ok = storage.revoke_session(session_id, uid)
+    if not ok:
+        raise HTTPException(404, "Session not found")
+    return {"revoked": True}
+
+
+@app.delete("/api/auth/sessions")
+async def revoke_all_sessions_endpoint(request: Request):
+    """Revoke all other sessions."""
+    uid = _require_user(request)
+    count = storage.revoke_all_sessions(uid)
+    return {"revoked_count": count}
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Phase 2 — Remaining Collaboration Endpoints
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# ─── Goal Sharing ────────────────────────────────────────────────────────────
+
+@app.post("/api/goals/{goal_id}/share", status_code=201)
+async def share_goal_endpoint(goal_id: int, request: Request):
+    """Share a goal with another user."""
+    uid = _require_user(request)
+    _get_goal_for_user(goal_id, uid)
+    body = await request.json()
+    target_user_id = body.get("user_id")
+    if not target_user_id:
+        raise HTTPException(status_code=422, detail="user_id is required")
+    role = body.get("role", "viewer")
+    if role not in ("viewer", "editor", "admin"):
+        raise HTTPException(status_code=422, detail="role must be viewer, editor, or admin")
+    collab = storage.share_goal(goal_id, target_user_id, role)
+    # Notify the target user
+    storage.create_notification(Notification(
+        user_id=target_user_id,
+        title=f"A goal has been shared with you",
+        body=f"You now have {role} access to goal #{goal_id}",
+        notification_type="info",
+        source_type="goal",
+        source_id=goal_id,
+    ))
+    return collab.to_dict()
+
+
+@app.get("/api/goals/{goal_id}/collaborators")
+async def list_goal_collaborators_endpoint(goal_id: int, request: Request):
+    """List collaborators on a goal."""
+    uid = _require_user(request)
+    return [c.to_dict() for c in storage.list_goal_collaborators(goal_id)]
+
+
+@app.delete("/api/goals/{goal_id}/share/{target_user_id}")
+async def unshare_goal_endpoint(goal_id: int, target_user_id: int, request: Request):
+    """Remove a collaborator from a goal."""
+    uid = _require_user(request)
+    _get_goal_for_user(goal_id, uid)
+    removed = storage.unshare_goal(goal_id, target_user_id)
+    if not removed:
+        raise HTTPException(status_code=404, detail="Collaborator not found")
+    return {"removed": True}
+
+
+# ─── Task Assignment ─────────────────────────────────────────────────────────
+
+@app.put("/api/tasks/{task_id}/assign")
+async def assign_task_endpoint(task_id: int, request: Request):
+    """Assign a task to a user."""
+    uid = _require_user(request)
+    _get_task_for_user(task_id, uid)
+    body = await request.json()
+    assignee_id = body.get("user_id")
+    task = storage.assign_task(task_id, assignee_id)
+    # Notify the assignee
+    if assignee_id and assignee_id != uid:
+        storage.create_notification(Notification(
+            user_id=assignee_id,
+            title=f"You have been assigned to task: {task.title}",
+            body=f"Task #{task_id} has been assigned to you",
+            notification_type="assignment",
+            source_type="task",
+            source_id=task_id,
+        ))
+        from teb import events as _events
+        _events.event_bus.publish(assignee_id, "task_assigned", {
+            "task_id": task_id, "title": task.title, "assigned_by": uid,
+        })
+    return task.to_dict()
+
+
+@app.get("/api/users/me/assigned-tasks")
+async def list_my_assigned_tasks(request: Request):
+    """List tasks assigned to the current user."""
+    uid = _require_user(request)
+    tasks = storage.list_tasks_assigned_to(uid)
+    return [t.to_dict() for t in tasks]
+
+
+# ─── Presence Indicators ─────────────────────────────────────────────────────
+
+import time as _time_module
+
+_presence_store: dict[str, dict[int, float]] = {}  # "type:id" -> {user_id: timestamp}
+_PRESENCE_TTL = 60  # seconds
+
+
+@app.post("/api/presence/heartbeat")
+async def presence_heartbeat(request: Request):
+    """Update presence for the current user on a resource."""
+    uid = _require_user(request)
+    body = await request.json()
+    resource_type = body.get("resource_type", "")
+    resource_id = body.get("resource_id", "")
+    if not resource_type or resource_id == "":
+        raise HTTPException(status_code=422, detail="resource_type and resource_id are required")
+    key = f"{resource_type}:{resource_id}"
+    now = _time_module.time()
+    if key not in _presence_store:
+        _presence_store[key] = {}
+    _presence_store[key][uid] = now
+    # Clean stale entries
+    _presence_store[key] = {u: ts for u, ts in _presence_store[key].items() if now - ts < _PRESENCE_TTL}
+    return {"status": "ok"}
+
+
+@app.get("/api/presence/{resource_type}/{resource_id}")
+async def get_presence(resource_type: str, resource_id: str, request: Request):
+    """Get active users on a resource."""
+    _require_user(request)
+    key = f"{resource_type}:{resource_id}"
+    now = _time_module.time()
+    users = _presence_store.get(key, {})
+    active = [uid for uid, ts in users.items() if now - ts < _PRESENCE_TTL]
+    # Also clean up while we're here
+    if key in _presence_store:
+        _presence_store[key] = {u: ts for u, ts in _presence_store[key].items() if now - ts < _PRESENCE_TTL}
+    return {"resource_type": resource_type, "resource_id": resource_id, "active_users": active}
+
+
+# ─── Direct Messaging ────────────────────────────────────────────────────────
+
+@app.post("/api/messages", status_code=201)
+async def send_message_endpoint(request: Request):
+    """Send a direct message to another user."""
+    uid = _require_user(request)
+    body = await request.json()
+    recipient_id = body.get("recipient_id")
+    content = str(body.get("content", "")).strip()
+    if not recipient_id:
+        raise HTTPException(status_code=422, detail="recipient_id is required")
+    if not content:
+        raise HTTPException(status_code=422, detail="content must not be empty")
+    msg = DirectMessage(sender_id=uid, recipient_id=recipient_id, content=content)
+    msg = storage.send_message(msg)
+    # Notify recipient via SSE
+    from teb import events as _events
+    _events.event_bus.publish(recipient_id, "new_message", {
+        "message_id": msg.id, "sender_id": uid, "content": content[:100],
+    })
+    return msg.to_dict()
+
+
+@app.get("/api/messages/conversations")
+async def list_conversations_endpoint(request: Request):
+    """List conversation partners for the current user."""
+    uid = _require_user(request)
+    return storage.list_conversations(uid)
+
+
+@app.get("/api/messages/{other_user_id}")
+async def list_messages_endpoint(other_user_id: int, request: Request):
+    """List messages between current user and another user."""
+    uid = _require_user(request)
+    messages = storage.list_messages(uid, other_user_id)
+    return [m.to_dict() for m in messages]
+
+
+@app.put("/api/messages/{message_id}/read")
+async def mark_message_read_endpoint(message_id: int, request: Request):
+    """Mark a message as read."""
+    uid = _require_user(request)
+    ok = storage.mark_message_read(message_id, uid)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Message not found or not your message")
+    return {"read": True}
+
+
+# ─── Goal-Scoped Chat ────────────────────────────────────────────────────────
+
+@app.post("/api/goals/{goal_id}/chat", status_code=201)
+async def create_goal_chat_endpoint(goal_id: int, request: Request):
+    """Send a chat message in a goal's chat room."""
+    uid = _require_user(request)
+    body = await request.json()
+    content = str(body.get("content", "")).strip()
+    if not content:
+        raise HTTPException(status_code=422, detail="content must not be empty")
+    msg = GoalChatMessage(goal_id=goal_id, user_id=uid, content=content)
+    msg = storage.create_goal_chat_message(msg)
+    # Broadcast to collaborators via SSE
+    from teb import events as _events
+    _events.event_bus.publish_broadcast("goal_chat", {
+        "goal_id": goal_id, "message_id": msg.id, "user_id": uid, "content": content[:100],
+    })
+    return msg.to_dict()
+
+
+@app.get("/api/goals/{goal_id}/chat")
+async def list_goal_chat_endpoint(goal_id: int, request: Request):
+    """List chat messages for a goal."""
+    _require_user(request)
+    messages = storage.list_goal_chat_messages(goal_id)
+    return [m.to_dict() for m in messages]
+
+
+# ─── Email Notification Preferences ──────────────────────────────────────────
+
+@app.get("/api/users/me/email-preferences")
+async def get_email_preferences(request: Request):
+    """Get email notification preferences."""
+    uid = _require_user(request)
+    cfg = storage.get_email_notification_config(uid)
+    if not cfg:
+        cfg = EmailNotificationConfig(user_id=uid)
+    return cfg.to_dict()
+
+
+@app.put("/api/users/me/email-preferences")
+async def update_email_preferences(request: Request):
+    """Update email notification preferences."""
+    uid = _require_user(request)
+    body = await request.json()
+    freq = body.get("digest_frequency", "none")
+    if freq not in ("none", "daily", "weekly"):
+        raise HTTPException(status_code=422, detail="digest_frequency must be none, daily, or weekly")
+    cfg = EmailNotificationConfig(
+        user_id=uid,
+        digest_frequency=freq,
+        notify_on_mention=bool(body.get("notify_on_mention", True)),
+        notify_on_assignment=bool(body.get("notify_on_assignment", True)),
+        notify_on_comment=bool(body.get("notify_on_comment", True)),
+    )
+    cfg = storage.upsert_email_notification_config(cfg)
+    return cfg.to_dict()
+
+
+# ─── Push Notification Subscriptions ─────────────────────────────────────────
+
+@app.post("/api/push/subscribe", status_code=201)
+async def push_subscribe(request: Request):
+    """Register a push notification subscription."""
+    uid = _require_user(request)
+    body = await request.json()
+    endpoint = str(body.get("endpoint", "")).strip()
+    if not endpoint:
+        raise HTTPException(status_code=422, detail="endpoint is required")
+    sub = PushSubscription(
+        user_id=uid,
+        endpoint=endpoint,
+        p256dh=str(body.get("p256dh", "")),
+        auth=str(body.get("auth", "")),
+    )
+    sub = storage.save_push_subscription(sub)
+    return sub.to_dict()
+
+
+@app.delete("/api/push/unsubscribe")
+async def push_unsubscribe(request: Request):
+    """Remove a push notification subscription."""
+    uid = _require_user(request)
+    body = await request.json()
+    endpoint = str(body.get("endpoint", "")).strip()
+    if not endpoint:
+        raise HTTPException(status_code=422, detail="endpoint is required")
+    removed = storage.delete_push_subscription(endpoint, uid)
+    if not removed:
+        raise HTTPException(status_code=404, detail="Subscription not found")
+    return {"removed": True}
+
+
+# ─── Phase 3: Saved Views ────────────────────────────────────────────────────
+
+@app.post("/api/views", status_code=201)
+async def create_saved_view(request: Request):
+    _check_api_rate_limit(request)
+    uid = _require_user(request)
+    body = await request.json()
+    view = SavedView(
+        user_id=uid,
+        name=body.get("name", "Untitled View"),
+        view_type=body.get("view_type", "list"),
+        filters_json=json.dumps(body.get("filters", {})),
+        sort_json=json.dumps(body.get("sort", {})),
+        group_by=body.get("group_by", ""),
+    )
+    view = storage.save_view(view)
+    return view.to_dict()
+
+
+@app.get("/api/views")
+async def list_views_endpoint(request: Request):
+    _check_api_rate_limit(request)
+    uid = _require_user(request)
+    views = storage.list_saved_views(uid)
+    return [v.to_dict() for v in views]
+
+
+@app.get("/api/views/{view_id}")
+async def get_view_endpoint(view_id: int, request: Request):
+    _check_api_rate_limit(request)
+    _require_user(request)
+    view = storage.get_saved_view(view_id)
+    if not view:
+        raise HTTPException(status_code=404, detail="View not found")
+    return view.to_dict()
+
+
+@app.delete("/api/views/{view_id}")
+async def delete_view_endpoint(view_id: int, request: Request):
+    _check_api_rate_limit(request)
+    uid = _require_user(request)
+    storage.delete_saved_view(view_id, uid)
+    return {"deleted": True}
+
+
+# ─── Phase 3: Dashboard Layouts ──────────────────────────────────────────────
+
+@app.post("/api/dashboards", status_code=201)
+async def create_dashboard_endpoint(request: Request):
+    _check_api_rate_limit(request)
+    uid = _require_user(request)
+    body = await request.json()
+    layout = DashboardLayout(
+        user_id=uid,
+        name=body.get("name", "My Dashboard"),
+        widgets_json=json.dumps(body.get("widgets", [])),
+    )
+    layout = storage.save_dashboard(layout)
+    return layout.to_dict()
+
+
+@app.get("/api/dashboards")
+async def list_dashboards_endpoint(request: Request):
+    _check_api_rate_limit(request)
+    uid = _require_user(request)
+    dashboards = storage.list_dashboards(uid)
+    return [d.to_dict() for d in dashboards]
+
+
+@app.get("/api/dashboards/{dashboard_id}")
+async def get_dashboard_endpoint(dashboard_id: int, request: Request):
+    _check_api_rate_limit(request)
+    _require_user(request)
+    dashboard = storage.get_dashboard(dashboard_id)
+    if not dashboard:
+        raise HTTPException(status_code=404, detail="Dashboard not found")
+    return dashboard.to_dict()
+
+
+@app.put("/api/dashboards/{dashboard_id}")
+async def update_dashboard_endpoint(dashboard_id: int, request: Request):
+    _check_api_rate_limit(request)
+    uid = _require_user(request)
+    body = await request.json()
+    kwargs = {}
+    if "name" in body:
+        kwargs["name"] = body["name"]
+    if "widgets" in body:
+        kwargs["widgets_json"] = json.dumps(body["widgets"])
+    dashboard = storage.update_dashboard(dashboard_id, uid, **kwargs)
+    if not dashboard:
+        raise HTTPException(status_code=404, detail="Dashboard not found")
+    return dashboard.to_dict()
+
+
+@app.delete("/api/dashboards/{dashboard_id}")
+async def delete_dashboard_endpoint(dashboard_id: int, request: Request):
+    _check_api_rate_limit(request)
+    uid = _require_user(request)
+    storage.delete_dashboard(dashboard_id, uid)
+    return {"deleted": True}
+
+
+# ─── Phase 3: Goal Progress Timeline ────────────────────────────────────────
+
+@app.get("/api/goals/{goal_id}/timeline")
+async def get_goal_timeline_endpoint(goal_id: int, request: Request):
+    _check_api_rate_limit(request)
+    _require_user(request)
+    snapshots = storage.get_goal_progress_timeline(goal_id)
+    return [s.to_dict() for s in snapshots]
+
+
+# ─── Phase 3: Export Reports ─────────────────────────────────────────────────
+
+@app.get("/api/goals/{goal_id}/export")
+async def export_goal_endpoint(goal_id: int, request: Request, format: str = Query("json")):
+    _check_api_rate_limit(request)
+    _require_user(request)
+    goal = storage.get_goal(goal_id)
+    if not goal:
+        raise HTTPException(status_code=404, detail="Goal not found")
+    tasks = storage.list_tasks(goal_id=goal_id)
+
+    if format == "csv":
+        import csv
+        import io
+        output = io.StringIO()
+        writer = csv.writer(output)
+        writer.writerow(["id", "title", "description", "status", "estimated_minutes",
+                         "due_date", "assigned_to", "order_index", "tags", "created_at"])
+        for t in tasks:
+            td = t.to_dict()
+            writer.writerow([
+                td["id"], td["title"], td["description"], td["status"],
+                td["estimated_minutes"], td.get("due_date", ""),
+                td.get("assigned_to", ""), td["order_index"],
+                ",".join(td.get("tags", [])),
+                td.get("created_at", ""),
+            ])
+        csv_content = output.getvalue()
+        return StreamingResponse(
+            iter([csv_content]),
+            media_type="text/csv",
+            headers={"Content-Disposition": f'attachment; filename="goal_{goal_id}_tasks.csv"'},
+        )
+    else:
+        return {
+            "goal": goal.to_dict(),
+            "tasks": [t.to_dict() for t in tasks],
+        }
+
+
+# ─── Phase 3: Scheduled Reports ─────────────────────────────────────────────
+
+@app.post("/api/reports/scheduled", status_code=201)
+async def create_scheduled_report_endpoint(request: Request):
+    _check_api_rate_limit(request)
+    uid = _require_user(request)
+    body = await request.json()
+    report = ScheduledReport(
+        user_id=uid,
+        report_type=body.get("report_type", "progress"),
+        frequency=body.get("frequency", "weekly"),
+        recipients_json=json.dumps(body.get("recipients", [])),
+    )
+    report = storage.create_scheduled_report(report)
+    return report.to_dict()
+
+
+@app.get("/api/reports/scheduled")
+async def list_scheduled_reports_endpoint(request: Request):
+    _check_api_rate_limit(request)
+    uid = _require_user(request)
+    reports = storage.list_scheduled_reports(uid)
+    return [r.to_dict() for r in reports]
+
+
+@app.delete("/api/reports/scheduled/{report_id}")
+async def delete_scheduled_report_endpoint(report_id: int, request: Request):
+    _check_api_rate_limit(request)
+    uid = _require_user(request)
+    storage.delete_scheduled_report(report_id, uid)
+    return {"deleted": True}
+
+
+# ─── Phase 3: Burndown / Burnup Chart Data ──────────────────────────────────
+
+@app.get("/api/goals/{goal_id}/burndown")
+async def get_burndown_endpoint(goal_id: int, request: Request):
+    _check_api_rate_limit(request)
+    _require_user(request)
+    data = storage.get_burndown_data(goal_id)
+    return data
+
+
+# ─── Phase 3: Time Tracking Reports ─────────────────────────────────────────
+
+@app.get("/api/goals/{goal_id}/time-report")
+async def get_time_report_endpoint(goal_id: int, request: Request):
+    _check_api_rate_limit(request)
+    _require_user(request)
+    report = storage.get_time_tracking_report(goal_id)
+    return report
+
+
+# ─── Phase 4: Intelligence endpoints ──────────────────────────────────────────
+
+
+class _WriteAssistBody(BaseModel):
+    context: str = ""
+    prompt: str = ""
+
+
+class _TemplateGenBody(BaseModel):
+    description: str
+
+
+class _MeetingNotesBody(BaseModel):
+    notes: str
+
+
+class _SuggestTagsBody(BaseModel):
+    text: str
+
+
+@app.post("/api/goals/{goal_id}/reschedule", tags=["intelligence"])
+async def reschedule_goal(goal_id: int, request: Request):
+    _check_api_rate_limit(request)
+    _require_user(request)
+    result = intelligence.auto_reschedule(goal_id)
+    return result
+
+
+@app.get("/api/users/me/focus-recommendations", tags=["intelligence"])
+async def focus_recommendations(request: Request):
+    _check_api_rate_limit(request)
+    uid = _require_user(request)
+    result = intelligence.get_focus_recommendations(uid)
+    return result
+
+
+@app.post("/api/ai/write", tags=["intelligence"])
+async def ai_write(body: _WriteAssistBody, request: Request):
+    _check_api_rate_limit(request)
+    _require_user(request)
+    result = intelligence.assist_writing(body.context, body.prompt)
+    return result
+
+
+@app.post("/api/ai/generate-template", tags=["intelligence"])
+async def ai_generate_template(body: _TemplateGenBody, request: Request):
+    _check_api_rate_limit(request)
+    _require_user(request)
+    result = intelligence.generate_template_from_description(body.description)
+    return result
+
+
+@app.post("/api/ai/meeting-to-tasks", tags=["intelligence"])
+async def ai_meeting_to_tasks(body: _MeetingNotesBody, request: Request):
+    _check_api_rate_limit(request)
+    _require_user(request)
+    result = intelligence.extract_tasks_from_notes(body.notes)
+    return result
+
+
+@app.get("/api/goals/{goal_id}/status-report", tags=["intelligence"])
+async def goal_status_report(goal_id: int, request: Request):
+    _check_api_rate_limit(request)
+    _require_user(request)
+    result = intelligence.generate_status_report(goal_id)
+    return result
+
+
+@app.post("/api/ai/suggest-tags", tags=["intelligence"])
+async def ai_suggest_tags(body: _SuggestTagsBody, request: Request):
+    _check_api_rate_limit(request)
+    _require_user(request)
+    result = intelligence.suggest_tags(body.text)
+    return result
+
+
+@app.get("/api/users/me/workflow-suggestions", tags=["intelligence"])
+async def workflow_suggestions(request: Request):
+    _check_api_rate_limit(request)
+    uid = _require_user(request)
+    result = intelligence.get_workflow_suggestions(uid)
+    return result
+
+
+@app.get("/api/users/me/insights", tags=["intelligence"])
+async def cross_goal_insights(request: Request):
+    _check_api_rate_limit(request)
+    uid = _require_user(request)
+    result = intelligence.get_cross_goal_insights(uid)
+    return result
+
+
+@app.get("/api/users/me/skill-gaps", tags=["intelligence"])
+async def skill_gaps(request: Request):
+    _check_api_rate_limit(request)
+    uid = _require_user(request)
+    result = intelligence.analyze_skill_gaps(uid)
+    return result
+
+
+@app.get("/api/goals/{goal_id}/stagnation-check", tags=["intelligence"])
+async def stagnation_check(goal_id: int, request: Request):
+    _check_api_rate_limit(request)
+    _require_user(request)
+    result = intelligence.detect_stagnation(goal_id)
+    return result
+
+
+# ─── Phase 5.1: Integration Marketplace ──────────────────────────────────────
+
+@app.get("/api/integrations/directory", tags=["integrations"])
+async def list_integration_directory(request: Request, category: Optional[str] = Query(default=None)):
+    """List available integrations from the directory."""
+    _check_api_rate_limit(request)
+    listings = storage.list_integration_listings(category=category)
+    return [il.to_dict() for il in listings]
+
+
+@app.get("/api/integrations/directory/{listing_id}", tags=["integrations"])
+async def get_integration_directory_item(listing_id: int, request: Request):
+    """Get details for a specific integration listing."""
+    _check_api_rate_limit(request)
+    il = storage.get_integration_listing(listing_id)
+    if not il:
+        raise HTTPException(status_code=404, detail="Integration listing not found")
+    return il.to_dict()
+
+
+@app.post("/api/integrations/oauth/initiate", tags=["integrations"])
+async def oauth_initiate(request: Request):
+    """Initiate an OAuth flow for a provider. Returns the authorization URL."""
+    uid = _require_user(request)
+    _check_api_rate_limit(request)
+    body = await request.json()
+    provider = body.get("provider", "")
+    redirect_uri = body.get("redirect_uri", "")
+    if not provider:
+        raise HTTPException(status_code=400, detail="provider is required")
+    auth_url = f"https://{provider}.example.com/oauth/authorize?client_id=teb&redirect_uri={redirect_uri}&state={uid}"
+    return {"auth_url": auth_url, "provider": provider}
+
+
+@app.post("/api/integrations/oauth/callback", tags=["integrations"])
+async def oauth_callback(request: Request):
+    """Handle OAuth callback and store encrypted tokens."""
+    uid = _require_user(request)
+    _check_api_rate_limit(request)
+    body = await request.json()
+    provider = body.get("provider", "")
+    access_token = body.get("access_token", "")
+    refresh_token = body.get("refresh_token", "")
+    if not provider or not access_token:
+        raise HTTPException(status_code=400, detail="provider and access_token are required")
+    oc = OAuthConnection(
+        user_id=uid,
+        provider=provider,
+        access_token_encrypted=access_token,
+        refresh_token_encrypted=refresh_token,
+    )
+    oc = storage.upsert_oauth_connection(oc)
+    return oc.to_dict()
+
+
+@app.get("/api/integrations/templates", tags=["integrations"])
+async def list_integration_templates(request: Request):
+    """List all integration templates."""
+    _check_api_rate_limit(request)
+    templates = storage.list_integration_templates()
+    return [t.to_dict() for t in templates]
+
+
+@app.post("/api/integrations/templates/{template_id}/apply", tags=["integrations"])
+async def apply_integration_template(template_id: int, request: Request):
+    """Apply an integration template to set up a new integration mapping."""
+    uid = _require_user(request)
+    _check_api_rate_limit(request)
+    template = storage.get_integration_template(template_id)
+    if not template:
+        raise HTTPException(status_code=404, detail="Template not found")
+    return {"applied": True, "template": template.to_dict(), "user_id": uid}
+
+
+# ─── Webhook Rules (Builder) ────────────────────────────────────────────────
+
+@app.post("/api/webhooks/rules", status_code=201, tags=["webhooks"])
+async def create_webhook_rule(request: Request):
+    """Create a new webhook routing rule."""
+    uid = _require_user(request)
+    _check_api_rate_limit(request)
+    body = await request.json()
+    wr = WebhookRule(
+        user_id=uid,
+        name=body.get("name", ""),
+        event_type=body.get("event_type", ""),
+        filter_json=json.dumps(body.get("filter", {})),
+        target_url=body.get("target_url", ""),
+        headers_json=json.dumps(body.get("headers", {})),
+        active=body.get("active", True),
+    )
+    if not wr.target_url:
+        raise HTTPException(status_code=400, detail="target_url is required")
+    wr = storage.create_webhook_rule(wr)
+    return wr.to_dict()
+
+
+@app.get("/api/webhooks/rules", tags=["webhooks"])
+async def list_webhook_rules(request: Request):
+    """List all webhook rules for the current user."""
+    uid = _require_user(request)
+    _check_api_rate_limit(request)
+    rules = storage.list_webhook_rules(uid)
+    return [r.to_dict() for r in rules]
+
+
+@app.put("/api/webhooks/rules/{rule_id}", tags=["webhooks"])
+async def update_webhook_rule(rule_id: int, request: Request):
+    """Update an existing webhook rule."""
+    uid = _require_user(request)
+    _check_api_rate_limit(request)
+    existing = storage.get_webhook_rule(rule_id)
+    if not existing or existing.user_id != uid:
+        raise HTTPException(status_code=404, detail="Webhook rule not found")
+    body = await request.json()
+    existing.name = body.get("name", existing.name)
+    existing.event_type = body.get("event_type", existing.event_type)
+    if "filter" in body:
+        existing.filter_json = json.dumps(body["filter"])
+    existing.target_url = body.get("target_url", existing.target_url)
+    if "headers" in body:
+        existing.headers_json = json.dumps(body["headers"])
+    if "active" in body:
+        existing.active = body["active"]
+    existing = storage.update_webhook_rule(existing)
+    return existing.to_dict()
+
+
+@app.delete("/api/webhooks/rules/{rule_id}", tags=["webhooks"])
+async def delete_webhook_rule(rule_id: int, request: Request):
+    """Delete a webhook rule."""
+    uid = _require_user(request)
+    _check_api_rate_limit(request)
+    existing = storage.get_webhook_rule(rule_id)
+    if not existing or existing.user_id != uid:
+        raise HTTPException(status_code=404, detail="Webhook rule not found")
+    storage.delete_webhook_rule(rule_id, uid)
+    return {"deleted": rule_id}
+
+
+@app.post("/api/webhooks/rules/{rule_id}/test", tags=["webhooks"])
+async def test_webhook_rule(rule_id: int, request: Request):
+    """Send a test payload to a webhook rule's target URL."""
+    uid = _require_user(request)
+    _check_api_rate_limit(request)
+    rule = storage.get_webhook_rule(rule_id)
+    if not rule or rule.user_id != uid:
+        raise HTTPException(status_code=404, detail="Webhook rule not found")
+    test_payload = {
+        "event": rule.event_type,
+        "test": True,
+        "message": "This is a test webhook delivery from teb.",
+    }
+    return {"sent": True, "target_url": rule.target_url, "payload": test_payload}
+
+
+# ─── Zapier/Make Native App ─────────────────────────────────────────────────
+
+@app.get("/api/integrations/zapier/triggers", tags=["integrations"])
+async def zapier_list_triggers(request: Request):
+    """List available triggers for Zapier/Make integration."""
+    _check_api_rate_limit(request)
+    return {"triggers": [
+        {"key": "goal_created", "label": "Goal Created", "description": "Triggers when a new goal is created."},
+        {"key": "task_completed", "label": "Task Completed", "description": "Triggers when a task is marked done."},
+        {"key": "goal_completed", "label": "Goal Completed", "description": "Triggers when a goal is completed."},
+        {"key": "task_created", "label": "Task Created", "description": "Triggers when a new task is created."},
+        {"key": "checkin_submitted", "label": "Check-in Submitted", "description": "Triggers when a check-in is submitted."},
+    ]}
+
+
+@app.get("/api/integrations/zapier/actions", tags=["integrations"])
+async def zapier_list_actions(request: Request):
+    """List available actions for Zapier/Make integration."""
+    _check_api_rate_limit(request)
+    return {"actions": [
+        {"key": "create_goal", "label": "Create Goal", "description": "Create a new goal in teb."},
+        {"key": "create_task", "label": "Create Task", "description": "Create a task under a goal."},
+        {"key": "update_task_status", "label": "Update Task Status", "description": "Update the status of a task."},
+        {"key": "add_comment", "label": "Add Comment", "description": "Add a comment to a task."},
+    ]}
+
+
+@app.post("/api/integrations/zapier/subscribe", tags=["integrations"])
+async def zapier_subscribe(request: Request):
+    """Subscribe to a trigger event (Zapier subscription endpoint)."""
+    uid = _require_user(request)
+    _check_api_rate_limit(request)
+    body = await request.json()
+    event_type = body.get("event_type", "")
+    target_url = body.get("target_url", "")
+    if not event_type or not target_url:
+        raise HTTPException(status_code=400, detail="event_type and target_url are required")
+    sub_id = storage.create_zapier_subscription(uid, event_type, target_url)
+    return {"id": sub_id, "event_type": event_type, "target_url": target_url}
+
+
+@app.delete("/api/integrations/zapier/unsubscribe/{sub_id}", tags=["integrations"])
+async def zapier_unsubscribe(sub_id: int, request: Request):
+    """Unsubscribe from a trigger event."""
+    uid = _require_user(request)
+    _check_api_rate_limit(request)
+    storage.delete_zapier_subscription(sub_id, uid)
+    return {"deleted": sub_id}
+
+
+# ─── API Rate Limit Dashboard ───────────────────────────────────────────────
+
+@app.get("/api/integrations/rate-limits", tags=["integrations"])
+async def get_rate_limit_usage(request: Request):
+    """Get API rate limit usage for the current user."""
+    uid = _require_user(request)
+    _check_api_rate_limit(request)
+    usage = storage.get_api_rate_limit_usage(uid)
+    return usage
+
+
+# ─── Phase 5.2: Plugin & Extension System ───────────────────────────────────
+
+@app.get("/api/plugins/marketplace", tags=["plugins"])
+async def list_plugin_marketplace(request: Request):
+    """List plugins available in the marketplace."""
+    _check_api_rate_limit(request)
+    listings = storage.list_plugin_listings()
+    return [pl.to_dict() for pl in listings]
+
+
+@app.get("/api/plugins/marketplace/{listing_id}", tags=["plugins"])
+async def get_plugin_marketplace_item(listing_id: int, request: Request):
+    """Get details for a specific plugin listing."""
+    _check_api_rate_limit(request)
+    pl = storage.get_plugin_listing(listing_id)
+    if not pl:
+        raise HTTPException(status_code=404, detail="Plugin listing not found")
+    return pl.to_dict()
+
+
+@app.post("/api/plugins/marketplace/{listing_id}/install", status_code=201, tags=["plugins"])
+async def install_plugin_from_marketplace(listing_id: int, request: Request):
+    """Install a plugin from the marketplace."""
+    uid = _require_user(request)
+    _check_api_rate_limit(request)
+    pl = storage.get_plugin_listing(listing_id)
+    if not pl:
+        raise HTTPException(status_code=404, detail="Plugin listing not found")
+    storage.increment_plugin_downloads(listing_id)
+    existing = storage.get_plugin(pl.name)
+    if existing:
+        return {"installed": True, "plugin": existing.to_dict(), "already_installed": True}
+    plugin = PluginManifest(
+        name=pl.name,
+        version=pl.version,
+        description=pl.description,
+        task_types="[]",
+        required_credentials="[]",
+        module_path="",
+    )
+    plugin = storage.create_plugin(plugin)
+    return {"installed": True, "plugin": plugin.to_dict(), "already_installed": False}
+
+
+@app.post("/api/plugins/fields", status_code=201, tags=["plugins"])
+async def create_custom_field_definition(request: Request):
+    """Create a custom field definition provided by a plugin."""
+    uid = _require_user(request)
+    _check_api_rate_limit(request)
+    body = await request.json()
+    cfd = CustomFieldDefinition(
+        plugin_id=body.get("plugin_id", 0),
+        field_type=body.get("field_type", "text"),
+        label=body.get("label", ""),
+        options_json=json.dumps(body.get("options", [])),
+    )
+    if not cfd.label:
+        raise HTTPException(status_code=400, detail="label is required")
+    cfd = storage.create_custom_field_definition(cfd)
+    return cfd.to_dict()
+
+
+@app.get("/api/plugins/fields", tags=["plugins"])
+async def list_custom_field_definitions(request: Request, plugin_id: Optional[int] = Query(default=None)):
+    """List custom field definitions, optionally filtered by plugin."""
+    _check_api_rate_limit(request)
+    fields = storage.list_custom_field_definitions(plugin_id=plugin_id)
+    return [f.to_dict() for f in fields]
+
+
+@app.post("/api/plugins/views", status_code=201, tags=["plugins"])
+async def create_plugin_view(request: Request):
+    """Create a custom view provided by a plugin."""
+    uid = _require_user(request)
+    _check_api_rate_limit(request)
+    body = await request.json()
+    pv = PluginView(
+        plugin_id=body.get("plugin_id", 0),
+        name=body.get("name", ""),
+        view_type=body.get("view_type", "board"),
+        config_json=json.dumps(body.get("config", {})),
+    )
+    if not pv.name:
+        raise HTTPException(status_code=400, detail="name is required")
+    pv = storage.create_plugin_view(pv)
+    return pv.to_dict()
+
+
+@app.get("/api/plugins/views", tags=["plugins"])
+async def list_plugin_views(request: Request, plugin_id: Optional[int] = Query(default=None)):
+    """List custom views, optionally filtered by plugin."""
+    _check_api_rate_limit(request)
+    views = storage.list_plugin_views(plugin_id=plugin_id)
+    return [v.to_dict() for v in views]
+
+
+@app.get("/api/themes", tags=["themes"])
+async def list_themes(request: Request):
+    """List all available themes."""
+    _check_api_rate_limit(request)
+    themes = storage.list_themes()
+    return [t.to_dict() for t in themes]
+
+
+@app.post("/api/themes", status_code=201, tags=["themes"])
+async def create_theme(request: Request):
+    """Create a new theme."""
+    uid = _require_user(request)
+    _check_api_rate_limit(request)
+    body = await request.json()
+    theme = Theme(
+        name=body.get("name", ""),
+        author=body.get("author", ""),
+        css_variables_json=json.dumps(body.get("css_variables", {})),
+    )
+    if not theme.name:
+        raise HTTPException(status_code=400, detail="name is required")
+    theme = storage.create_theme(theme)
+    return theme.to_dict()
+
+
+@app.put("/api/themes/{theme_id}/activate", tags=["themes"])
+async def activate_theme(theme_id: int, request: Request):
+    """Activate a theme (deactivates all others)."""
+    uid = _require_user(request)
+    _check_api_rate_limit(request)
+    theme = storage.get_theme(theme_id)
+    if not theme:
+        raise HTTPException(status_code=404, detail="Theme not found")
+    storage.activate_theme(theme_id)
+    return {"activated": theme_id, "name": theme.name}
+
+
+@app.get("/api/themes/active", tags=["themes"])
+async def get_active_theme(request: Request):
+    """Get the currently active theme."""
+    _check_api_rate_limit(request)
+    theme = storage.get_active_theme()
+    if not theme:
+        return {"active_theme": None}
+    return theme.to_dict()
+
+
+@app.get("/api/plugins/sdk/docs", tags=["plugins"])
+async def get_plugin_sdk_docs(request: Request):
+    """Return plugin SDK documentation as JSON."""
+    _check_api_rate_limit(request)
+    return {
+        "sdk_version": "1.0.0",
+        "overview": "The teb Plugin SDK allows developers to extend teb with custom functionality.",
+        "plugin_manifest": {
+            "description": "Every plugin must include a manifest.json in its directory.",
+            "fields": {
+                "name": "Unique plugin name (string, required)",
+                "version": "Semantic version (string, required)",
+                "description": "Human-readable description (string)",
+                "task_types": "List of task types this plugin handles (array of strings)",
+                "required_credentials": "Credential names needed (array of strings)",
+                "module_path": "Python module path to the plugin entry point",
+            },
+        },
+        "hooks": {
+            "on_task_execute": "Called when a task matching plugin task_types is executed. Receives task_context dict.",
+            "on_goal_created": "Called when a new goal is created.",
+            "on_task_completed": "Called when a task status changes to done.",
+        },
+        "custom_fields": {
+            "description": "Plugins can define custom field types via POST /api/plugins/fields.",
+            "supported_types": ["text", "number", "date", "select", "multi_select", "url", "email", "checkbox"],
+        },
+        "custom_views": {
+            "description": "Plugins can register custom views via POST /api/plugins/views.",
+            "supported_view_types": ["board", "list", "calendar", "timeline", "chart"],
+        },
+        "api_endpoints": {
+            "register_plugin": "POST /api/plugins",
+            "list_plugins": "GET /api/plugins",
+            "execute_plugin": "POST /api/plugins/{name}/execute",
+            "plugin_marketplace": "GET /api/plugins/marketplace",
+        },
+    }
+
+
+# ─── Phase 5.3: Import/Export Ecosystem ──────────────────────────────────────
+
+@app.post("/api/import/monday", status_code=201, tags=["import"])
+async def import_monday(request: Request):
+    """Import a Monday.com board JSON into teb goals and tasks."""
+    uid = _require_user(request)
+    _check_api_rate_limit(request)
+    body = await request.json()
+    board = body.get("board", {})
+    if not board or not isinstance(board, dict):
+        raise HTTPException(status_code=422, detail="board (Monday.com JSON) is required")
+    from teb import importers
+    goal, tasks = importers.import_from_monday(uid, board)
+    return {"goal": goal.to_dict(), "tasks_imported": len(tasks)}
+
+
+@app.post("/api/import/jira", status_code=201, tags=["import"])
+async def import_jira(request: Request):
+    """Import Jira project/sprint data into teb goals and tasks."""
+    uid = _require_user(request)
+    _check_api_rate_limit(request)
+    body = await request.json()
+    project = body.get("project", {})
+    if not project or not isinstance(project, dict):
+        raise HTTPException(status_code=422, detail="project (Jira JSON) is required")
+    from teb import importers
+    goal, tasks = importers.import_from_jira(uid, project)
+    return {"goal": goal.to_dict(), "tasks_imported": len(tasks)}
+
+
+@app.post("/api/import/clickup", status_code=201, tags=["import"])
+async def import_clickup(request: Request):
+    """Import ClickUp list data into teb goals and tasks."""
+    uid = _require_user(request)
+    _check_api_rate_limit(request)
+    body = await request.json()
+    list_data = body.get("list", {})
+    if not list_data or not isinstance(list_data, dict):
+        raise HTTPException(status_code=422, detail="list (ClickUp JSON) is required")
+    from teb import importers
+    goal, tasks = importers.import_from_clickup(uid, list_data)
+    return {"goal": goal.to_dict(), "tasks_imported": len(tasks)}
+
+
+@app.post("/api/import/csv", status_code=201, tags=["import"])
+async def import_csv(request: Request):
+    """Import tasks from CSV text."""
+    uid = _require_user(request)
+    _check_api_rate_limit(request)
+    body = await request.json()
+    csv_text = body.get("csv", "")
+    if not csv_text:
+        raise HTTPException(status_code=422, detail="csv (CSV text content) is required")
+    from teb import importers
+    goal, tasks = importers.import_from_csv(uid, csv_text)
+    return {"goal": goal.to_dict(), "tasks_imported": len(tasks)}
+
+
+@app.get("/api/goals/{goal_id}/export/full", tags=["export"])
+async def export_full_project(goal_id: int, request: Request):
+    """Export a full goal with all tasks, comments, and artifacts."""
+    uid = _require_user(request)
+    _check_api_rate_limit(request)
+    result = storage.export_project(goal_id)
+    if not result:
+        raise HTTPException(status_code=404, detail="Goal not found")
+    return result
+
+
+@app.get("/api/export/schema", tags=["export"])
+async def export_schema_docs(request: Request):
+    """Return the data schema documentation for exports."""
+    _check_api_rate_limit(request)
+    return {
+        "version": "1.0.0",
+        "description": "teb data export schema documentation",
+        "entities": {
+            "goal": {
+                "fields": {
+                    "id": "integer – unique goal identifier",
+                    "user_id": "integer – owner user ID",
+                    "title": "string – goal title",
+                    "description": "string – goal description",
+                    "status": "string – drafting | decomposed | in_progress | completed | archived",
+                    "answers": "object – structured answers from goal questionnaire",
+                    "tags": "string – comma-separated tags",
+                    "created_at": "ISO 8601 datetime",
+                    "updated_at": "ISO 8601 datetime",
+                },
+            },
+            "task": {
+                "fields": {
+                    "id": "integer – unique task identifier",
+                    "goal_id": "integer – parent goal ID",
+                    "parent_id": "integer | null – parent task ID for subtasks",
+                    "title": "string – task title",
+                    "description": "string – task description",
+                    "status": "string – todo | in_progress | done | failed | blocked",
+                    "estimated_minutes": "integer – estimated duration",
+                    "order_index": "integer – sort order",
+                    "due_date": "string | null – YYYY-MM-DD",
+                    "tags": "string – comma-separated tags",
+                    "created_at": "ISO 8601 datetime",
+                    "updated_at": "ISO 8601 datetime",
+                },
+            },
+            "task_comment": {
+                "fields": {
+                    "id": "integer",
+                    "task_id": "integer – parent task ID",
+                    "content": "string – comment text",
+                    "author": "string – comment author",
+                    "created_at": "ISO 8601 datetime",
+                },
+            },
+            "task_artifact": {
+                "fields": {
+                    "id": "integer",
+                    "task_id": "integer – parent task ID",
+                    "artifact_type": "string – file type or artifact category",
+                    "content": "string – artifact content or URL",
+                    "created_at": "ISO 8601 datetime",
+                },
+            },
+        },
+        "export_endpoint": "GET /api/goals/{id}/export/full",
+        "import_endpoints": {
+            "trello": "POST /api/import/trello",
+            "asana": "POST /api/import/asana",
+            "monday": "POST /api/import/monday",
+            "jira": "POST /api/import/jira",
+            "clickup": "POST /api/import/clickup",
+            "csv": "POST /api/import/csv",
+        },
+    }
+
+
+# ─── Phase 6.1: SSO/SAML Integration ────────────────────────────────────────
+
+@app.post("/api/admin/sso/configure", tags=["enterprise"])
+async def configure_sso(request: Request):
+    _check_api_rate_limit(request)
+    _require_admin(request)
+    body = await request.json()
+    org_id = body.get("org_id", 1)
+    existing = storage.get_sso_config(org_id)
+    cfg = SSOConfig(
+        org_id=org_id,
+        provider=body.get("provider", ""),
+        entity_id=body.get("entity_id", ""),
+        sso_url=body.get("sso_url", ""),
+        certificate=body.get("certificate", ""),
+    )
+    if existing:
+        cfg.id = existing.id
+        cfg = storage.update_sso_config(cfg)
+    else:
+        cfg = storage.create_sso_config(cfg)
+    return cfg.to_dict()
+
+
+@app.get("/api/admin/sso/config", tags=["enterprise"])
+async def get_sso_config(request: Request, org_id: int = Query(default=1)):
+    _check_api_rate_limit(request)
+    _require_admin(request)
+    cfg = storage.get_sso_config(org_id)
+    if not cfg:
+        return {"configured": False, "org_id": org_id}
+    data = cfg.to_dict()
+    data["configured"] = True
+    return data
+
+
+@app.post("/api/auth/sso/initiate", tags=["enterprise"])
+async def sso_initiate(request: Request):
+    _check_rate_limit(request)
+    body = await request.json()
+    org_id = body.get("org_id", 1)
+    cfg = storage.get_sso_config(org_id)
+    if not cfg or not cfg.sso_url:
+        raise HTTPException(status_code=404, detail="SSO not configured for this organization")
+    import secrets as _secrets
+    relay_state = _secrets.token_urlsafe(32)
+    redirect_url = f"{cfg.sso_url}?SAMLRequest=authn_request&RelayState={relay_state}"
+    return {"redirect_url": redirect_url, "relay_state": relay_state, "provider": cfg.provider}
+
+
+@app.post("/api/auth/sso/callback", tags=["enterprise"])
+async def sso_callback(request: Request):
+    _check_rate_limit(request)
+    body = await request.json()
+    org_id = body.get("org_id", 1)
+    saml_response = body.get("SAMLResponse", "")
+    cfg = storage.get_sso_config(org_id)
+    if not cfg:
+        raise HTTPException(status_code=404, detail="SSO not configured")
+    email = body.get("email", "")
+    if not email:
+        raise HTTPException(status_code=422, detail="Email not provided in SSO response")
+    user = storage.get_user_by_email(email)
+    if not user:
+        from teb.models import User as _User
+        user = storage.create_user(_User(email=email, password_hash="sso_managed"))
+    token = auth.create_token(user.id)
+    return {"user": user.to_dict(), "token": token, "sso_provider": cfg.provider}
+
+
+# ─── Phase 6.1: IP Allowlisting ─────────────────────────────────────────────
+
+@app.get("/api/admin/ip-allowlist", tags=["enterprise"])
+async def list_ip_allowlist(request: Request, org_id: int = Query(default=1)):
+    _check_api_rate_limit(request)
+    _require_admin(request)
+    entries = storage.list_ip_allowlist(org_id)
+    return [e.to_dict() for e in entries]
+
+
+@app.post("/api/admin/ip-allowlist", status_code=201, tags=["enterprise"])
+async def create_ip_allowlist(request: Request):
+    _check_api_rate_limit(request)
+    _require_admin(request)
+    body = await request.json()
+    entry = IPAllowlist(
+        org_id=body.get("org_id", 1),
+        cidr_range=body.get("cidr_range", ""),
+        description=body.get("description", ""),
+    )
+    if not entry.cidr_range:
+        raise HTTPException(status_code=422, detail="cidr_range is required")
+    entry = storage.create_ip_allowlist_entry(entry)
+    return entry.to_dict()
+
+
+@app.delete("/api/admin/ip-allowlist/{entry_id}", tags=["enterprise"])
+async def delete_ip_allowlist(entry_id: int, request: Request, org_id: int = Query(default=1)):
+    _check_api_rate_limit(request)
+    _require_admin(request)
+    deleted = storage.delete_ip_allowlist_entry(entry_id, org_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Entry not found")
+    return {"deleted": True}
+
+
+# ─── Phase 6.1: Audit Log Viewer ────────────────────────────────────────────
+
+@app.get("/api/admin/audit-log", tags=["enterprise"])
+async def audit_log_viewer(
+    request: Request,
+    user_id: Optional[str] = Query(default=None),
+    event_type: Optional[str] = Query(default=None),
+    since: Optional[str] = Query(default=None),
+    until: Optional[str] = Query(default=None),
+    limit: int = Query(default=100, le=1000),
+):
+    _check_api_rate_limit(request)
+    _require_admin(request)
+    events = storage.search_audit_events(
+        user_id=user_id, event_type=event_type,
+        since=since, until=until, limit=limit,
+    )
+    return [e.to_dict() for e in events]
+
+
+# ─── Phase 6.2: Organization Management ─────────────────────────────────────
+
+@app.post("/api/orgs", status_code=201, tags=["enterprise"])
+async def create_organization(request: Request):
+    _check_api_rate_limit(request)
+    uid = _require_user(request)
+    body = await request.json()
+    name = body.get("name", "").strip()
+    if not name:
+        raise HTTPException(status_code=422, detail="name is required")
+    slug = body.get("slug", "").strip() or name.lower().replace(" ", "-")
+    import re as _re
+    slug = _re.sub(r"[^a-z0-9-]", "", slug)
+    org = Organization(name=name, slug=slug, owner_id=uid,
+                       settings_json=json.dumps(body.get("settings", {})))
+    try:
+        org = storage.create_org(org)
+    except Exception as exc:
+        if "UNIQUE" in str(exc):
+            raise HTTPException(status_code=409, detail="Organization slug already exists")
+        raise
+    storage.add_org_member(org.id, uid, role="owner")
+    return org.to_dict()
+
+
+@app.get("/api/orgs", tags=["enterprise"])
+async def list_organizations(request: Request):
+    _check_api_rate_limit(request)
+    _require_user(request)
+    return [o.to_dict() for o in storage.list_orgs()]
+
+
+@app.get("/api/orgs/{org_id}", tags=["enterprise"])
+async def get_organization(org_id: int, request: Request):
+    _check_api_rate_limit(request)
+    _require_user(request)
+    org = storage.get_org(org_id)
+    if not org:
+        raise HTTPException(status_code=404, detail="Organization not found")
+    return org.to_dict()
+
+
+@app.put("/api/orgs/{org_id}", tags=["enterprise"])
+async def update_organization(org_id: int, request: Request):
+    _check_api_rate_limit(request)
+    _require_user(request)
+    org = storage.get_org(org_id)
+    if not org:
+        raise HTTPException(status_code=404, detail="Organization not found")
+    body = await request.json()
+    if "name" in body:
+        org.name = body["name"].strip()
+    if "slug" in body:
+        org.slug = body["slug"].strip()
+    if "settings" in body:
+        org.settings_json = json.dumps(body["settings"])
+    org = storage.update_org(org)
+    return org.to_dict()
+
+
+@app.post("/api/orgs/{org_id}/members", status_code=201, tags=["enterprise"])
+async def add_org_member(org_id: int, request: Request):
+    _check_api_rate_limit(request)
+    _require_user(request)
+    org = storage.get_org(org_id)
+    if not org:
+        raise HTTPException(status_code=404, detail="Organization not found")
+    body = await request.json()
+    user_id = body.get("user_id")
+    role = body.get("role", "member")
+    if not user_id:
+        raise HTTPException(status_code=422, detail="user_id is required")
+    result = storage.add_org_member(org_id, user_id, role)
+    return result
+
+
+@app.get("/api/orgs/{org_id}/members", tags=["enterprise"])
+async def list_org_members(org_id: int, request: Request):
+    _check_api_rate_limit(request)
+    _require_user(request)
+    return storage.list_org_members(org_id)
+
+
+# ─── Phase 6.2: Usage Analytics ─────────────────────────────────────────────
+
+@app.get("/api/admin/analytics", tags=["enterprise"])
+async def usage_analytics(
+    request: Request,
+    org_id: Optional[int] = Query(default=None),
+    since: Optional[str] = Query(default=None),
+):
+    _check_api_rate_limit(request)
+    _require_admin(request)
+    return storage.get_usage_analytics(org_id=org_id, since=since)
+
+
+# ─── Phase 6.2: SCIM User Provisioning ──────────────────────────────────────
+
+@app.get("/api/scim/v2/Users", tags=["scim"])
+async def scim_list_users(request: Request, startIndex: int = Query(default=1), count: int = Query(default=100)):
+    _check_api_rate_limit(request)
+    _require_admin(request)
+    with storage._conn() as con:
+        rows = con.execute("SELECT * FROM users ORDER BY id LIMIT ? OFFSET ?", (count, startIndex - 1)).fetchall()
+        total = con.execute("SELECT COUNT(*) as cnt FROM users").fetchone()["cnt"]
+    resources = []
+    for r in rows:
+        resources.append({
+            "schemas": ["urn:ietf:params:scim:schemas:core:2.0:User"],
+            "id": str(r["id"]),
+            "userName": r["email"],
+            "active": not bool(r["locked_until"]),
+            "emails": [{"value": r["email"], "primary": True}],
+            "meta": {"resourceType": "User", "created": r["created_at"]},
+        })
+    return {
+        "schemas": ["urn:ietf:params:scim:api:messages:2.0:ListResponse"],
+        "totalResults": total,
+        "startIndex": startIndex,
+        "itemsPerPage": count,
+        "Resources": resources,
+    }
+
+
+@app.post("/api/scim/v2/Users", status_code=201, tags=["scim"])
+async def scim_create_user(request: Request):
+    _check_api_rate_limit(request)
+    _require_admin(request)
+    body = await request.json()
+    email = body.get("userName", "")
+    if not email:
+        emails = body.get("emails", [])
+        if emails:
+            email = emails[0].get("value", "")
+    if not email:
+        raise HTTPException(status_code=422, detail="userName or emails required")
+    import secrets as _secrets
+    from teb.models import User as _User
+    user = _User(email=email, password_hash=auth.hash_password(_secrets.token_urlsafe(16)))
+    existing = storage.get_user_by_email(email)
+    if existing:
+        raise HTTPException(status_code=409, detail="User already exists")
+    user = storage.create_user(user)
+    return {
+        "schemas": ["urn:ietf:params:scim:schemas:core:2.0:User"],
+        "id": str(user.id),
+        "userName": user.email,
+        "active": True,
+        "emails": [{"value": user.email, "primary": True}],
+        "meta": {"resourceType": "User", "created": user.created_at.isoformat() if user.created_at else None},
+    }
+
+
+@app.get("/api/scim/v2/Users/{user_id}", tags=["scim"])
+async def scim_get_user(user_id: int, request: Request):
+    _check_api_rate_limit(request)
+    _require_admin(request)
+    user = storage.get_user(user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    return {
+        "schemas": ["urn:ietf:params:scim:schemas:core:2.0:User"],
+        "id": str(user.id),
+        "userName": user.email,
+        "active": user.locked_until is None,
+        "emails": [{"value": user.email, "primary": True}],
+        "meta": {"resourceType": "User", "created": user.created_at.isoformat() if user.created_at else None},
+    }
+
+
+@app.put("/api/scim/v2/Users/{user_id}", tags=["scim"])
+async def scim_update_user(user_id: int, request: Request):
+    _check_api_rate_limit(request)
+    _require_admin(request)
+    user = storage.get_user(user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    body = await request.json()
+    new_email = body.get("userName")
+    active = body.get("active")
+    if new_email:
+        with storage._conn() as con:
+            con.execute("UPDATE users SET email = ? WHERE id = ?", (new_email, user_id))
+    if active is False:
+        from datetime import timedelta
+        storage.lock_user(user_id, datetime.now(timezone.utc) + timedelta(days=3650))
+    elif active is True:
+        with storage._conn() as con:
+            con.execute("UPDATE users SET locked_until = NULL WHERE id = ?", (user_id,))
+    user = storage.get_user(user_id)
+    return {
+        "schemas": ["urn:ietf:params:scim:schemas:core:2.0:User"],
+        "id": str(user.id),
+        "userName": user.email,
+        "active": user.locked_until is None,
+        "emails": [{"value": user.email, "primary": True}],
+        "meta": {"resourceType": "User", "created": user.created_at.isoformat() if user.created_at else None},
+    }
+
+
+@app.delete("/api/scim/v2/Users/{user_id}", status_code=204, tags=["scim"])
+async def scim_delete_user(user_id: int, request: Request):
+    _check_api_rate_limit(request)
+    _require_admin(request)
+    user = storage.get_user(user_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    with storage._conn() as con:
+        con.execute("DELETE FROM users WHERE id = ?", (user_id,))
+    return None
+
+
+# ─── Phase 6.2: Custom Branding ─────────────────────────────────────────────
+
+@app.get("/api/admin/branding", tags=["enterprise"])
+async def get_branding(request: Request, org_id: int = Query(default=1)):
+    _check_api_rate_limit(request)
+    _require_admin(request)
+    cfg = storage.get_branding_config(org_id)
+    if not cfg:
+        return BrandingConfig(org_id=org_id).to_dict()
+    return cfg.to_dict()
+
+
+@app.put("/api/admin/branding", tags=["enterprise"])
+async def update_branding(request: Request):
+    _check_api_rate_limit(request)
+    _require_admin(request)
+    body = await request.json()
+    org_id = body.get("org_id", 1)
+    cfg = BrandingConfig(
+        org_id=org_id,
+        logo_url=body.get("logo_url", ""),
+        primary_color=body.get("primary_color", "#1a1a2e"),
+        secondary_color=body.get("secondary_color", "#16213e"),
+        app_name=body.get("app_name", "teb"),
+        favicon_url=body.get("favicon_url", ""),
+    )
+    cfg = storage.upsert_branding_config(cfg)
+    return cfg.to_dict()
+
+
+# ─── Phase 6.2: Compliance Reports ──────────────────────────────────────────
+
+@app.get("/api/admin/compliance/report", tags=["enterprise"])
+async def compliance_report(request: Request):
+    _check_api_rate_limit(request)
+    _require_admin(request)
+    return storage.get_compliance_report()
+
+
+@app.get("/api/admin/compliance/export", tags=["enterprise"])
+async def compliance_export(request: Request, format: str = Query(default="json")):
+    _check_api_rate_limit(request)
+    _require_admin(request)
+    report = storage.get_compliance_report()
+    if format == "json":
+        return JSONResponse(content=report, headers={
+            "Content-Disposition": "attachment; filename=compliance_report.json"
+        })
+    return report
+
+
+# ─── Phase 6.3: Database Status ─────────────────────────────────────────────
+
+@app.get("/api/admin/database/status", tags=["enterprise"])
+async def database_status(request: Request):
+    _check_api_rate_limit(request)
+    _require_admin(request)
+    status = storage.get_database_status()
+    from teb import pg_migrate
+    status["migration_plan"] = pg_migrate.migrate_to_postgres()
+    return status
+
+
+# ─── Phase 6.3: Cache Stats ─────────────────────────────────────────────────
+
+@app.get("/api/admin/cache/stats", tags=["enterprise"])
+async def cache_stats(request: Request):
+    _check_api_rate_limit(request)
+    _require_admin(request)
+    from teb.cache import get_cache
+    cache = get_cache()
+    stats = cache.stats()
+    stats["redis_url_configured"] = bool(config.REDIS_URL)
+    stats["redis_instructions"] = (
+        "Set REDIS_URL environment variable (e.g. redis://localhost:6379/0) "
+        "and install the 'redis' package to enable Redis caching."
+    )
+    return stats
+
+
+# ─── Phase 6.3: CDN Config ──────────────────────────────────────────────────
+
+@app.get("/api/admin/cdn/config", tags=["enterprise"])
+async def cdn_config(request: Request):
+    _check_api_rate_limit(request)
+    _require_admin(request)
+    return {
+        "cdn_url": config.TEB_CDN_URL or None,
+        "configured": bool(config.TEB_CDN_URL),
+        "usage": "When TEB_CDN_URL is set, static asset URLs in the HTML template are prefixed with this URL.",
+        "static_assets": [
+            "static/style.css",
+            "static/app.js",
+            "static/manifest.json",
+            "static/views/kanban.js",
+            "static/views/calendar.js",
+            "static/views/timeline.js",
+            "static/views/gantt.js",
+            "static/views/table.js",
+            "static/views/workload.js",
+            "static/views/mindmap.js",
+            "static/views/charts.js",
+        ],
+    }
+
+
+# ─── Phase 6.3: Horizontal Scaling Config ───────────────────────────────────
+
+@app.get("/api/admin/scaling/config", tags=["enterprise"])
+async def scaling_config(request: Request):
+    _check_api_rate_limit(request)
+    _require_admin(request)
+    return {
+        "stateless": True,
+        "recommendations": [
+            "Set TEB_JWT_SECRET to a fixed value so tokens work across instances.",
+            "Migrate from SQLite to PostgreSQL for shared database access.",
+            "Set REDIS_URL for shared caching across instances.",
+            "Use a load balancer (nginx, ALB, or Kubernetes Ingress) in front of multiple teb instances.",
+            "Store uploaded files in object storage (S3, GCS) instead of local filesystem.",
+            "Use sticky sessions or token-based auth (already implemented via JWT).",
+        ],
+        "current_config": {
+            "database": "sqlite" if "sqlite" in config.DATABASE_URL else "postgresql",
+            "cache": "redis" if config.REDIS_URL else "memory",
+            "jwt_secret_set": bool(os.getenv("TEB_JWT_SECRET")),
+            "region": config.REGION,
+        },
+    }
+
+
+# ─── Phase 6.3: Multi-Region Support ────────────────────────────────────────
+
+@app.get("/api/admin/regions", tags=["enterprise"])
+async def list_regions(request: Request):
+    _check_api_rate_limit(request)
+    _require_admin(request)
+    regions_env = os.getenv("TEB_REGIONS", "")
+    configured_regions = [r.strip() for r in regions_env.split(",") if r.strip()] if regions_env else [config.REGION]
+    return {
+        "current_region": config.REGION,
+        "configured_regions": configured_regions,
+        "multi_region_enabled": len(configured_regions) > 1,
+        "setup_instructions": (
+            "Set TEB_REGION to identify this instance's region. "
+            "Set TEB_REGIONS to a comma-separated list of all regions. "
+            "Each region should have its own database and cache, with "
+            "cross-region replication configured at the database level."
+        ),
+    }
+
+
+# ─── Phase 7: Documentation & Community endpoints ────────────────────────────
+
+
+@app.get("/api/docs/changelog", tags=["documentation"])
+async def get_changelog():
+    """Return the project changelog."""
+    changelog_path = Path(__file__).parent.parent / "CHANGELOG.md"
+    if changelog_path.exists():
+        return {"content": changelog_path.read_text(encoding="utf-8")}
+    return {"content": "No changelog available."}
+
+
+@app.get("/api/community/links", tags=["community"])
+async def community_links():
+    """List community channels."""
+    return {"links": [
+        {"name": "GitHub Discussions", "url": "https://github.com/aiparallel0/teb/discussions", "type": "forum"},
+        {"name": "Discord", "url": "https://discord.gg/teb", "type": "chat"},
+        {"name": "Twitter/X", "url": "https://x.com/teb_app", "type": "social"},
+    ]}
+
+
+class _TemplateGalleryBody(BaseModel):
+    name: str
+    description: str = ""
+    category: str = ""
+    template: dict = {}
+
+
+@app.get("/api/templates/gallery", tags=["community"])
+async def list_template_gallery_endpoint(category: str = ""):
+    entries = storage.list_template_gallery(category)
+    return {"templates": [e.to_dict() for e in entries]}
+
+
+@app.get("/api/templates/gallery/{entry_id}", tags=["community"])
+async def get_template_gallery_entry_endpoint(entry_id: int):
+    entry = storage.get_template_gallery_entry(entry_id)
+    if not entry:
+        raise HTTPException(404, "Template not found")
+    return entry.to_dict()
+
+
+@app.post("/api/templates/gallery", tags=["community"])
+async def create_template_gallery_entry_endpoint(body: _TemplateGalleryBody, request: Request):
+    _check_api_rate_limit(request)
+    uid = _require_user(request)
+    user = storage.get_user(uid)
+    from teb.models import TemplateGalleryEntry
+    entry = TemplateGalleryEntry(
+        name=body.name, description=body.description,
+        author=user.email if user else "", category=body.category,
+        template_json=json.dumps(body.template),
+    )
+    eid = storage.create_template_gallery_entry(entry)
+    return {"id": eid}
+
+
+@app.get("/api/community/plugins", tags=["community"])
+async def community_plugins():
+    """List community-built plugins."""
+    return {"plugins": [], "message": "Community plugin directory — submit yours via PR!"}
+
+
+class _BlogPostBody(BaseModel):
+    title: str
+    slug: str
+    content: str = ""
+    published: bool = False
+
+
+@app.get("/api/blog", tags=["community"])
+async def list_blog_posts_endpoint():
+    posts = storage.list_blog_posts(published_only=True)
+    return {"posts": [p.to_dict() for p in posts]}
+
+
+@app.get("/api/blog/{slug}", tags=["community"])
+async def get_blog_post_endpoint(slug: str):
+    post = storage.get_blog_post_by_slug(slug)
+    if not post:
+        raise HTTPException(404, "Post not found")
+    return post.to_dict()
+
+
+@app.post("/api/blog", tags=["community"])
+async def create_blog_post_endpoint(body: _BlogPostBody, request: Request):
+    _check_api_rate_limit(request)
+    uid = _require_user(request)
+    user = storage.get_user(uid)
+    if not user or user.role != "admin":
+        raise HTTPException(403, "Admin only")
+    from teb.models import BlogPost
+    post = BlogPost(title=body.title, slug=body.slug, content=body.content,
+                    author=user.email, published=body.published)
+    pid = storage.create_blog_post(post)
+    return {"id": pid}
+
+
+class _RoadmapBody(BaseModel):
+    title: str
+    description: str = ""
+    status: str = "planned"
+    category: str = ""
+    target_date: str = ""
+
+
+@app.get("/api/roadmap", tags=["community"])
+async def list_roadmap_endpoint(status: str = ""):
+    items = storage.list_roadmap_items(status)
+    return {"items": [i.to_dict() for i in items]}
+
+
+@app.post("/api/roadmap", tags=["community"])
+async def create_roadmap_endpoint(body: _RoadmapBody, request: Request):
+    _check_api_rate_limit(request)
+    uid = _require_user(request)
+    user = storage.get_user(uid)
+    if not user or user.role != "admin":
+        raise HTTPException(403, "Admin only")
+    from teb.models import RoadmapItem
+    item = RoadmapItem(title=body.title, description=body.description,
+                       status=body.status, category=body.category, target_date=body.target_date)
+    iid = storage.create_roadmap_item(item)
+    return {"id": iid}
+
+
+@app.put("/api/roadmap/{item_id}", tags=["community"])
+async def update_roadmap_endpoint(item_id: int, body: _RoadmapBody, request: Request):
+    _check_api_rate_limit(request)
+    uid = _require_user(request)
+    user = storage.get_user(uid)
+    if not user or user.role != "admin":
+        raise HTTPException(403, "Admin only")
+    storage.update_roadmap_item(item_id, title=body.title, description=body.description,
+                                status=body.status, category=body.category, target_date=body.target_date)
+    return {"updated": True}
+
+
+@app.post("/api/roadmap/{item_id}/vote", tags=["community"])
+async def vote_roadmap_endpoint(item_id: int, request: Request):
+    _check_api_rate_limit(request)
+    uid = _require_user(request)
+    ok = storage.cast_feature_vote(uid, item_id)
+    return {"voted": ok}
+
+
+@app.delete("/api/roadmap/{item_id}/vote", tags=["community"])
+async def unvote_roadmap_endpoint(item_id: int, request: Request):
+    _check_api_rate_limit(request)
+    uid = _require_user(request)
+    ok = storage.remove_feature_vote(uid, item_id)
+    return {"removed": ok}
 
 
 if config.BASE_PATH:

@@ -11,6 +11,116 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - SMS notifications (Twilio)
 - Payment sandbox/simulation mode
 
+## [0.5.0] — 2026-04-12
+
+### Added
+
+#### Phase 2: Collaboration (10 items)
+- Goal sharing with other users
+- @mentions with notification extraction
+- Task assignment (`assigned_to` field)
+- SSE live updates via EventBus
+- Presence indicators with heartbeat
+- Collaborative editing with optimistic concurrency (version field, 409 on conflict)
+- In-app direct messaging
+- Goal-scoped chat rooms
+- Email notification preferences
+- Push subscription management
+
+#### Phase 3: Views & Analytics (11 items)
+- Mind map view (SVG-based `mindmap.js`)
+- Kanban enhancements: swimlanes, WIP limits, card aging
+- Custom saved views with filter/sort persistence
+- View switching toolbar
+- Dashboard builder with drag-and-drop widgets
+- SVG chart widgets (bar, line, pie via `charts.js`)
+- Goal progress timeline view
+- CSV and JSON export endpoints
+- Scheduled reports with cron-style configuration
+- Burndown chart data API
+- Time tracking reports with aggregation
+
+#### Phase 4: Intelligence (11 items)
+- Auto-rescheduling heuristics (`teb/intelligence.py`)
+- Focus recommendations based on urgency/importance scoring
+- AI writing assistant (expand, summarize, improve)
+- Template generation from completed goals
+- Meeting notes → task extraction
+- Automated status report generation
+- Smart tagging based on content analysis
+- Workflow suggestions from task patterns
+- Cross-goal insights and dependency detection
+- Skill gap analysis from task history
+- Stagnation prevention with proactive nudges
+
+#### Phase 5: Ecosystem (17 items)
+- Integration directory with categories
+- OAuth flow support for service connections
+- Integration templates (pre-built workflow mappings)
+- Webhook builder with event/filter/target configuration
+- Zapier/Make trigger and action registry
+- API rate limit dashboard
+- Plugin marketplace with install/browse
+- Custom field type definitions
+- Plugin-registered custom views
+- Theming system with CSS variable overrides
+- Plugin SDK documentation endpoint
+- Monday.com, Jira, ClickUp importers
+- CSV import for bulk task creation
+- Full project export (goal + tasks + comments + artifacts)
+- API export schema documentation
+
+#### Phase 6: Enterprise (16 items)
+- SSO/SAML configuration
+- IP allowlisting with CIDR range support
+- Data encryption at rest (Fernet)
+- Audit log viewer with search/filter
+- Organization management (multi-tenant)
+- Usage analytics dashboard
+- SCIM user provisioning endpoints
+- Custom branding configuration
+- Compliance report generation
+- PostgreSQL migration planner
+- Redis caching layer (in-memory default)
+- CDN configuration for static assets
+- Horizontal scaling recommendations
+- Kubernetes deployment manifests (deploy/k8s/)
+- Terraform infrastructure modules (deploy/terraform/)
+- Multi-region configuration
+
+#### Phase 7: Documentation & Community (16 items)
+- Comprehensive user guide (docs/user-guide.md)
+- Tutorial outlines (docs/tutorials.md)
+- Quick-start guide (docs/quickstart.md)
+- FAQ & troubleshooting (docs/faq.md)
+- Architecture documentation (docs/architecture.md)
+- Plugin development guide (docs/plugin-guide.md)
+- API client examples for Python/JS/Go (docs/api-clients.md)
+- Webhook documentation (docs/webhooks.md)
+- Template gallery with community contributions
+- Blog post management
+- Public roadmap with feature voting
+- Community links (Discord, GitHub Discussions)
+- Changelog API endpoint
+
+#### Phase 8: Polish & Differentiation (18 items)
+- Level-up animation with XP tracking
+- Sound effects (Web Audio API — complete/notification/levelup)
+- Contextual first-time tooltips
+- High contrast mode (WCAG AA)
+- Smooth page transitions (fadeSlideIn/Out)
+- Card hover micro-interactions
+- Loading skeleton animations
+- Confetti on goal completion
+- Streak visualization
+- ARIA live regions for screen readers
+- Virtual scrolling for large task lists
+- Lazy view loading (deferred script loading)
+- Enhanced service worker with API response caching
+- Performance preload hints
+- Responsive image optimization
+- Reduced motion media query support
+
 ## [0.1.0] — 2026-04-09
 
 ### Added

@@ -5,13 +5,21 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>teb</title>
   <base href="{{BASE_PATH}}/" />
+  <link rel="manifest" href="{{CDN_PREFIX}}static/manifest.json" />
+  <meta name="theme-color" content="#1a1a2e" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;0,700;1,300;1,400;1,500&family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="static/style.css" />
+  <link rel="stylesheet" href="{{CDN_PREFIX}}static/style.css" />
   <script>window.__BASE_PATH__ = "{{BASE_PATH}}";</script>
+  <link rel="preload" href="static/style.css" as="style" />
+  <link rel="preload" href="static/app.js" as="script" />
+  <meta name="description" content="teb — AI-powered goal decomposition and task execution platform" />
 </head>
-<body>
+<body role="application">
+  <a href="#app" class="skip-link">Skip to content</a>
   <!-- Toast notification container -->
   <div id="toast-container" class="toast-container" aria-live="polite"></div>
 
@@ -27,7 +35,97 @@
     </div>
   </div>
 
-  <div id="app">
+  <!-- Command Palette (Cmd/Ctrl+K) -->
+  <div id="command-palette" class="command-palette-overlay" style="display:none" role="dialog" aria-label="Command palette">
+    <div class="command-palette">
+      <div class="command-palette-input-wrap">
+        <span class="command-palette-icon">⌘</span>
+        <input id="command-palette-input" type="text" placeholder="Type a command or search…" autocomplete="off" aria-label="Search commands" />
+        <kbd class="command-palette-kbd">ESC</kbd>
+      </div>
+      <div id="command-palette-results" class="command-palette-results"></div>
+    </div>
+  </div>
+
+  <!-- Sidebar -->
+  <aside id="sidebar" class="sidebar" role="navigation" aria-label="Main navigation">
+    <div class="sidebar-header">
+      <h1 class="sidebar-logo"><em>teb</em></h1>
+      <button id="btn-sidebar-collapse" class="sidebar-collapse-btn" title="Collapse sidebar" aria-label="Collapse sidebar">◀</button>
+    </div>
+    <nav class="sidebar-nav" role="navigation">
+      <a href="#/home" class="sidebar-link active" data-route="home" data-shortcut="G H">
+        <span class="sidebar-icon">🏠</span><span class="sidebar-text">Home</span>
+      </a>
+      <a href="#/dashboard" class="sidebar-link" data-route="dashboard" data-shortcut="G D">
+        <span class="sidebar-icon">📊</span><span class="sidebar-text">Dashboard</span>
+      </a>
+
+      <div class="sidebar-section">
+        <span class="sidebar-section-title">Goals</span>
+      </div>
+      <div id="sidebar-goals-list" class="sidebar-goals-list"></div>
+
+      <div class="sidebar-section">
+        <span class="sidebar-section-title">Views</span>
+      </div>
+      <a href="#/kanban" class="sidebar-link" data-route="kanban">
+        <span class="sidebar-icon">📋</span><span class="sidebar-text">Kanban</span>
+      </a>
+      <a href="#/calendar" class="sidebar-link" data-route="calendar">
+        <span class="sidebar-icon">📅</span><span class="sidebar-text">Calendar</span>
+      </a>
+      <a href="#/timeline" class="sidebar-link" data-route="timeline">
+        <span class="sidebar-icon">📈</span><span class="sidebar-text">Timeline</span>
+      </a>
+      <a href="#/gantt" class="sidebar-link" data-route="gantt">
+        <span class="sidebar-icon">📊</span><span class="sidebar-text">Gantt</span>
+      </a>
+      <a href="#/table" class="sidebar-link" data-route="table">
+        <span class="sidebar-icon">📋</span><span class="sidebar-text">Table</span>
+      </a>
+      <a href="#/workload" class="sidebar-link" data-route="workload">
+        <span class="sidebar-icon">⚖️</span><span class="sidebar-text">Workload</span>
+      </a>
+    </nav>
+    <div class="sidebar-footer">
+      <a href="#/settings" class="sidebar-link" data-route="settings">
+        <span class="sidebar-icon">⚙️</span><span class="sidebar-text">Settings</span>
+      </a>
+      <button id="btn-sidebar-admin" class="sidebar-link" style="display:none" data-route="admin">
+        <span class="sidebar-icon">🛡️</span><span class="sidebar-text">Admin</span>
+      </button>
+    </div>
+  </aside>
+
+  <!-- Mobile bottom navigation -->
+  <nav id="mobile-nav" class="mobile-nav" role="navigation" aria-label="Mobile navigation">
+    <a href="#/home" class="mobile-nav-item active" data-route="home"><span class="mobile-nav-icon">🏠</span><span>Home</span></a>
+    <a href="#/dashboard" class="mobile-nav-item" data-route="dashboard"><span class="mobile-nav-icon">📊</span><span>Dashboard</span></a>
+    <a href="#/kanban" class="mobile-nav-item" data-route="kanban"><span class="mobile-nav-icon">📋</span><span>Kanban</span></a>
+    <a href="#/settings" class="mobile-nav-item" data-route="settings"><span class="mobile-nav-icon">⚙️</span><span>Settings</span></a>
+  </nav>
+
+  <!-- Main layout -->
+  <div id="app-layout" class="app-layout">
+    <!-- Header bar -->
+    <header id="header-bar" class="header-bar">
+      <button id="btn-mobile-menu" class="header-menu-btn" aria-label="Open menu">☰</button>
+      <nav id="breadcrumbs" class="breadcrumbs" aria-label="Breadcrumb">
+        <a href="#/home" class="breadcrumb-link">Home</a>
+      </nav>
+      <div class="header-actions">
+        <button id="btn-cmd-palette" class="header-action-btn" title="Command palette (Ctrl+K)" aria-label="Open command palette">
+          <span>🔍</span>
+          <kbd class="header-kbd">⌘K</kbd>
+        </button>
+        <button id="btn-theme-toggle" class="header-action-btn theme-toggle" title="Toggle dark mode" aria-label="Toggle dark mode">🌙</button>
+        <span id="header-user-email" class="header-user-email"></span>
+        <button id="btn-header-auth" class="btn-primary btn-sm" style="display:none">Sign in</button>
+      </div>
+    </header>
+
+    <div id="app" role="main" aria-live="polite">
     <!-- Auth screen -->
     <section id="screen-auth" class="screen" role="main">
       <header class="hero">
@@ -59,9 +157,6 @@
         <p class="tagline">From ambition to execution.</p>
         <div id="user-bar" class="user-bar" style="display:none">
           <span id="user-email"></span>
-          <button id="btn-theme-toggle" class="theme-toggle" title="Toggle dark mode" aria-label="Toggle dark mode">🌙</button>
-          <button id="btn-admin" class="btn-secondary btn-sm" style="display:none">Admin</button>
-          <button id="btn-settings" class="btn-secondary btn-sm">Settings</button>
           <button id="btn-logout" class="btn-secondary btn-sm">Sign out</button>
         </div>
       </header>
@@ -123,6 +218,12 @@
         <div class="progress-detail" id="progress-detail"></div>
         <div id="status-chart"></div>
         <div id="stall-banner" class="stall-banner" style="display:none"></div>
+      </div>
+
+      <!-- Quick-add task bar (always visible at top of task list) -->
+      <div class="quick-add-bar">
+        <input id="quick-add-input" type="text" placeholder="Add a task… (press Enter)" autocomplete="off" />
+        <button id="btn-quick-add" class="btn-primary btn-sm">+ Add</button>
       </div>
 
       <!-- Budget setup prompt (shown when autopilot enabled but no budget) -->
@@ -426,6 +527,80 @@
     </div>
   </div>
 
-  <script src="static/app.js"></script>
+  <!-- Task detail slide-out panel -->
+  <div id="task-detail-panel" class="task-detail-panel" style="display:none">
+    <div class="task-detail-header">
+      <h3 id="task-detail-title" class="task-detail-title"></h3>
+      <button id="btn-close-task-detail" class="btn-close" aria-label="Close task detail">&times;</button>
+    </div>
+    <div class="task-detail-body">
+      <div class="task-detail-field">
+        <label>Status</label>
+        <select id="task-detail-status">
+          <option value="todo">To Do</option>
+          <option value="in_progress">In Progress</option>
+          <option value="executing">Executing</option>
+          <option value="done">Done</option>
+          <option value="failed">Failed</option>
+          <option value="skipped">Skipped</option>
+        </select>
+      </div>
+      <div class="task-detail-field">
+        <label>Description</label>
+        <textarea id="task-detail-desc" rows="3"></textarea>
+      </div>
+      <div class="task-detail-field">
+        <label>Due date</label>
+        <input id="task-detail-due" type="date" />
+      </div>
+      <div class="task-detail-field">
+        <label>Estimated time (min)</label>
+        <input id="task-detail-est" type="number" min="0" />
+      </div>
+      <div class="task-detail-field">
+        <label>Tags (comma-separated)</label>
+        <input id="task-detail-tags" type="text" placeholder="design, frontend" />
+      </div>
+      <div class="task-detail-field">
+        <label>Subtask Progress</label>
+        <div id="task-detail-subtasks" class="task-detail-subtasks"></div>
+      </div>
+      <div class="task-detail-actions">
+        <button id="btn-task-detail-save" class="btn-primary btn-sm">Save changes</button>
+        <button id="btn-task-detail-delete" class="btn-secondary btn-sm" style="color:var(--danger)">Delete task</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Batch operations bar -->
+  <div id="batch-bar" class="batch-bar" style="display:none">
+    <span id="batch-count" class="batch-count">0 selected</span>
+    <button id="btn-batch-done" class="btn-primary btn-sm">✓ Complete</button>
+    <button id="btn-batch-progress" class="btn-secondary btn-sm">▶ Start</button>
+    <button id="btn-batch-delete" class="btn-secondary btn-sm" style="color:var(--danger)">✕ Delete</button>
+    <button id="btn-batch-clear" class="btn-secondary btn-sm">Cancel</button>
+  </div>
+
+    </div><!-- end #app -->
+  </div><!-- end .app-layout -->
+
+  <script src="{{CDN_PREFIX}}static/views/kanban.js"></script>
+  <script src="{{CDN_PREFIX}}static/views/calendar.js"></script>
+  <script src="{{CDN_PREFIX}}static/views/timeline.js"></script>
+  <script src="{{CDN_PREFIX}}static/views/gantt.js"></script>
+  <script src="{{CDN_PREFIX}}static/views/table.js"></script>
+  <script src="{{CDN_PREFIX}}static/views/workload.js"></script>
+  <script src="{{CDN_PREFIX}}static/views/mindmap.js"></script>
+  <script src="{{CDN_PREFIX}}static/views/charts.js"></script>
+  <script src="{{CDN_PREFIX}}static/app.js"></script>
+  <script>
+    // Register service worker for PWA support
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register(
+        (window.__BASE_PATH__ || '') + '/static/sw.js',
+        { scope: (window.__BASE_PATH__ || '') + '/' }
+      ).catch(() => {});
+    }
+  </script>
 </body>
 </html>

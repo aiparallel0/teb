@@ -37,6 +37,7 @@ class Goal:
     answers: dict = field(default_factory=dict)
     auto_execute: bool = False        # when True, tasks are auto-picked by the execution loop
     tags: str = ""                     # comma-separated tags for AI routing and categorization
+    version: int = 1                   # optimistic concurrency control
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
@@ -51,6 +52,7 @@ class Goal:
             "answers": self.answers,
             "auto_execute": self.auto_execute,
             "tags": [t.strip() for t in self.tags.split(",") if t.strip()] if self.tags else [],
+            "version": self.version,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
         }
@@ -69,6 +71,8 @@ class Task:
     due_date: str = ""                 # ISO date string (e.g. "2025-06-15")
     depends_on: str = "[]"             # JSON array of task IDs this task depends on
     tags: str = ""                     # comma-separated tags for AI routing and categorization
+    assigned_to: Optional[int] = None  # FK to users; task assignment
+    version: int = 1                   # optimistic concurrency control
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
@@ -86,6 +90,8 @@ class Task:
             "due_date": self.due_date if self.due_date else None,
             "depends_on": _json.loads(self.depends_on) if self.depends_on else [],
             "tags": [t.strip() for t in self.tags.split(",") if t.strip()] if self.tags else [],
+            "assigned_to": self.assigned_to,
+            "version": self.version,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
         }
@@ -1120,5 +1126,704 @@ class DashboardWidget:
             "position": self.position,
             "config": _json.loads(self.config_json) if self.config_json else {},
             "enabled": self.enabled,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+# ─── Phase 2: Collaboration ────────────────────────────────────────────────
+
+@dataclass
+class Workspace:
+    """Team workspace container."""
+    name: str
+    owner_id: int
+    description: str = ""
+    invite_code: str = ""
+    plan: str = "free"                 # free | pro | enterprise
+    id: Optional[int] = None
+    created_at: Optional[datetime] = None
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "name": self.name,
+            "owner_id": self.owner_id,
+            "description": self.description,
+            "invite_code": self.invite_code,
+            "plan": self.plan,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+@dataclass
+class WorkspaceMember:
+    """User membership in a workspace."""
+    workspace_id: int
+    user_id: int
+    role: str = "member"               # owner | admin | member | viewer
+    id: Optional[int] = None
+    joined_at: Optional[datetime] = None
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "workspace_id": self.workspace_id,
+            "user_id": self.user_id,
+            "role": self.role,
+            "joined_at": self.joined_at.isoformat() if self.joined_at else None,
+        }
+
+
+@dataclass
+class Notification:
+    """In-app notification for a user."""
+    user_id: int
+    title: str
+    body: str = ""
+    notification_type: str = "info"    # info | mention | assignment | comment | completion
+    source_type: str = ""              # task | goal | comment | workspace
+    source_id: Optional[int] = None
+    read: bool = False
+    id: Optional[int] = None
+    created_at: Optional[datetime] = None
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "user_id": self.user_id,
+            "title": self.title,
+            "body": self.body,
+            "notification_type": self.notification_type,
+            "source_type": self.source_type,
+            "source_id": self.source_id,
+            "read": self.read,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+@dataclass
+class ActivityFeedEntry:
+    """Activity feed entry for team visibility."""
+    user_id: int
+    action: str                        # created | updated | completed | commented | assigned
+    entity_type: str                   # goal | task | comment | workspace
+    entity_id: int
+    entity_title: str = ""
+    details: str = ""
+    workspace_id: Optional[int] = None
+    goal_id: Optional[int] = None
+    id: Optional[int] = None
+    created_at: Optional[datetime] = None
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "user_id": self.user_id,
+            "action": self.action,
+            "entity_type": self.entity_type,
+            "entity_id": self.entity_id,
+            "entity_title": self.entity_title,
+            "details": self.details,
+            "workspace_id": self.workspace_id,
+            "goal_id": self.goal_id,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+@dataclass
+class CommentReaction:
+    """Emoji reaction on a comment."""
+    comment_id: int
+    user_id: int
+    emoji: str = "👍"
+    id: Optional[int] = None
+    created_at: Optional[datetime] = None
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "comment_id": self.comment_id,
+            "user_id": self.user_id,
+            "emoji": self.emoji,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+# ─── Phase 2: Direct Messaging ─────────────────────────────────────────────
+
+@dataclass
+class DirectMessage:
+    """Direct message between two users."""
+    sender_id: int
+    recipient_id: int
+    content: str
+    read: bool = False
+    id: Optional[int] = None
+    created_at: Optional[datetime] = None
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "sender_id": self.sender_id,
+            "recipient_id": self.recipient_id,
+            "content": self.content,
+            "read": self.read,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+# ─── Phase 2: Goal-Scoped Chat ─────────────────────────────────────────────
+
+@dataclass
+class GoalChatMessage:
+    """Chat message scoped to a goal."""
+    goal_id: int
+    user_id: int
+    content: str
+    id: Optional[int] = None
+    created_at: Optional[datetime] = None
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "goal_id": self.goal_id,
+            "user_id": self.user_id,
+            "content": self.content,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+# ─── Phase 2: Email Notification Preferences ───────────────────────────────
+
+@dataclass
+class EmailNotificationConfig:
+    """Email notification preferences for a user."""
+    user_id: int
+    digest_frequency: str = "none"     # none | daily | weekly
+    notify_on_mention: bool = True
+    notify_on_assignment: bool = True
+    notify_on_comment: bool = True
+    id: Optional[int] = None
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "user_id": self.user_id,
+            "digest_frequency": self.digest_frequency,
+            "notify_on_mention": self.notify_on_mention,
+            "notify_on_assignment": self.notify_on_assignment,
+            "notify_on_comment": self.notify_on_comment,
+        }
+
+
+# ─── Phase 2: Push Subscriptions ───────────────────────────────────────────
+
+@dataclass
+class PushSubscription:
+    """Web push notification subscription."""
+    user_id: int
+    endpoint: str
+    p256dh: str = ""
+    auth: str = ""
+    id: Optional[int] = None
+    created_at: Optional[datetime] = None
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "user_id": self.user_id,
+            "endpoint": self.endpoint,
+            "p256dh": self.p256dh,
+            "auth": self.auth,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+# ─── Phase 6: Enterprise Security ──────────────────────────────────────────
+
+@dataclass
+class SSOConfig:
+    """SSO/SAML configuration for an organization."""
+    org_id: int
+    provider: str = ""                 # okta | azure_ad | google | onelogin | custom
+    entity_id: str = ""
+    sso_url: str = ""
+    certificate: str = ""
+    id: Optional[int] = None
+    created_at: Optional[datetime] = None
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "org_id": self.org_id,
+            "provider": self.provider,
+            "entity_id": self.entity_id,
+            "sso_url": self.sso_url,
+            "certificate_set": bool(self.certificate),
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+@dataclass
+class IPAllowlist:
+    """IP allowlist entry for an organization."""
+    org_id: int
+    cidr_range: str = ""
+    description: str = ""
+    id: Optional[int] = None
+    created_at: Optional[datetime] = None
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "org_id": self.org_id,
+            "cidr_range": self.cidr_range,
+            "description": self.description,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+@dataclass
+class Organization:
+    """Organization / tenant for multi-org enterprise support."""
+    name: str
+    slug: str = ""
+    owner_id: Optional[int] = None
+    settings_json: str = "{}"
+    id: Optional[int] = None
+    created_at: Optional[datetime] = None
+
+    def to_dict(self) -> dict:
+        import json as _json
+        return {
+            "id": self.id,
+            "name": self.name,
+            "slug": self.slug,
+            "owner_id": self.owner_id,
+            "settings": _json.loads(self.settings_json) if self.settings_json else {},
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+@dataclass
+class BrandingConfig:
+    """Custom branding configuration for an organization."""
+    org_id: int
+    logo_url: str = ""
+    primary_color: str = "#1a1a2e"
+    secondary_color: str = "#16213e"
+    app_name: str = "teb"
+    favicon_url: str = ""
+    id: Optional[int] = None
+    created_at: Optional[datetime] = None
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "org_id": self.org_id,
+            "logo_url": self.logo_url,
+            "primary_color": self.primary_color,
+            "secondary_color": self.secondary_color,
+            "app_name": self.app_name,
+            "favicon_url": self.favicon_url,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+@dataclass
+class UserSession:
+    """Active user session tracking."""
+    user_id: int
+    session_token: str
+    ip_address: str = ""
+    user_agent: str = ""
+    is_active: bool = True
+    last_activity: str = ""
+    id: Optional[int] = None
+    created_at: Optional[datetime] = None
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "user_id": self.user_id,
+            "ip_address": self.ip_address,
+            "user_agent": self.user_agent,
+            "is_active": self.is_active,
+            "last_activity": self.last_activity or None,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+@dataclass
+class TwoFactorConfig:
+    """2FA configuration per user."""
+    user_id: int
+    totp_secret: str = ""
+    is_enabled: bool = False
+    backup_codes_hash: str = ""        # JSON array of hashed backup codes
+    id: Optional[int] = None
+    created_at: Optional[datetime] = None
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "user_id": self.user_id,
+            "is_enabled": self.is_enabled,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+# ─── Phase 3: Saved Views ───────────────────────────────────────────────────
+
+@dataclass
+class SavedView:
+    """User-saved view configuration (filters, sort, group-by)."""
+    user_id: int
+    name: str
+    view_type: str = "list"            # list | kanban | table | gantt | workload | timeline | calendar | mindmap
+    filters_json: str = "{}"
+    sort_json: str = "{}"
+    group_by: str = ""
+    id: Optional[int] = None
+    created_at: Optional[datetime] = None
+
+    def to_dict(self) -> dict:
+        import json as _json
+        return {
+            "id": self.id,
+            "user_id": self.user_id,
+            "name": self.name,
+            "view_type": self.view_type,
+            "filters": _json.loads(self.filters_json) if self.filters_json else {},
+            "sort": _json.loads(self.sort_json) if self.sort_json else {},
+            "group_by": self.group_by or None,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+# ─── Phase 3: Dashboard Layouts ─────────────────────────────────────────────
+
+@dataclass
+class DashboardLayout:
+    """User-configurable dashboard layout with positioned widgets."""
+    user_id: int
+    name: str
+    widgets_json: str = "[]"
+    id: Optional[int] = None
+    created_at: Optional[datetime] = None
+
+    def to_dict(self) -> dict:
+        import json as _json
+        return {
+            "id": self.id,
+            "user_id": self.user_id,
+            "name": self.name,
+            "widgets": _json.loads(self.widgets_json) if self.widgets_json else [],
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+# ─── Phase 3: Scheduled Reports ─────────────────────────────────────────────
+
+@dataclass
+class ScheduledReport:
+    """Configuration for a scheduled report delivery."""
+    user_id: int
+    report_type: str = "progress"      # progress | burndown | time_tracking
+    frequency: str = "weekly"           # daily | weekly | monthly
+    recipients_json: str = "[]"
+    id: Optional[int] = None
+    created_at: Optional[datetime] = None
+    last_sent_at: Optional[datetime] = None
+
+    def to_dict(self) -> dict:
+        import json as _json
+        return {
+            "id": self.id,
+            "user_id": self.user_id,
+            "report_type": self.report_type,
+            "frequency": self.frequency,
+            "recipients": _json.loads(self.recipients_json) if self.recipients_json else [],
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "last_sent_at": self.last_sent_at.isoformat() if self.last_sent_at else None,
+        }
+
+
+# ─── Phase 5: Ecosystem ──────────────────────────────────────────────────────
+
+@dataclass
+class IntegrationListing:
+    """A published integration in the integration directory/marketplace."""
+    name: str
+    category: str = ""
+    description: str = ""
+    icon_url: str = ""
+    auth_type: str = "api_key"   # api_key | oauth | none
+    enabled: bool = True
+    id: Optional[int] = None
+    created_at: Optional[datetime] = None
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "name": self.name,
+            "category": self.category,
+            "description": self.description,
+            "icon_url": self.icon_url,
+            "auth_type": self.auth_type,
+            "enabled": self.enabled,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+@dataclass
+class OAuthConnection:
+    """Stored OAuth connection for a user+provider pair."""
+    user_id: int
+    provider: str
+    access_token_encrypted: str = ""
+    refresh_token_encrypted: str = ""
+    expires_at: Optional[datetime] = None
+    id: Optional[int] = None
+    created_at: Optional[datetime] = None
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "user_id": self.user_id,
+            "provider": self.provider,
+            "connected": bool(self.access_token_encrypted),
+            "expires_at": self.expires_at.isoformat() if self.expires_at else None,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+@dataclass
+class IntegrationTemplate:
+    """Pre-built integration mapping between two services."""
+    name: str
+    description: str = ""
+    source_service: str = ""
+    target_service: str = ""
+    mapping_json: str = "{}"
+    id: Optional[int] = None
+    created_at: Optional[datetime] = None
+
+    def to_dict(self) -> dict:
+        import json as _json
+        return {
+            "id": self.id,
+            "name": self.name,
+            "description": self.description,
+            "source_service": self.source_service,
+            "target_service": self.target_service,
+            "mapping": _json.loads(self.mapping_json) if self.mapping_json else {},
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+@dataclass
+class WebhookRule:
+    """User-defined webhook routing rule with filters."""
+    user_id: int
+    name: str = ""
+    event_type: str = ""
+    filter_json: str = "{}"
+    target_url: str = ""
+    headers_json: str = "{}"
+    active: bool = True
+    id: Optional[int] = None
+    created_at: Optional[datetime] = None
+
+    def to_dict(self) -> dict:
+        import json as _json
+        return {
+            "id": self.id,
+            "user_id": self.user_id,
+            "name": self.name,
+            "event_type": self.event_type,
+            "filter": _json.loads(self.filter_json) if self.filter_json else {},
+            "target_url": self.target_url,
+            "headers": _json.loads(self.headers_json) if self.headers_json else {},
+            "active": self.active,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+@dataclass
+class PluginListing:
+    """A plugin available in the plugin marketplace."""
+    name: str
+    description: str = ""
+    author: str = ""
+    version: str = "0.1.0"
+    downloads: int = 0
+    rating: float = 0.0
+    manifest_json: str = "{}"
+    id: Optional[int] = None
+    created_at: Optional[datetime] = None
+
+    def to_dict(self) -> dict:
+        import json as _json
+        return {
+            "id": self.id,
+            "name": self.name,
+            "description": self.description,
+            "author": self.author,
+            "version": self.version,
+            "downloads": self.downloads,
+            "rating": self.rating,
+            "manifest": _json.loads(self.manifest_json) if self.manifest_json else {},
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+@dataclass
+class CustomFieldDefinition:
+    """Plugin-defined custom field type."""
+    plugin_id: int
+    field_type: str = "text"
+    label: str = ""
+    options_json: str = "[]"
+    id: Optional[int] = None
+    created_at: Optional[datetime] = None
+
+    def to_dict(self) -> dict:
+        import json as _json
+        return {
+            "id": self.id,
+            "plugin_id": self.plugin_id,
+            "field_type": self.field_type,
+            "label": self.label,
+            "options": _json.loads(self.options_json) if self.options_json else [],
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+@dataclass
+class PluginView:
+    """Custom view provided by a plugin."""
+    plugin_id: int
+    name: str = ""
+    view_type: str = "board"
+    config_json: str = "{}"
+    id: Optional[int] = None
+    created_at: Optional[datetime] = None
+
+    def to_dict(self) -> dict:
+        import json as _json
+        return {
+            "id": self.id,
+            "plugin_id": self.plugin_id,
+            "name": self.name,
+            "view_type": self.view_type,
+            "config": _json.loads(self.config_json) if self.config_json else {},
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+@dataclass
+class Theme:
+    """UI theme with customizable CSS variables."""
+    name: str
+    author: str = ""
+    css_variables_json: str = "{}"
+    is_active: bool = False
+    id: Optional[int] = None
+    created_at: Optional[datetime] = None
+
+    def to_dict(self) -> dict:
+        import json as _json
+        return {
+            "id": self.id,
+            "name": self.name,
+            "author": self.author,
+            "css_variables": _json.loads(self.css_variables_json) if self.css_variables_json else {},
+            "is_active": self.is_active,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+# ─── Phase 7: Community models ───────────────────────────────────────────────
+
+import json as _json_std
+
+
+@dataclass
+class TemplateGalleryEntry:
+    """User-contributed goal/project template."""
+    name: str
+    description: str = ""
+    author: str = ""
+    category: str = ""
+    template_json: str = "{}"
+    downloads: int = 0
+    rating: float = 0.0
+    id: Optional[int] = None
+    created_at: Optional[datetime] = None
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id, "name": self.name, "description": self.description,
+            "author": self.author, "category": self.category,
+            "template": _json_std.loads(self.template_json) if self.template_json else {},
+            "downloads": self.downloads, "rating": self.rating,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+@dataclass
+class BlogPost:
+    """Blog post for product updates and tutorials."""
+    title: str
+    slug: str
+    content: str = ""
+    author: str = ""
+    published: bool = False
+    id: Optional[int] = None
+    created_at: Optional[datetime] = None
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id, "title": self.title, "slug": self.slug,
+            "content": self.content, "author": self.author,
+            "published": self.published,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+@dataclass
+class RoadmapItem:
+    """Public roadmap feature item."""
+    title: str
+    description: str = ""
+    status: str = "planned"  # planned | in_progress | completed
+    votes: int = 0
+    category: str = ""
+    target_date: str = ""
+    id: Optional[int] = None
+    created_at: Optional[datetime] = None
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id, "title": self.title, "description": self.description,
+            "status": self.status, "votes": self.votes, "category": self.category,
+            "target_date": self.target_date,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+@dataclass
+class FeatureVote:
+    """User vote on a roadmap item."""
+    user_id: int
+    roadmap_item_id: int
+    id: Optional[int] = None
+    created_at: Optional[datetime] = None
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id, "user_id": self.user_id,
+            "roadmap_item_id": self.roadmap_item_id,
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }
