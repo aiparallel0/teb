@@ -1917,7 +1917,7 @@ on('btn-orchestrate', 'click', async () => {
     await refreshGoalView();
     toast.success('Orchestration complete', `${handoffs.length} agent handoffs, tasks updated.`);
   } catch (e) {
-    content.innerHTML = `<p class="error">${escHtml(e.message)}</p>`;
+    if (content) content.innerHTML = `<p class="error">${escHtml(e.message)}</p>`;
   } finally {
     if (btn) { btn.disabled = false; btn.textContent = 'Orchestrate'; }
   }
