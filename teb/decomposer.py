@@ -2634,9 +2634,11 @@ def estimate_risk(task_id: int) -> Dict[str, Any]:
 
 def _get_dependency_depth(task: Task, task_map: Dict[int, Task], visited: Set[int]) -> int:
     """Recursively compute dependency depth."""
+    if task.id is None:
+        return 0
     if task.id in visited:
         return 0
-    visited = visited | {task.id if task.id else 0}
+    visited = visited | {task.id}
     try:
         deps = json.loads(task.depends_on) if task.depends_on else []
     except (json.JSONDecodeError, ValueError):
