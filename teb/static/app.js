@@ -2699,6 +2699,13 @@ async function loadRoiDashboard() {
   const panel = document.getElementById('roi-dashboard-panel');
   if (!panel) return;
 
+  // Show panel immediately with a loading indicator so the user knows data is coming
+  const roiContent = document.getElementById('roi-dashboard-content');
+  if (roiContent) {
+    roiContent.innerHTML = '<div class="empty-state" style="padding:var(--space-md)"><div class="empty-state-desc">Loading ROI data…</div></div>';
+  }
+  panel.style.display = 'block';
+
   try {
     const roi = await api.get(`/api/goals/${currentGoalId}/roi`);
 
@@ -2815,12 +2822,24 @@ async function loadRoiDashboard() {
       budgets.innerHTML = '';
     }
 
-    // Show/hide panel based on data
+    // Show panel — either with data or with a helpful empty-state
     const hasData = roi.total_spent > 0 || roi.total_earned > 0 || roi.pending_requests > 0;
-    panel.style.display = hasData ? 'block' : 'none';
+    if (!hasData) {
+      ['roi-summary-cards', 'roi-spending-breakdown', 'roi-timeline', 'roi-earnings', 'roi-budgets'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.innerHTML = '';
+      });
+      if (roiContent) {
+        roiContent.innerHTML = '<div class="empty-state"><div class="empty-state-icon">💰</div><div class="empty-state-title">No financial data yet</div><div class="empty-state-desc">Enable autopilot and approve spending requests to track ROI here.</div></div>';
+      }
+    }
+    panel.style.display = 'block';
   } catch (e) {
     console.warn('ROI dashboard load failed:', e);
-    panel.style.display = 'none';
+    if (roiContent) {
+      roiContent.innerHTML = '<div class="empty-state"><div class="empty-state-icon">💰</div><div class="empty-state-title">No financial data yet</div><div class="empty-state-desc">Enable autopilot and approve spending requests to track ROI here.</div></div>';
+    }
+    panel.style.display = 'block';
   }
 }
 
@@ -2884,7 +2903,7 @@ async function loadPlatformInsights() {
       html += `</div>`;
     }
 
-    content.innerHTML = html || '<p class="sub">Not enough data yet. Keep working on goals!</p>';
+    content.innerHTML = html || '<div class="empty-state"><div class="empty-state-icon">📡</div><div class="empty-state-title">Not enough data yet</div><div class="empty-state-desc">Insights will appear as you and others use the platform.</div></div>';
     panel.style.display = 'block';
   } catch (e) {
     console.warn('Platform insights load failed:', e);
@@ -3482,12 +3501,20 @@ const ViewSwitcher = {
         if (typeof CalendarView !== 'undefined') CalendarView.render(tasks, viewContainer);
         break;
       case 'mindmap':
-        if (typeof renderMindMap !== 'undefined' && currentGoalId) {
-          viewContainer.id = 'mindmap-container';
-          viewContainer.style.minHeight = '400px';
+        viewContainer.id = 'mindmap-container';
+        viewContainer.style.minHeight = '400px';
+        if (typeof renderMindMap !== 'undefined') {
           api.get('/api/goals').then(goals => {
-            renderMindMap('mindmap-container', goals);
-          }).catch(() => {});
+            if (!goals || !goals.length) {
+              viewContainer.innerHTML = '<div class="empty-state"><div class="empty-state-icon">🗺️</div><div class="empty-state-title">No goals to map</div><div class="empty-state-desc">Create your first goal and it will appear here as a mind map.</div></div>';
+            } else {
+              renderMindMap('mindmap-container', goals);
+            }
+          }).catch(() => {
+            viewContainer.innerHTML = '<div class="empty-state"><div class="empty-state-icon">🗺️</div><div class="empty-state-title">Mind map unavailable</div><div class="empty-state-desc">Could not load goals. Please try again.</div></div>';
+          });
+        } else {
+          viewContainer.innerHTML = '<div class="empty-state"><div class="empty-state-icon">🗺️</div><div class="empty-state-title">Mind map unavailable</div><div class="empty-state-desc">The mind map module could not be loaded.</div></div>';
         }
         break;
     }
@@ -3645,7 +3672,11 @@ const DashboardBuilder = {
     grid.innerHTML = '';
 
     if (!this._widgets.length) {
-      grid.innerHTML = '<div class="empty-state"><div class="empty-state-icon">📊</div><div class="empty-state-title">No widgets</div><div class="empty-state-desc">Click "+ Add Widget" to get started.</div></div>';
+      if (!currentGoalId) {
+        grid.innerHTML = '<div class="empty-state"><div class="empty-state-icon">🎯</div><div class="empty-state-title">No goals yet</div><div class="empty-state-desc">Create your first goal to see dashboard widgets here.</div></div>';
+      } else {
+        grid.innerHTML = '<div class="empty-state"><div class="empty-state-icon">📊</div><div class="empty-state-title">No widgets yet</div><div class="empty-state-desc">Click "+ Add Widget" to build your custom dashboard.</div></div>';
+      }
       return;
     }
 
