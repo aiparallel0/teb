@@ -5,6 +5,12 @@
 const TimelineView = {
   render(tasks, container) {
     container.innerHTML = '';
+
+    if (!tasks || tasks.length === 0) {
+      container.innerHTML = '<div class="empty-state-large"><div class="empty-state-icon"><svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="Timeline"><line x1="12" y1="2" x2="12" y2="22"/><circle cx="12" cy="6" r="2.5" fill="currentColor"/><circle cx="12" cy="12" r="2.5" fill="currentColor"/><circle cx="12" cy="18" r="2.5" fill="currentColor"/><line x1="14.5" y1="6" x2="20" y2="6"/><line x1="4" y1="12" x2="9.5" y2="12"/><line x1="14.5" y1="18" x2="20" y2="18"/></svg></div><div class="empty-state-title">Timeline</div><div class="empty-state-desc">Tasks will appear here as they are created, ordered by estimated effort.</div></div>';
+      return;
+    }
+
     const timeline = document.createElement('div');
     timeline.className = 'timeline-view';
 

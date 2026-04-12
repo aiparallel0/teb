@@ -187,6 +187,19 @@ function showScreen(id) {
 
 // ─── Hash-based URL Router ────────────────────────────────────────────────────
 
+// Helper: switch to a named view (kanban, calendar, timeline, gantt, table, workload, mindmap)
+// Ensures the all-tasks-section is visible, drip-section hidden, and the correct ViewSwitcher view is loaded.
+function _switchToView(viewKey) {
+  const dripSection = document.getElementById('drip-section');
+  const allTasksSection = document.getElementById('all-tasks-section');
+  if (dripSection) dripSection.style.display = 'none';
+  if (allTasksSection) allTasksSection.style.display = 'block';
+  _currentViewType = viewKey;
+  localStorage.setItem('teb_view_type', viewKey);
+  ViewSwitcher.init();
+  ViewSwitcher.loadView(viewKey);
+}
+
 const Router = {
   _current: '',
   routes: {
@@ -207,30 +220,37 @@ const Router = {
     '/kanban': () => {
       showScreen('screen-tasks');
       updateBreadcrumbs([{text:'Home', href:'#/home'}, {text: currentGoalTitle || 'Goal', href: currentGoalId ? `#/goal/${currentGoalId}` : '#/home'}, {text:'Kanban'}]);
+      _switchToView('kanban');
     },
     '/calendar': () => {
       showScreen('screen-tasks');
       updateBreadcrumbs([{text:'Home', href:'#/home'}, {text: currentGoalTitle || 'Goal', href: currentGoalId ? `#/goal/${currentGoalId}` : '#/home'}, {text:'Calendar'}]);
+      _switchToView('calendar');
     },
     '/timeline': () => {
       showScreen('screen-tasks');
       updateBreadcrumbs([{text:'Home', href:'#/home'}, {text: currentGoalTitle || 'Goal', href: currentGoalId ? `#/goal/${currentGoalId}` : '#/home'}, {text:'Timeline'}]);
+      _switchToView('timeline');
     },
     '/gantt': () => {
       showScreen('screen-tasks');
       updateBreadcrumbs([{text:'Home', href:'#/home'}, {text: currentGoalTitle || 'Goal', href: currentGoalId ? `#/goal/${currentGoalId}` : '#/home'}, {text:'Gantt'}]);
+      _switchToView('gantt');
     },
     '/table': () => {
       showScreen('screen-tasks');
       updateBreadcrumbs([{text:'Home', href:'#/home'}, {text: currentGoalTitle || 'Goal', href: currentGoalId ? `#/goal/${currentGoalId}` : '#/home'}, {text:'Table'}]);
+      _switchToView('table');
     },
     '/workload': () => {
       showScreen('screen-tasks');
       updateBreadcrumbs([{text:'Home', href:'#/home'}, {text: currentGoalTitle || 'Goal', href: currentGoalId ? `#/goal/${currentGoalId}` : '#/home'}, {text:'Workload'}]);
+      _switchToView('workload');
     },
     '/mindmap': () => {
       showScreen('screen-tasks');
       updateBreadcrumbs([{text:'Home', href:'#/home'}, {text: currentGoalTitle || 'Goal', href: currentGoalId ? `#/goal/${currentGoalId}` : '#/home'}, {text:'Mind Map'}]);
+      _switchToView('mindmap');
     },
     '/dashboard': () => {
       showScreen('screen-tasks');
@@ -3367,14 +3387,14 @@ function renderStreak(container, tasks) {
 
 const ViewSwitcher = {
   _views: [
-    { key: 'list', label: 'List', icon: '📋' },
-    { key: 'kanban', label: 'Kanban', icon: '📊' },
-    { key: 'table', label: 'Table', icon: '📄' },
-    { key: 'gantt', label: 'Gantt', icon: '📈' },
-    { key: 'workload', label: 'Workload', icon: '⚖️' },
-    { key: 'timeline', label: 'Timeline', icon: '🕐' },
-    { key: 'calendar', label: 'Calendar', icon: '📅' },
-    { key: 'mindmap', label: 'Mind Map', icon: '🧠' },
+    { key: 'list', label: 'List', icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>' },
+    { key: 'kanban', label: 'Kanban', icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="5" height="18" rx="1"/><rect x="9.5" y="3" width="5" height="12" rx="1"/><rect x="17" y="3" width="5" height="15" rx="1"/></svg>' },
+    { key: 'table', label: 'Table', icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/><line x1="9" y1="3" x2="9" y2="21"/><line x1="15" y1="3" x2="15" y2="21"/></svg>' },
+    { key: 'gantt', label: 'Gantt', icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="14" height="3" rx="1.5" fill="currentColor" opacity=".7"/><rect x="6" y="10" width="10" height="3" rx="1.5" fill="currentColor" opacity=".5"/><rect x="4" y="16" width="16" height="3" rx="1.5" fill="currentColor" opacity=".3"/></svg>' },
+    { key: 'workload', label: 'Workload', icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><line x1="15" y1="11" x2="23" y2="11"/><line x1="15" y1="15" x2="20" y2="15"/></svg>' },
+    { key: 'timeline', label: 'Timeline', icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="2" x2="12" y2="22"/><circle cx="12" cy="6" r="2.5" fill="currentColor"/><circle cx="12" cy="12" r="2.5" fill="currentColor"/><circle cx="12" cy="18" r="2.5" fill="currentColor"/></svg>' },
+    { key: 'calendar', label: 'Calendar', icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>' },
+    { key: 'mindmap', label: 'Mind Map', icon: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><line x1="12" y1="2" x2="12" y2="9"/><line x1="12" y1="15" x2="12" y2="22"/><line x1="2" y1="12" x2="9" y2="12"/><line x1="15" y1="12" x2="22" y2="12"/></svg>' },
   ],
 
   render(containerId) {

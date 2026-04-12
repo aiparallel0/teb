@@ -29,7 +29,7 @@ const WorkloadView = {
     const maxMinutes = Math.max(self.OVERLOAD_MINUTES, ...people.map(p => groups[p].reduce((s, t) => s + (t.estimated_minutes || 0), 0)));
 
     if (!people.length) {
-      wrapper.innerHTML = '<div class="empty-state"><div class="empty-state-icon">⚖️</div><div class="empty-state-title">No tasks to display</div></div>';
+      wrapper.innerHTML = '<div class="empty-state-large"><div class="empty-state-icon"><svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="Workload"><path d="M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2"/><circle cx="9" cy="7" r="4"/><rect x="15" y="11" width="8" height="2.5" rx="1" fill="currentColor" opacity=".6"/><rect x="15" y="15" width="5" height="2.5" rx="1" fill="currentColor" opacity=".4"/><rect x="15" y="19" width="6.5" height="2.5" rx="1" fill="currentColor" opacity=".5"/></svg></div><div class="empty-state-title">Workload View</div><div class="empty-state-desc">Assign tasks to team members to see workload distribution.</div></div>';
       container.appendChild(wrapper);
       return;
     }
