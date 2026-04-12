@@ -164,7 +164,589 @@ function hideLoading() {
 
 function showScreen(id) {
   document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
-  document.getElementById(id).classList.add('active');
+  const el = document.getElementById(id);
+  if (el) el.classList.add('active');
+}
+
+// ─── Hash-based URL Router ────────────────────────────────────────────────────
+
+const Router = {
+  _current: '',
+  routes: {
+    '/home': () => {
+      const token = localStorage.getItem('teb_token');
+      if (!token) { showScreen('screen-auth'); updateBreadcrumbs([{text:'Sign in'}]); }
+      else { showScreen('screen-landing'); updateBreadcrumbs([{text:'Home'}]); loadGoalList(); }
+    },
+    '/auth': () => { showScreen('screen-auth'); updateBreadcrumbs([{text:'Sign in'}]); },
+    '/goal/:id': (params) => {
+      showScreen('screen-tasks');
+      updateBreadcrumbs([{text:'Home', href:'#/home'}, {text: currentGoalTitle || 'Goal'}]);
+      if (params.id && params.id !== currentGoalId) {
+        // Load goal by ID
+        loadGoalById(params.id);
+      }
+    },
+    '/kanban': () => {
+      showScreen('screen-tasks');
+      updateBreadcrumbs([{text:'Home', href:'#/home'}, {text: currentGoalTitle || 'Goal', href: currentGoalId ? `#/goal/${currentGoalId}` : '#/home'}, {text:'Kanban'}]);
+    },
+    '/calendar': () => {
+      showScreen('screen-tasks');
+      updateBreadcrumbs([{text:'Home', href:'#/home'}, {text: currentGoalTitle || 'Goal', href: currentGoalId ? `#/goal/${currentGoalId}` : '#/home'}, {text:'Calendar'}]);
+    },
+    '/timeline': () => {
+      showScreen('screen-tasks');
+      updateBreadcrumbs([{text:'Home', href:'#/home'}, {text: currentGoalTitle || 'Goal', href: currentGoalId ? `#/goal/${currentGoalId}` : '#/home'}, {text:'Timeline'}]);
+    },
+    '/dashboard': () => {
+      showScreen('screen-tasks');
+      updateBreadcrumbs([{text:'Home', href:'#/home'}, {text:'Dashboard'}]);
+    },
+    '/settings': () => {
+      showSettingsModal();
+      updateBreadcrumbs([{text:'Home', href:'#/home'}, {text:'Settings'}]);
+    },
+    '/admin': () => {
+      showAdminModal();
+      updateBreadcrumbs([{text:'Home', href:'#/home'}, {text:'Admin'}]);
+    },
+  },
+
+  navigate(hash) {
+    if (!hash || hash === '#' || hash === '#/') hash = '#/home';
+    if (hash !== location.hash) location.hash = hash;
+    else this._handleRoute(hash);
+  },
+
+  _handleRoute(hash) {
+    const path = hash.replace('#', '') || '/home';
+    this._current = path;
+
+    // Match parameterized routes
+    for (const [pattern, handler] of Object.entries(this.routes)) {
+      const paramNames = [];
+      const regexStr = pattern.replace(/:(\w+)/g, (_, name) => {
+        paramNames.push(name);
+        return '([^/]+)';
+      });
+      const match = path.match(new RegExp('^' + regexStr + '$'));
+      if (match) {
+        const params = {};
+        paramNames.forEach((name, i) => { params[name] = match[i + 1]; });
+        handler(params);
+        updateSidebarActive(pattern.split('/')[1]);
+        return;
+      }
+    }
+    // Fallback
+    this.routes['/home']();
+    updateSidebarActive('home');
+  },
+
+  init() {
+    window.addEventListener('hashchange', () => this._handleRoute(location.hash));
+    // Handle initial route
+    const hash = location.hash || '#/home';
+    this._handleRoute(hash);
+  }
+};
+
+function updateBreadcrumbs(items) {
+  const el = document.getElementById('breadcrumbs');
+  if (!el) return;
+  el.innerHTML = items.map((item, i) => {
+    if (i < items.length - 1 && item.href) {
+      return `<a href="${item.href}" class="breadcrumb-link">${escHtml(item.text)}</a><span class="breadcrumb-sep">›</span>`;
+    }
+    return `<span class="breadcrumb-current">${escHtml(item.text)}</span>`;
+  }).join('');
+}
+
+function updateSidebarActive(route) {
+  document.querySelectorAll('.sidebar-link').forEach(el => {
+    el.classList.toggle('active', el.dataset.route === route);
+  });
+  document.querySelectorAll('.mobile-nav-item').forEach(el => {
+    el.classList.toggle('active', el.dataset.route === route);
+  });
+}
+
+async function loadGoalById(goalId) {
+  try {
+    const goal = await api.get(`/api/goals/${goalId}`);
+    await showTasksScreen(goal, false);
+  } catch (e) {
+    toast.error('Error', 'Could not load goal');
+    Router.navigate('#/home');
+  }
+}
+
+// ─── Sidebar Management ───────────────────────────────────────────────────────
+
+function initSidebar() {
+  const collapsed = localStorage.getItem('teb_sidebar_collapsed') === 'true';
+  if (collapsed) document.body.classList.add('sidebar-collapsed');
+
+  document.getElementById('btn-sidebar-collapse')?.addEventListener('click', () => {
+    document.body.classList.toggle('sidebar-collapsed');
+    localStorage.setItem('teb_sidebar_collapsed', document.body.classList.contains('sidebar-collapsed'));
+  });
+
+  document.getElementById('btn-mobile-menu')?.addEventListener('click', () => {
+    document.getElementById('sidebar')?.classList.toggle('mobile-open');
+  });
+
+  // Close sidebar on mobile when clicking a link
+  document.querySelectorAll('.sidebar-link, .sidebar-goal-link').forEach(el => {
+    el.addEventListener('click', () => {
+      document.getElementById('sidebar')?.classList.remove('mobile-open');
+    });
+  });
+
+  // Admin button in sidebar
+  document.getElementById('btn-sidebar-admin')?.addEventListener('click', () => {
+    Router.navigate('#/admin');
+    document.getElementById('sidebar')?.classList.remove('mobile-open');
+  });
+}
+
+function updateSidebarGoals(goals) {
+  const container = document.getElementById('sidebar-goals-list');
+  if (!container) return;
+  container.innerHTML = (goals || []).slice(0, 10).map(g =>
+    `<a href="#/goal/${g.id}" class="sidebar-goal-link ${g.id === currentGoalId ? 'active' : ''}" data-goal-id="${g.id}">
+      <span class="sidebar-icon" style="font-size:.8rem">📌</span>
+      <span class="sidebar-text">${escHtml(g.title)}</span>
+    </a>`
+  ).join('');
+}
+
+// ─── Command Palette (Cmd/Ctrl+K) ────────────────────────────────────────────
+
+const CommandPalette = {
+  _visible: false,
+  _selectedIndex: 0,
+  _results: [],
+  _goals: [],
+
+  show() {
+    this._visible = true;
+    const overlay = document.getElementById('command-palette');
+    if (overlay) overlay.style.display = 'flex';
+    const input = document.getElementById('command-palette-input');
+    if (input) { input.value = ''; input.focus(); }
+    this._renderResults('');
+  },
+
+  hide() {
+    this._visible = false;
+    const overlay = document.getElementById('command-palette');
+    if (overlay) overlay.style.display = 'none';
+  },
+
+  toggle() { this._visible ? this.hide() : this.show(); },
+
+  _getCommands(query) {
+    const q = (query || '').toLowerCase();
+    const commands = [
+      { icon: '🏠', text: 'Go to Home', hint: 'G H', action: () => Router.navigate('#/home') },
+      { icon: '📊', text: 'Go to Dashboard', hint: 'G D', action: () => Router.navigate('#/dashboard') },
+      { icon: '📋', text: 'Open Kanban Board', hint: '', action: () => Router.navigate('#/kanban') },
+      { icon: '📅', text: 'Open Calendar View', hint: '', action: () => Router.navigate('#/calendar') },
+      { icon: '📈', text: 'Open Timeline View', hint: '', action: () => Router.navigate('#/timeline') },
+      { icon: '⚙️', text: 'Open Settings', hint: '', action: () => Router.navigate('#/settings') },
+      { icon: '🌙', text: 'Toggle Dark Mode', hint: '', action: () => toggleTheme() },
+      { icon: '➕', text: 'Create New Goal', hint: '', action: () => { Router.navigate('#/home'); setTimeout(() => document.getElementById('goal-title')?.focus(), 100); } },
+    ];
+
+    // Add goals as searchable items
+    const goalItems = (this._goals || []).map(g => ({
+      icon: '🎯', text: g.title, hint: 'goal', action: () => Router.navigate(`#/goal/${g.id}`)
+    }));
+
+    const all = [...commands, ...goalItems];
+    if (!q) return all;
+    return all.filter(c => c.text.toLowerCase().includes(q));
+  },
+
+  _renderResults(query) {
+    const results = this._getCommands(query);
+    this._results = results;
+    this._selectedIndex = 0;
+    const container = document.getElementById('command-palette-results');
+    if (!container) return;
+
+    if (results.length === 0) {
+      container.innerHTML = '<div class="cmd-result"><span class="cmd-result-text" style="color:var(--muted)">No results</span></div>';
+      return;
+    }
+
+    container.innerHTML = results.map((r, i) => `
+      <div class="cmd-result ${i === 0 ? 'selected' : ''}" data-index="${i}">
+        <span class="cmd-result-icon">${r.icon}</span>
+        <span class="cmd-result-text">${escHtml(r.text)}</span>
+        ${r.hint ? `<span class="cmd-result-hint">${escHtml(r.hint)}</span>` : ''}
+      </div>
+    `).join('');
+
+    container.querySelectorAll('.cmd-result').forEach(el => {
+      el.addEventListener('click', () => {
+        const idx = parseInt(el.dataset.index, 10);
+        if (results[idx]) { results[idx].action(); this.hide(); }
+      });
+    });
+  },
+
+  _moveSelection(delta) {
+    if (!this._results.length) return;
+    this._selectedIndex = (this._selectedIndex + delta + this._results.length) % this._results.length;
+    document.querySelectorAll('.cmd-result').forEach((el, i) => {
+      el.classList.toggle('selected', i === this._selectedIndex);
+    });
+    document.querySelectorAll('.cmd-result')[this._selectedIndex]?.scrollIntoView({ block: 'nearest' });
+  },
+
+  _executeSelected() {
+    if (this._results[this._selectedIndex]) {
+      this._results[this._selectedIndex].action();
+      this.hide();
+    }
+  },
+
+  init() {
+    const input = document.getElementById('command-palette-input');
+    if (input) {
+      input.addEventListener('input', () => this._renderResults(input.value));
+      input.addEventListener('keydown', (e) => {
+        if (e.key === 'ArrowDown') { e.preventDefault(); this._moveSelection(1); }
+        else if (e.key === 'ArrowUp') { e.preventDefault(); this._moveSelection(-1); }
+        else if (e.key === 'Enter') { e.preventDefault(); this._executeSelected(); }
+        else if (e.key === 'Escape') { this.hide(); }
+      });
+    }
+
+    // Close on overlay click
+    document.getElementById('command-palette')?.addEventListener('click', (e) => {
+      if (e.target.id === 'command-palette') this.hide();
+    });
+
+    // Open button
+    document.getElementById('btn-cmd-palette')?.addEventListener('click', () => this.toggle());
+  }
+};
+
+// ─── Task Detail Panel ────────────────────────────────────────────────────────
+
+const TaskDetailPanel = {
+  _currentTask: null,
+
+  open(task) {
+    this._currentTask = task;
+    const panel = document.getElementById('task-detail-panel');
+    if (!panel) return;
+    panel.style.display = 'block';
+    requestAnimationFrame(() => panel.classList.add('open'));
+
+    document.getElementById('task-detail-title').textContent = task.title || '';
+    document.getElementById('task-detail-status').value = task.status || 'todo';
+    document.getElementById('task-detail-desc').value = task.description || '';
+    document.getElementById('task-detail-due').value = task.due_date || '';
+    document.getElementById('task-detail-est').value = task.estimated_minutes || '';
+    document.getElementById('task-detail-tags').value = (task.tags || []).join(', ');
+
+    // Subtask progress
+    const subtasksEl = document.getElementById('task-detail-subtasks');
+    if (subtasksEl) {
+      const deps = task.depends_on || [];
+      if (deps.length > 0) {
+        const depTasks = currentTasks.filter(t => deps.includes(t.id));
+        const done = depTasks.filter(t => t.status === 'done').length;
+        subtasksEl.innerHTML = `<div class="subtask-progress">
+          <div class="subtask-progress-bar"><div class="subtask-progress-fill" style="width:${depTasks.length ? (done/depTasks.length*100) : 0}%"></div></div>
+          <span>${done}/${depTasks.length} dependencies done</span>
+        </div>`;
+      } else {
+        subtasksEl.innerHTML = '<span style="color:var(--muted);font-size:var(--text-xs)">No dependencies</span>';
+      }
+    }
+  },
+
+  close() {
+    const panel = document.getElementById('task-detail-panel');
+    if (panel) { panel.classList.remove('open'); setTimeout(() => { panel.style.display = 'none'; }, 300); }
+    this._currentTask = null;
+  },
+
+  async save() {
+    if (!this._currentTask || !currentGoalId) return;
+    const taskId = this._currentTask.id;
+    try {
+      const tagsStr = document.getElementById('task-detail-tags').value;
+      const tags = tagsStr ? tagsStr.split(',').map(t => t.trim()).filter(Boolean) : [];
+      await api.patch(`/api/goals/${currentGoalId}/tasks/${taskId}`, {
+        status: document.getElementById('task-detail-status').value,
+        description: document.getElementById('task-detail-desc').value,
+        due_date: document.getElementById('task-detail-due').value || null,
+        estimated_minutes: parseInt(document.getElementById('task-detail-est').value, 10) || null,
+        tags: tags,
+      });
+      toast.success('Saved', 'Task updated');
+      this.close();
+      await refreshGoalView();
+    } catch (e) {
+      toast.error('Error', e.message);
+    }
+  },
+
+  async deleteTask() {
+    if (!this._currentTask || !currentGoalId) return;
+    if (!confirm('Delete this task?')) return;
+    try {
+      await api.del(`/api/goals/${currentGoalId}/tasks/${this._currentTask.id}`);
+      toast.info('Deleted', 'Task removed');
+      this.close();
+      await refreshGoalView();
+    } catch (e) {
+      toast.error('Error', e.message);
+    }
+  },
+
+  init() {
+    document.getElementById('btn-close-task-detail')?.addEventListener('click', () => this.close());
+    document.getElementById('btn-task-detail-save')?.addEventListener('click', () => this.save());
+    document.getElementById('btn-task-detail-delete')?.addEventListener('click', () => this.deleteTask());
+  }
+};
+
+// ─── Batch Operations ─────────────────────────────────────────────────────────
+
+const BatchOps = {
+  _selected: new Set(),
+
+  toggle(taskId) {
+    if (this._selected.has(taskId)) this._selected.delete(taskId);
+    else this._selected.add(taskId);
+    this._updateUI();
+  },
+
+  clear() {
+    this._selected.clear();
+    this._updateUI();
+    document.querySelectorAll('.task-select-checkbox').forEach(cb => { cb.checked = false; });
+  },
+
+  _updateUI() {
+    const bar = document.getElementById('batch-bar');
+    const count = document.getElementById('batch-count');
+    if (this._selected.size > 0) {
+      if (bar) bar.style.display = 'flex';
+      if (count) count.textContent = `${this._selected.size} selected`;
+    } else {
+      if (bar) bar.style.display = 'none';
+    }
+  },
+
+  async bulkStatus(status) {
+    if (!currentGoalId || this._selected.size === 0) return;
+    const ids = Array.from(this._selected);
+    for (const id of ids) {
+      try { await api.patch(`/api/goals/${currentGoalId}/tasks/${id}`, { status }); }
+      catch (e) { console.warn('Batch update failed for', id, e); }
+    }
+    toast.success('Updated', `${ids.length} task(s) set to ${status}`);
+    this.clear();
+    await refreshGoalView();
+  },
+
+  async bulkDelete() {
+    if (!currentGoalId || this._selected.size === 0) return;
+    if (!confirm(`Delete ${this._selected.size} task(s)?`)) return;
+    const ids = Array.from(this._selected);
+    for (const id of ids) {
+      try { await api.del(`/api/goals/${currentGoalId}/tasks/${id}`); }
+      catch (e) { console.warn('Batch delete failed for', id, e); }
+    }
+    toast.info('Deleted', `${ids.length} task(s) removed`);
+    this.clear();
+    await refreshGoalView();
+  },
+
+  init() {
+    document.getElementById('btn-batch-done')?.addEventListener('click', () => this.bulkStatus('done'));
+    document.getElementById('btn-batch-progress')?.addEventListener('click', () => this.bulkStatus('in_progress'));
+    document.getElementById('btn-batch-delete')?.addEventListener('click', () => this.bulkDelete());
+    document.getElementById('btn-batch-clear')?.addEventListener('click', () => this.clear());
+  }
+};
+
+// ─── Keyboard Shortcuts ───────────────────────────────────────────────────────
+
+function initKeyboardShortcuts() {
+  let _taskFocusIndex = -1;
+
+  document.addEventListener('keydown', (e) => {
+    // Don't interfere with inputs
+    const tag = document.activeElement?.tagName?.toLowerCase();
+    const isInput = (tag === 'input' || tag === 'textarea' || tag === 'select' || document.activeElement?.isContentEditable);
+
+    // Cmd/Ctrl+K: Command palette (always works)
+    if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+      e.preventDefault();
+      CommandPalette.toggle();
+      return;
+    }
+
+    // Escape: close panels
+    if (e.key === 'Escape') {
+      if (CommandPalette._visible) { CommandPalette.hide(); return; }
+      if (TaskDetailPanel._currentTask) { TaskDetailPanel.close(); return; }
+      return;
+    }
+
+    if (isInput) return; // Below shortcuts only work when not in an input
+
+    const tasks = document.querySelectorAll('#task-list .task-item, #task-list .task-card');
+
+    // j/k: navigate tasks
+    if (e.key === 'j') {
+      e.preventDefault();
+      _taskFocusIndex = Math.min(_taskFocusIndex + 1, tasks.length - 1);
+      tasks[_taskFocusIndex]?.scrollIntoView({ block: 'nearest' });
+      tasks.forEach((t, i) => t.classList.toggle('keyboard-focus', i === _taskFocusIndex));
+    }
+    if (e.key === 'k') {
+      e.preventDefault();
+      _taskFocusIndex = Math.max(_taskFocusIndex - 1, 0);
+      tasks[_taskFocusIndex]?.scrollIntoView({ block: 'nearest' });
+      tasks.forEach((t, i) => t.classList.toggle('keyboard-focus', i === _taskFocusIndex));
+    }
+
+    // x: toggle complete on focused task
+    if (e.key === 'x' && _taskFocusIndex >= 0 && tasks[_taskFocusIndex]) {
+      e.preventDefault();
+      const taskId = tasks[_taskFocusIndex].dataset.taskId;
+      if (taskId) {
+        const task = currentTasks.find(t => t.id === taskId);
+        if (task) {
+          const newStatus = task.status === 'done' ? 'todo' : 'done';
+          api.patch(`/api/goals/${currentGoalId}/tasks/${taskId}`, { status: newStatus })
+            .then(() => refreshGoalView())
+            .catch(err => toast.error('Error', err.message));
+        }
+      }
+    }
+
+    // e: edit focused task
+    if (e.key === 'e' && _taskFocusIndex >= 0 && tasks[_taskFocusIndex]) {
+      e.preventDefault();
+      const taskId = tasks[_taskFocusIndex].dataset.taskId;
+      const task = currentTasks.find(t => t.id === taskId);
+      if (task) TaskDetailPanel.open(task);
+    }
+
+    // n: new task (focus quick-add bar)
+    if (e.key === 'n') {
+      e.preventDefault();
+      document.getElementById('quick-add-input')?.focus();
+    }
+
+    // Ctrl+Enter or Cmd+Enter to submit forms
+    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+      const activeScreen = document.querySelector('.screen.active');
+      if (!activeScreen) return;
+      if (activeScreen.id === 'screen-landing') { document.getElementById('btn-create-goal').click(); e.preventDefault(); }
+      else if (activeScreen.id === 'screen-clarify') { document.getElementById('btn-clarify-next').click(); e.preventDefault(); }
+    }
+  });
+}
+
+// ─── Quick-add Task Bar ───────────────────────────────────────────────────────
+
+function initQuickAdd() {
+  const input = document.getElementById('quick-add-input');
+  const btn = document.getElementById('btn-quick-add');
+  if (!input || !btn) return;
+
+  async function addQuickTask() {
+    const title = input.value.trim();
+    if (!title || !currentGoalId) return;
+    try {
+      await api.post(`/api/goals/${currentGoalId}/tasks`, { title, description: '' });
+      input.value = '';
+      toast.success('Added', `Task "${title}" created`);
+      await refreshGoalView();
+    } catch (e) {
+      toast.error('Error', e.message);
+    }
+  }
+
+  btn.addEventListener('click', addQuickTask);
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); addQuickTask(); }
+  });
+}
+
+// ─── Touch Gesture Support (swipe to complete) ───────────────────────────────
+
+function initTouchGestures() {
+  let _touchStartX = 0;
+  let _touchEl = null;
+
+  document.addEventListener('touchstart', (e) => {
+    const taskEl = e.target.closest('.task-item, .kanban-card, .drip-card');
+    if (!taskEl) return;
+    _touchStartX = e.touches[0].clientX;
+    _touchEl = taskEl;
+  }, { passive: true });
+
+  document.addEventListener('touchmove', (e) => {
+    if (!_touchEl) return;
+    const dx = e.touches[0].clientX - _touchStartX;
+    if (dx < -50) {
+      _touchEl.classList.add('swiped');
+    } else {
+      _touchEl.classList.remove('swiped');
+    }
+  }, { passive: true });
+
+  document.addEventListener('touchend', () => {
+    if (_touchEl && _touchEl.classList.contains('swiped')) {
+      const taskId = _touchEl.dataset.taskId;
+      if (taskId && currentGoalId) {
+        api.patch(`/api/goals/${currentGoalId}/tasks/${taskId}`, { status: 'done' })
+          .then(() => { toast.success('Done', 'Task completed!'); refreshGoalView(); })
+          .catch(() => {});
+      }
+    }
+    if (_touchEl) _touchEl.classList.remove('swiped');
+    _touchEl = null;
+  }, { passive: true });
+}
+
+// ─── Celebration animation ────────────────────────────────────────────────────
+
+function showCelebration(emoji = '🎉') {
+  const el = document.createElement('div');
+  el.className = 'celebration-burst';
+  el.textContent = emoji;
+  document.body.appendChild(el);
+  setTimeout(() => el.remove(), 700);
+}
+
+// ─── Header user display ──────────────────────────────────────────────────────
+
+function updateHeaderUser() {
+  const email = localStorage.getItem('teb_email');
+  const emailEl = document.getElementById('header-user-email');
+  const authBtn = document.getElementById('btn-header-auth');
+  if (email) {
+    if (emailEl) emailEl.textContent = email;
+    if (authBtn) authBtn.style.display = 'none';
+  } else {
+    if (emailEl) emailEl.textContent = '';
+    if (authBtn) authBtn.style.display = 'inline-flex';
+  }
 }
 
 function showError(elId, msg) {
@@ -310,8 +892,8 @@ document.getElementById('btn-auth-submit').addEventListener('click', async () =>
     localStorage.setItem('teb_token', res.token);
     localStorage.setItem('teb_email', res.user.email);
     updateUserBar();
-    showScreen('screen-landing');
-    loadGoalList();
+    updateHeaderUser();
+    Router.navigate('#/home');
     toast.success('Welcome!', authMode === 'register' ? 'Account created successfully.' : 'Signed in.');
   } catch (e) {
     showError('error-auth', e.message);
@@ -337,15 +919,16 @@ document.getElementById('auth-skip-link').addEventListener('click', (e) => {
   localStorage.removeItem('teb_token');
   localStorage.removeItem('teb_email');
   updateUserBar();
-  showScreen('screen-landing');
-  loadGoalList();
+  updateHeaderUser();
+  Router.navigate('#/home');
 });
 
 document.getElementById('btn-logout').addEventListener('click', () => {
   localStorage.removeItem('teb_token');
   localStorage.removeItem('teb_email');
   updateUserBar();
-  showScreen('screen-auth');
+  updateHeaderUser();
+  Router.navigate('#/auth');
   toast.info('Signed out', 'You have been logged out.');
 });
 
@@ -361,12 +944,16 @@ async function loadGoalList() {
   try {
     const goals = await api.get('/api/goals');
     ul.innerHTML = '';
+    // Update sidebar and command palette with goal list
+    updateSidebarGoals(goals);
+    CommandPalette._goals = goals;
+
     if (!goals.length) {
       ul.innerHTML = `
-        <li class="empty-state">
-          <div class="empty-state-icon">—</div>
+        <li class="empty-state-large">
+          <div class="empty-state-icon">📌</div>
           <div class="empty-state-title">No goals yet</div>
-          <div class="empty-state-desc">Define your first objective above.</div>
+          <div class="empty-state-desc">Define your first objective above to get started.</div>
         </li>`;
       return;
     }
@@ -394,6 +981,7 @@ async function openGoal(goalId) {
   try {
     const goal = await api.get(`/api/goals/${goalId}`);
     if (goal.status === 'decomposed' || goal.status === 'in_progress' || goal.status === 'done') {
+      Router.navigate(`#/goal/${goalId}`);
       showTasksScreen(goal);
     } else {
       await startClarifyFlow(goal);
@@ -484,8 +1072,7 @@ document.getElementById('btn-skip-clarify').addEventListener('click', async () =
 });
 
 document.getElementById('back-from-clarify').addEventListener('click', () => {
-  showScreen('screen-landing');
-  loadGoalList();
+  Router.navigate('#/home');
 });
 
 // ─── Decompose ────────────────────────────────────────────────────────────────
@@ -506,6 +1093,7 @@ async function triggerDecompose(goalId) {
 // ─── Tasks screen ─────────────────────────────────────────────────────────────
 
 async function showTasksScreen(goal, freshDecompose) {
+  currentGoalId = goal.id;
   currentGoalTitle = goal.title;
   document.getElementById('tasks-goal-title').textContent = goal.title;
   currentTasks = goal.tasks || [];
@@ -522,6 +1110,7 @@ async function showTasksScreen(goal, freshDecompose) {
   loadPlatformInsights();
   loadAgentActivity();
   showScreen('screen-tasks');
+  updateBreadcrumbs([{text:'Home', href:'#/home'}, {text: goal.title}]);
 
   // Smart default: show all tasks view when there are many tasks (e.g. from AI Orchestrate),
   // use drip mode only for fresh decompositions with fewer tasks
@@ -696,19 +1285,27 @@ function renderTasks(tasks) {
 
 function buildTaskCard(task, subtasks, byParent, depth) {
   const card = document.createElement('div');
-  card.className = `task-card${task.status === 'done' ? ' done-card' : ''}`;
+  card.className = `task-card task-item${task.status === 'done' ? ' done-card' : ''}`;
   card.dataset.id = task.id;
+  card.dataset.taskId = task.id;
 
   const cbClass = task.status === 'done' ? 'checked' : '';
   const hasSubtasks = subtasks.length > 0;
   const canDecompose = !hasSubtasks && task.status !== 'done' && depth < MAX_DECOMPOSE_DEPTH;
+  const subtaskDone = hasSubtasks ? subtasks.filter(s => s.status === 'done').length : 0;
+  const subtaskPct = hasSubtasks ? Math.round((subtaskDone / subtasks.length) * 100) : 0;
 
   card.innerHTML = `
     <div class="task-header">
+      <input type="checkbox" class="task-select-checkbox" data-id="${task.id}" title="Select for batch" aria-label="Select task" />
       <div class="task-checkbox ${cbClass}" data-id="${task.id}" title="Mark done"></div>
       <div class="task-info">
-        <div class="task-title">${escHtml(task.title)}</div>
+        <div class="task-title task-title-editable" contenteditable="true" data-task-id="${task.id}" spellcheck="false">${escHtml(task.title)}</div>
         <div class="task-meta">~${task.estimated_minutes} min${hasSubtasks ? ` · ${subtasks.length} sub-tasks` : ''}</div>
+        ${hasSubtasks ? `<div class="subtask-progress">
+          <div class="subtask-progress-bar"><div class="subtask-progress-fill" style="width:${subtaskPct}%"></div></div>
+          <span>${subtaskDone}/${subtasks.length}</span>
+        </div>` : ''}
       </div>
       <button class="task-expand-btn" aria-label="expand">▾</button>
     </div>
@@ -722,6 +1319,7 @@ function buildTaskCard(task, subtasks, byParent, depth) {
           <option value="skipped"${task.status === 'skipped' ? ' selected' : ''}>Skip</option>
         </select>
         ${canDecompose ? `<button class="btn-break-down" data-id="${task.id}">🔍 Break down further</button>` : ''}
+        <button class="btn-secondary btn-sm" data-detail-id="${task.id}">📝 Details</button>
         <button class="btn-delete-task" data-id="${task.id}" title="Delete task">🗑</button>
       </div>
       ${hasSubtasks ? buildSubtaskList(subtasks, byParent, depth + 1) : ''}
@@ -737,7 +1335,37 @@ function buildTaskCard(task, subtasks, byParent, depth) {
   });
 
   // Checkbox click → toggle done
-  card.querySelector('.task-checkbox').addEventListener('click', () => toggleTaskDone(task));
+  card.querySelector('.task-checkbox').addEventListener('click', (e) => {
+    toggleTaskDone(task);
+    if (task.status !== 'done') showCelebration('✅');
+  });
+
+  // Batch select checkbox
+  card.querySelector('.task-select-checkbox').addEventListener('change', (e) => {
+    BatchOps.toggle(task.id);
+  });
+
+  // Inline title editing
+  const titleEl = card.querySelector('.task-title-editable');
+  titleEl.addEventListener('blur', async () => {
+    const newTitle = titleEl.textContent.trim();
+    if (newTitle && newTitle !== task.title) {
+      try {
+        await api.patch(`/api/goals/${currentGoalId}/tasks/${task.id}`, { title: newTitle });
+        task.title = newTitle;
+      } catch (e) { titleEl.textContent = task.title; toast.error('Error', e.message); }
+    }
+  });
+  titleEl.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); titleEl.blur(); }
+    if (e.key === 'Escape') { titleEl.textContent = task.title; titleEl.blur(); }
+  });
+
+  // Detail panel button
+  const detailBtn = card.querySelector('[data-detail-id]');
+  if (detailBtn) {
+    detailBtn.addEventListener('click', () => TaskDetailPanel.open(task));
+  }
 
   // Status select
   card.querySelector('.task-status-select').addEventListener('change', async (e) => {
@@ -979,8 +1607,7 @@ function renderStatusChart(tasks) {
 }
 
 document.getElementById('back-from-tasks').addEventListener('click', () => {
-  showScreen('screen-landing');
-  loadGoalList();
+  Router.navigate('#/home');
 });
 
 document.getElementById('btn-redecompose').addEventListener('click', async () => {
@@ -1388,10 +2015,8 @@ document.getElementById('btn-discover').addEventListener('click', async () => {
 
 // ─── Settings Modal ───────────────────────────────────────────────────────────
 
-document.getElementById('btn-settings').addEventListener('click', () => {
-  document.getElementById('settings-modal').style.display = 'flex';
-  loadExistingConfigs();
-  loadCredentials();
+document.getElementById('btn-settings')?.addEventListener('click', () => {
+  showSettingsModal();
 });
 
 document.getElementById('btn-close-settings').addEventListener('click', () => {
@@ -1620,27 +2245,52 @@ document.getElementById('admin-modal').addEventListener('click', (e) => {
 
 // ─── Init ─────────────────────────────────────────────────────────────────────
 
+function showSettingsModal() {
+  const modal = document.getElementById('settings-modal');
+  if (modal) modal.style.display = 'flex';
+  loadExistingConfigs();
+  loadCredentials();
+}
+
+function showAdminModal() {
+  const modal = document.getElementById('admin-modal');
+  if (modal) modal.style.display = 'flex';
+  loadAdminStats();
+  loadAdminUsers();
+  loadAdminIntegrations();
+}
+
 function init() {
   initTheme();
+  initSidebar();
+  initKeyboardShortcuts();
+  initQuickAdd();
+  initTouchGestures();
+  CommandPalette.init();
+  TaskDetailPanel.init();
+  BatchOps.init();
   setupCharCounter('goal-desc', 'goal-desc-counter');
 
   // Dark mode toggle
   const themeBtn = document.getElementById('btn-theme-toggle');
   if (themeBtn) themeBtn.addEventListener('click', toggleTheme);
 
+  // Header auth button
+  document.getElementById('btn-header-auth')?.addEventListener('click', () => Router.navigate('#/auth'));
+
   const token = localStorage.getItem('teb_token');
   updateUserBar();
+  updateHeaderUser();
   if (token) {
-    showScreen('screen-landing');
-    loadGoalList();
-    // Check if logged-in user is admin and show Admin button accordingly
+    // Check admin status and update sidebar admin button
     api.get('/api/auth/me').then(me => {
-      const adminBtn = document.getElementById('btn-admin');
-      if (adminBtn) adminBtn.style.display = me && me.role === 'admin' ? '' : 'none';
+      const sidebarAdmin = document.getElementById('btn-sidebar-admin');
+      if (sidebarAdmin) sidebarAdmin.style.display = me && me.role === 'admin' ? '' : 'none';
     }).catch(() => {});
-  } else {
-    showScreen('screen-auth');
   }
+
+  // Initialize router (handles initial route)
+  Router.init();
 }
 
 init();
@@ -2029,11 +2679,8 @@ async function loadPlatformInsights() {
 
 // ─── Admin Panel ──────────────────────────────────────────────────────────────
 
-document.getElementById('btn-admin').addEventListener('click', () => {
-  document.getElementById('admin-modal').style.display = 'flex';
-  loadAdminStats();
-  loadAdminUsers();
-  loadAdminIntegrations();
+document.getElementById('btn-admin')?.addEventListener('click', () => {
+  showAdminModal();
 });
 
 document.getElementById('btn-close-admin').addEventListener('click', () => {
@@ -2364,31 +3011,6 @@ document.addEventListener('visibilitychange', () => {
   }
 });
 
-// ─── Keyboard navigation for task list ────────────────────────────────────────
-
-document.addEventListener('keydown', (e) => {
-  // Ctrl+Enter or Cmd+Enter to submit forms
-  if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
-    const activeScreen = document.querySelector('.screen.active');
-    if (!activeScreen) return;
-
-    if (activeScreen.id === 'screen-landing') {
-      document.getElementById('btn-create-goal').click();
-      e.preventDefault();
-    } else if (activeScreen.id === 'screen-clarify') {
-      document.getElementById('btn-clarify-next').click();
-      e.preventDefault();
-    } else if (activeScreen.id === 'screen-tasks') {
-      // Check-in submit if focused in check-in area
-      const active = document.activeElement;
-      if (active && (active.id === 'checkin-done' || active.id === 'checkin-blockers')) {
-        document.getElementById('btn-checkin').click();
-        e.preventDefault();
-      }
-    }
-  }
-});
-
 // ─── Smart date formatting for admin table ────────────────────────────────────
 
 function formatAdminDate(dateStr) {
@@ -2482,7 +3104,8 @@ function checkSessionValidity() {
         localStorage.removeItem('teb_token');
         localStorage.removeItem('teb_email');
         updateUserBar();
-        showScreen('screen-auth');
+        updateHeaderUser();
+        Router.navigate('#/auth');
         toast.warning('Session expired', 'Please sign in again.');
       } else if (remaining < 300000 && !_sessionWarningShown) {
         // Less than 5 minutes remaining
