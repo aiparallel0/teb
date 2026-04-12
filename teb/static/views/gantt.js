@@ -36,7 +36,7 @@ const GanttView = {
     wrapper.appendChild(header);
 
     if (!sorted.length) {
-      wrapper.innerHTML += '<div class="empty-state"><div class="empty-state-icon">📊</div><div class="empty-state-title">No tasks to display</div></div>';
+      wrapper.innerHTML += '<div class="empty-state-large"><div class="empty-state-icon"><svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="14" height="3" rx="1.5" fill="currentColor" opacity=".7"/><rect x="6" y="10" width="10" height="3" rx="1.5" fill="currentColor" opacity=".5"/><rect x="4" y="16" width="16" height="3" rx="1.5" fill="currentColor" opacity=".3"/></svg></div><div class="empty-state-title">Gantt Chart</div><div class="empty-state-desc">Add due dates and dependencies for Gantt visualization.</div></div>';
       container.appendChild(wrapper);
       return;
     }

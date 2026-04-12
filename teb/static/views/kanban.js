@@ -33,6 +33,11 @@ const KanbanView = {
     const wipLimits = options.wipLimits || {};
     container.innerHTML = '';
 
+    if (!tasks || tasks.length === 0) {
+      container.innerHTML = '<div class="empty-state-large"><div class="empty-state-icon"><svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="5" height="18" rx="1"/><rect x="9.5" y="3" width="5" height="12" rx="1"/><rect x="17" y="3" width="5" height="15" rx="1"/></svg></div><div class="empty-state-title">Kanban Board</div><div class="empty-state-desc">Create your first task to see it on the board. Tasks are organized by status columns.</div></div>';
+      return;
+    }
+
     // Swimlane grouping
     let lanes = [{ key: '__all__', label: '', tasks }];
     if (swimlaneField) {
