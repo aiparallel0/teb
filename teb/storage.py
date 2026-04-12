@@ -1,4 +1,5 @@
 import json
+import re
 import sqlite3
 from contextlib import contextmanager
 from datetime import date, datetime, timezone
@@ -20,10 +21,13 @@ from teb.models import (
     CommentReaction,
     CustomField,
     DashboardWidget,
+    DirectMessage,
+    EmailNotificationConfig,
     ExecutionCheckpoint,
     ExecutionContext,
     ExecutionLog,
     Goal,
+    GoalChatMessage,
     GoalCollaborator,
     GoalTemplate,
     Integration,
@@ -37,6 +41,7 @@ from teb.models import (
     PluginManifest,
     ProactiveSuggestion,
     ProgressSnapshot,
+    PushSubscription,
     RecurrenceRule,
     SpendingBudget,
     SpendingRequest,
@@ -964,6 +969,59 @@ def _run_migrations(con: sqlite3.Connection) -> None:
     """)
     con.execute("CREATE INDEX IF NOT EXISTS idx_reactions_comment ON comment_reactions(comment_id)")
 
+    # ─── Phase 2: Direct Messages ────────────────────────────────────────
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS direct_messages (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            sender_id    INTEGER NOT NULL,
+            recipient_id INTEGER NOT NULL,
+            content      TEXT NOT NULL,
+            read         INTEGER DEFAULT 0,
+            created_at   TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    con.execute("CREATE INDEX IF NOT EXISTS idx_dm_sender ON direct_messages(sender_id)")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_dm_recipient ON direct_messages(recipient_id)")
+
+    # ─── Phase 2: Goal Chat Messages ─────────────────────────────────────
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS goal_chat_messages (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            goal_id    INTEGER NOT NULL,
+            user_id    INTEGER NOT NULL,
+            content    TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    con.execute("CREATE INDEX IF NOT EXISTS idx_goal_chat_goal ON goal_chat_messages(goal_id)")
+
+    # ─── Phase 2: Email Notification Config ──────────────────────────────
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS email_notification_config (
+            id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id              INTEGER NOT NULL UNIQUE,
+            digest_frequency     TEXT DEFAULT 'none',
+            notify_on_mention    INTEGER DEFAULT 1,
+            notify_on_assignment INTEGER DEFAULT 1,
+            notify_on_comment    INTEGER DEFAULT 1
+        )
+    """)
+    con.execute("CREATE INDEX IF NOT EXISTS idx_email_config_user ON email_notification_config(user_id)")
+
+    # ─── Phase 2: Push Subscriptions ─────────────────────────────────────
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS push_subscriptions (
+            id         INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id    INTEGER NOT NULL,
+            endpoint   TEXT NOT NULL,
+            p256dh     TEXT DEFAULT '',
+            auth       TEXT DEFAULT '',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    con.execute("CREATE INDEX IF NOT EXISTS idx_push_user ON push_subscriptions(user_id)")
+    con.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_push_endpoint ON push_subscriptions(endpoint)")
+
     # ── Phase 6: Enterprise Security tables ──
     con.execute("""
         CREATE TABLE IF NOT EXISTS user_sessions (
@@ -989,6 +1047,18 @@ def _run_migrations(con: sqlite3.Connection) -> None:
         )
     """)
     con.execute("CREATE INDEX IF NOT EXISTS idx_2fa_user ON two_factor_config(user_id)")
+
+    # ─── Safe column migrations (version, assigned_to) ───────────────────
+    _safe_add_column(con, "goals", "version", "INTEGER NOT NULL DEFAULT 1")
+    _safe_add_column(con, "tasks", "version", "INTEGER NOT NULL DEFAULT 1")
+    _safe_add_column(con, "tasks", "assigned_to", "INTEGER DEFAULT NULL")
+
+
+def _safe_add_column(con: sqlite3.Connection, table: str, column: str, col_type: str) -> None:
+    """Add a column to a table if it doesn't already exist."""
+    cols = {row[1] for row in con.execute(f"PRAGMA table_info({table})").fetchall()}
+    if column not in cols:
+        con.execute(f"ALTER TABLE {table} ADD COLUMN {column} {col_type}")
 
 
 # ─── Credential Encryption ───────────────────────────────────────────────────
@@ -1219,6 +1289,7 @@ def _row_to_goal(row: sqlite3.Row) -> Goal:
     g.parent_goal_id = row["parent_goal_id"] if "parent_goal_id" in row.keys() else None
     g.auto_execute = bool(row["auto_execute"]) if "auto_execute" in row.keys() else False
     g.tags = row["tags"] if "tags" in row.keys() else ""
+    g.version = row["version"] if "version" in row.keys() else 1
     g.created_at = datetime.fromisoformat(row["created_at"])
     g.updated_at = datetime.fromisoformat(row["updated_at"])
     return g
@@ -1263,13 +1334,24 @@ def list_goals(user_id: Optional[int] = None) -> List[Goal]:
 def update_goal(goal: Goal) -> Goal:
     now = datetime.now(timezone.utc).isoformat()
     with _conn() as con:
-        con.execute(
-            "UPDATE goals SET title=?, description=?, status=?, answers=?, auto_execute=?, tags=?, updated_at=? WHERE id=?",
+        cur = con.execute(
+            "UPDATE goals SET title=?, description=?, status=?, answers=?, auto_execute=?, tags=?, version=version+1, updated_at=? "
+            "WHERE id=? AND version=?",
             (goal.title, goal.description, goal.status, json.dumps(goal.answers),
-             int(goal.auto_execute), goal.tags, now, goal.id),
+             int(goal.auto_execute), goal.tags, now, goal.id, goal.version),
         )
+        if cur.rowcount == 0:
+            existing = con.execute("SELECT id FROM goals WHERE id=?", (goal.id,)).fetchone()
+            if existing:
+                raise VersionConflictError("Goal has been modified by another request")
+    goal.version += 1
     goal.updated_at = datetime.fromisoformat(now)
     return goal
+
+
+class VersionConflictError(Exception):
+    """Raised when an optimistic concurrency version check fails."""
+    pass
 
 
 # ─── Tasks ────────────────────────────────────────────────────────────────────
@@ -1288,6 +1370,8 @@ def _row_to_task(row: sqlite3.Row) -> Task:
     t.due_date = row["due_date"] if "due_date" in row.keys() else ""
     t.depends_on = row["depends_on"] if "depends_on" in row.keys() else "[]"
     t.tags = row["tags"] if "tags" in row.keys() else ""
+    t.assigned_to = row["assigned_to"] if "assigned_to" in row.keys() else None
+    t.version = row["version"] if "version" in row.keys() else 1
     t.created_at = datetime.fromisoformat(row["created_at"])
     t.updated_at = datetime.fromisoformat(row["updated_at"])
     return t
@@ -1338,15 +1422,21 @@ def list_tasks(goal_id: Optional[int] = None, status: Optional[str] = None) -> L
 def update_task(task: Task) -> Task:
     now = datetime.now(timezone.utc).isoformat()
     with _conn() as con:
-        con.execute(
+        cur = con.execute(
             "UPDATE tasks SET title=?, description=?, estimated_minutes=?, status=?, "
-            "order_index=?, parent_id=?, due_date=?, depends_on=?, tags=?, updated_at=? WHERE id=?",
+            "order_index=?, parent_id=?, due_date=?, depends_on=?, tags=?, assigned_to=?, version=version+1, updated_at=? "
+            "WHERE id=? AND version=?",
             (
                 task.title, task.description, task.estimated_minutes,
                 task.status, task.order_index, task.parent_id,
-                task.due_date, task.depends_on, task.tags, now, task.id,
+                task.due_date, task.depends_on, task.tags, task.assigned_to, now, task.id, task.version,
             ),
         )
+        if cur.rowcount == 0:
+            existing = con.execute("SELECT id FROM tasks WHERE id=?", (task.id,)).fetchone()
+            if existing:
+                raise VersionConflictError("Task has been modified by another request")
+    task.version += 1
     task.updated_at = datetime.fromisoformat(now)
     return task
 
@@ -4800,3 +4890,278 @@ def disable_two_factor(user_id: int) -> bool:
             (user_id,),
         )
     return cur.rowcount > 0
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Phase 2 — Remaining Collaboration Features
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# ─── Goal Sharing (GoalCollaborator CRUD) ────────────────────────────────────
+
+@_with_retry
+def share_goal(goal_id: int, user_id: int, role: str = "viewer") -> GoalCollaborator:
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        cur = con.execute(
+            "INSERT OR REPLACE INTO goal_collaborators (goal_id, user_id, role, created_at) "
+            "VALUES (?, ?, ?, ?)",
+            (goal_id, user_id, role, now),
+        )
+        collab = GoalCollaborator(
+            id=cur.lastrowid, goal_id=goal_id, user_id=user_id,
+            role=role, created_at=datetime.fromisoformat(now),
+        )
+    return collab
+
+
+def list_goal_collaborators(goal_id: int) -> List[GoalCollaborator]:
+    with _conn() as con:
+        rows = con.execute(
+            "SELECT * FROM goal_collaborators WHERE goal_id = ? ORDER BY created_at ASC",
+            (goal_id,),
+        ).fetchall()
+    return [_row_to_goal_collaborator(r) for r in rows]
+
+
+@_with_retry
+def unshare_goal(goal_id: int, user_id: int) -> bool:
+    with _conn() as con:
+        cur = con.execute(
+            "DELETE FROM goal_collaborators WHERE goal_id = ? AND user_id = ?",
+            (goal_id, user_id),
+        )
+        return cur.rowcount > 0
+
+
+def _row_to_goal_collaborator(row: sqlite3.Row) -> GoalCollaborator:
+    return GoalCollaborator(
+        id=row["id"],
+        goal_id=row["goal_id"],
+        user_id=row["user_id"],
+        role=row["role"],
+        created_at=datetime.fromisoformat(row["created_at"]),
+    )
+
+
+# ─── @mentions extraction ───────────────────────────────────────────────────
+
+_MENTION_RE = re.compile(r"@(\w+)")
+
+
+def extract_mentions(text: str) -> List[str]:
+    """Extract @username mentions from text. Returns list of usernames."""
+    return _MENTION_RE.findall(text)
+
+
+# ─── Task Assignment ────────────────────────────────────────────────────────
+
+@_with_retry
+def assign_task(task_id: int, user_id: Optional[int]) -> Task:
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        con.execute(
+            "UPDATE tasks SET assigned_to = ?, updated_at = ? WHERE id = ?",
+            (user_id, now, task_id),
+        )
+    task = get_task(task_id)
+    return task  # type: ignore[return-value]
+
+
+def list_tasks_assigned_to(user_id: int) -> List[Task]:
+    with _conn() as con:
+        rows = con.execute(
+            "SELECT * FROM tasks WHERE assigned_to = ? ORDER BY order_index ASC, id ASC",
+            (user_id,),
+        ).fetchall()
+    return [_row_to_task(r) for r in rows]
+
+
+# ─── Direct Messaging ───────────────────────────────────────────────────────
+
+@_with_retry
+def send_message(msg: DirectMessage) -> DirectMessage:
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        cur = con.execute(
+            "INSERT INTO direct_messages (sender_id, recipient_id, content, read, created_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (msg.sender_id, msg.recipient_id, msg.content, int(msg.read), now),
+        )
+        msg.id = cur.lastrowid
+        msg.created_at = datetime.fromisoformat(now)
+    return msg
+
+
+def list_conversations(user_id: int) -> List[dict]:
+    """List distinct conversation partners with last message preview."""
+    with _conn() as con:
+        rows = con.execute(
+            "SELECT CASE WHEN sender_id = ? THEN recipient_id ELSE sender_id END AS other_user_id, "
+            "MAX(created_at) AS last_message_at, content AS last_content "
+            "FROM direct_messages WHERE sender_id = ? OR recipient_id = ? "
+            "GROUP BY other_user_id ORDER BY last_message_at DESC",
+            (user_id, user_id, user_id),
+        ).fetchall()
+    return [{"other_user_id": r["other_user_id"], "last_message_at": r["last_message_at"],
+             "last_content": r["last_content"]} for r in rows]
+
+
+def list_messages(user_id: int, other_user_id: int, limit: int = 50) -> List[DirectMessage]:
+    with _conn() as con:
+        rows = con.execute(
+            "SELECT * FROM direct_messages WHERE "
+            "(sender_id = ? AND recipient_id = ?) OR (sender_id = ? AND recipient_id = ?) "
+            "ORDER BY created_at ASC LIMIT ?",
+            (user_id, other_user_id, other_user_id, user_id, limit),
+        ).fetchall()
+    return [_row_to_direct_message(r) for r in rows]
+
+
+@_with_retry
+def mark_message_read(message_id: int, user_id: int) -> bool:
+    with _conn() as con:
+        cur = con.execute(
+            "UPDATE direct_messages SET read = 1 WHERE id = ? AND recipient_id = ?",
+            (message_id, user_id),
+        )
+        return cur.rowcount > 0
+
+
+def _row_to_direct_message(row: sqlite3.Row) -> DirectMessage:
+    return DirectMessage(
+        id=row["id"],
+        sender_id=row["sender_id"],
+        recipient_id=row["recipient_id"],
+        content=row["content"],
+        read=bool(row["read"]),
+        created_at=datetime.fromisoformat(row["created_at"]),
+    )
+
+
+# ─── Goal Chat Messages ─────────────────────────────────────────────────────
+
+@_with_retry
+def create_goal_chat_message(msg: GoalChatMessage) -> GoalChatMessage:
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        cur = con.execute(
+            "INSERT INTO goal_chat_messages (goal_id, user_id, content, created_at) "
+            "VALUES (?, ?, ?, ?)",
+            (msg.goal_id, msg.user_id, msg.content, now),
+        )
+        msg.id = cur.lastrowid
+        msg.created_at = datetime.fromisoformat(now)
+    return msg
+
+
+def list_goal_chat_messages(goal_id: int, limit: int = 100) -> List[GoalChatMessage]:
+    with _conn() as con:
+        rows = con.execute(
+            "SELECT * FROM goal_chat_messages WHERE goal_id = ? ORDER BY created_at ASC LIMIT ?",
+            (goal_id, limit),
+        ).fetchall()
+    return [_row_to_goal_chat_message(r) for r in rows]
+
+
+def _row_to_goal_chat_message(row: sqlite3.Row) -> GoalChatMessage:
+    return GoalChatMessage(
+        id=row["id"],
+        goal_id=row["goal_id"],
+        user_id=row["user_id"],
+        content=row["content"],
+        created_at=datetime.fromisoformat(row["created_at"]),
+    )
+
+
+# ─── Email Notification Config ──────────────────────────────────────────────
+
+def get_email_notification_config(user_id: int) -> Optional[EmailNotificationConfig]:
+    with _conn() as con:
+        row = con.execute(
+            "SELECT * FROM email_notification_config WHERE user_id = ?", (user_id,),
+        ).fetchone()
+    if not row:
+        return None
+    return _row_to_email_notification_config(row)
+
+
+@_with_retry
+def upsert_email_notification_config(cfg: EmailNotificationConfig) -> EmailNotificationConfig:
+    with _conn() as con:
+        existing = con.execute(
+            "SELECT id FROM email_notification_config WHERE user_id = ?", (cfg.user_id,),
+        ).fetchone()
+        if existing:
+            con.execute(
+                "UPDATE email_notification_config SET digest_frequency=?, notify_on_mention=?, "
+                "notify_on_assignment=?, notify_on_comment=? WHERE user_id=?",
+                (cfg.digest_frequency, int(cfg.notify_on_mention), int(cfg.notify_on_assignment),
+                 int(cfg.notify_on_comment), cfg.user_id),
+            )
+            cfg.id = existing["id"]
+        else:
+            cur = con.execute(
+                "INSERT INTO email_notification_config (user_id, digest_frequency, notify_on_mention, "
+                "notify_on_assignment, notify_on_comment) VALUES (?, ?, ?, ?, ?)",
+                (cfg.user_id, cfg.digest_frequency, int(cfg.notify_on_mention),
+                 int(cfg.notify_on_assignment), int(cfg.notify_on_comment)),
+            )
+            cfg.id = cur.lastrowid
+    return cfg
+
+
+def _row_to_email_notification_config(row: sqlite3.Row) -> EmailNotificationConfig:
+    return EmailNotificationConfig(
+        id=row["id"],
+        user_id=row["user_id"],
+        digest_frequency=row["digest_frequency"],
+        notify_on_mention=bool(row["notify_on_mention"]),
+        notify_on_assignment=bool(row["notify_on_assignment"]),
+        notify_on_comment=bool(row["notify_on_comment"]),
+    )
+
+
+# ─── Push Subscriptions ─────────────────────────────────────────────────────
+
+@_with_retry
+def save_push_subscription(sub: PushSubscription) -> PushSubscription:
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        cur = con.execute(
+            "INSERT OR REPLACE INTO push_subscriptions (user_id, endpoint, p256dh, auth, created_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (sub.user_id, sub.endpoint, sub.p256dh, sub.auth, now),
+        )
+        sub.id = cur.lastrowid
+        sub.created_at = datetime.fromisoformat(now)
+    return sub
+
+
+def list_push_subscriptions(user_id: int) -> List[PushSubscription]:
+    with _conn() as con:
+        rows = con.execute(
+            "SELECT * FROM push_subscriptions WHERE user_id = ? ORDER BY created_at DESC",
+            (user_id,),
+        ).fetchall()
+    return [_row_to_push_subscription(r) for r in rows]
+
+
+@_with_retry
+def delete_push_subscription(endpoint: str, user_id: int) -> bool:
+    with _conn() as con:
+        cur = con.execute(
+            "DELETE FROM push_subscriptions WHERE endpoint = ? AND user_id = ?",
+            (endpoint, user_id),
+        )
+        return cur.rowcount > 0
+
+
+def _row_to_push_subscription(row: sqlite3.Row) -> PushSubscription:
+    return PushSubscription(
+        id=row["id"],
+        user_id=row["user_id"],
+        endpoint=row["endpoint"],
+        p256dh=row["p256dh"],
+        auth=row["auth"],
+        created_at=datetime.fromisoformat(row["created_at"]),
+    )

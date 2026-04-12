@@ -21,10 +21,11 @@ from pydantic import BaseModel
 from teb import agents, auth, browser, config, decomposer, deployer, executor, integrations, messaging, provisioning, scheduler, storage, transcribe
 from teb.models import (
     ActivityFeedEntry, AgentGoalMemory, ApiCredential, AuditEvent, BrowserAction, CheckIn,
-    CommentReaction, CustomField, DashboardWidget, ExecutionLog, Goal, GoalCollaborator,
+    CommentReaction, CustomField, DashboardWidget, DirectMessage, EmailNotificationConfig,
+    ExecutionLog, Goal, GoalChatMessage, GoalCollaborator,
     GoalTemplate, MessagingConfig, Milestone, Notification, NotificationPreference,
     NudgeEvent, OutcomeMetric, PersonalApiKey, PluginManifest,
-    ProgressSnapshot, RecurrenceRule, SpendingBudget, SpendingRequest,
+    ProgressSnapshot, PushSubscription, RecurrenceRule, SpendingBudget, SpendingRequest,
     Task, TaskArtifact, TaskBlocker, TaskComment, TimeEntry, WebhookConfig,
     Workspace, WorkspaceMember,
 )
@@ -624,6 +625,9 @@ async def create_goal(body: GoalCreate, request: Request):
     if body.tags:
         goal.tags = body.tags
     goal = storage.create_goal(goal)
+    from teb import events as _events
+    if user_id:
+        _events.event_bus.publish(user_id, "goal_created", {"goal_id": goal.id, "title": goal.title})
     return goal.to_dict()
 
 
@@ -859,6 +863,8 @@ async def create_task_manual(body: TaskCreate, request: Request):
     if body.tags is not None:
         task.tags = body.tags
     task = storage.create_task(task)
+    from teb import events as _events
+    _events.event_bus.publish(uid, "task_created", {"task_id": task.id, "title": task.title, "goal_id": task.goal_id})
     return task.to_dict()
 
 
@@ -895,7 +901,13 @@ async def update_task(task_id: int, body: TaskPatch, request: Request):
         task.tags = body.tags
 
     # Update the goal's status if all tasks are done
-    task = storage.update_task(task)
+    try:
+        task = storage.update_task(task)
+    except storage.VersionConflictError:
+        raise HTTPException(status_code=409, detail="Task was modified by another request. Please refresh and try again.")
+
+    from teb import events as _events
+    _events.event_bus.publish(uid, "task_updated", {"task_id": task.id, "status": task.status, "goal_id": task.goal_id})
 
     all_tasks = storage.list_tasks(goal_id=task.goal_id)
     top_level = [t for t in all_tasks if t.parent_id is None]
@@ -903,7 +915,10 @@ async def update_task(task_id: int, body: TaskPatch, request: Request):
         goal = storage.get_goal(task.goal_id)
         if goal and goal.status != "done":
             goal.status = "done"
-            storage.update_goal(goal)
+            try:
+                storage.update_goal(goal)
+            except storage.VersionConflictError:
+                pass
             # Auto-capture success path when goal completes
             sp = decomposer.capture_success_path(goal, all_tasks)
             if sp:
@@ -914,7 +929,10 @@ async def update_task(task_id: int, body: TaskPatch, request: Request):
         goal = storage.get_goal(task.goal_id)
         if goal and goal.status == "decomposed":
             goal.status = "in_progress"
-            storage.update_goal(goal)
+            try:
+                storage.update_goal(goal)
+            except storage.VersionConflictError:
+                pass
 
     # Notify on task completion or failure
     if body.status == "done":
@@ -929,7 +947,10 @@ async def update_task(task_id: int, body: TaskPatch, request: Request):
 async def delete_task(task_id: int, request: Request):
     uid = _require_user(request)
     task = _get_task_for_user(task_id, uid)
+    goal_id = task.goal_id
     storage.delete_task(task_id)
+    from teb import events as _events
+    _events.event_bus.publish(uid, "task_deleted", {"task_id": task_id, "goal_id": goal_id})
     return {"deleted": task_id}
 
 
@@ -3603,6 +3624,25 @@ async def create_task_comment(task_id: int, request: Request):
         author_id=body.get("author_id", str(uid)),
     )
     comment = storage.create_task_comment(comment)
+
+    # Extract @mentions and create notifications for mentioned users
+    mentions = storage.extract_mentions(content)
+    for username in mentions:
+        mentioned_user = storage.get_user_by_email(username)
+        if mentioned_user and mentioned_user.id and mentioned_user.id != uid:
+            storage.create_notification(Notification(
+                user_id=mentioned_user.id,
+                title=f"You were mentioned in a comment on task #{task_id}",
+                body=content[:200],
+                notification_type="mention",
+                source_type="comment",
+                source_id=comment.id,
+            ))
+            from teb import events as _events
+            _events.event_bus.publish(mentioned_user.id, "mention", {
+                "task_id": task_id, "comment_id": comment.id, "by_user_id": uid,
+            })
+
     return comment.to_dict()
 
 
@@ -5176,6 +5216,272 @@ async def revoke_all_sessions_endpoint(request: Request):
     uid = _require_user(request)
     count = storage.revoke_all_sessions(uid)
     return {"revoked_count": count}
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Phase 2 — Remaining Collaboration Endpoints
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# ─── Goal Sharing ────────────────────────────────────────────────────────────
+
+@app.post("/api/goals/{goal_id}/share", status_code=201)
+async def share_goal_endpoint(goal_id: int, request: Request):
+    """Share a goal with another user."""
+    uid = _require_user(request)
+    _get_goal_for_user(goal_id, uid)
+    body = await request.json()
+    target_user_id = body.get("user_id")
+    if not target_user_id:
+        raise HTTPException(status_code=422, detail="user_id is required")
+    role = body.get("role", "viewer")
+    if role not in ("viewer", "editor", "admin"):
+        raise HTTPException(status_code=422, detail="role must be viewer, editor, or admin")
+    collab = storage.share_goal(goal_id, target_user_id, role)
+    # Notify the target user
+    storage.create_notification(Notification(
+        user_id=target_user_id,
+        title=f"A goal has been shared with you",
+        body=f"You now have {role} access to goal #{goal_id}",
+        notification_type="info",
+        source_type="goal",
+        source_id=goal_id,
+    ))
+    return collab.to_dict()
+
+
+@app.get("/api/goals/{goal_id}/collaborators")
+async def list_goal_collaborators_endpoint(goal_id: int, request: Request):
+    """List collaborators on a goal."""
+    uid = _require_user(request)
+    return [c.to_dict() for c in storage.list_goal_collaborators(goal_id)]
+
+
+@app.delete("/api/goals/{goal_id}/share/{target_user_id}")
+async def unshare_goal_endpoint(goal_id: int, target_user_id: int, request: Request):
+    """Remove a collaborator from a goal."""
+    uid = _require_user(request)
+    _get_goal_for_user(goal_id, uid)
+    removed = storage.unshare_goal(goal_id, target_user_id)
+    if not removed:
+        raise HTTPException(status_code=404, detail="Collaborator not found")
+    return {"removed": True}
+
+
+# ─── Task Assignment ─────────────────────────────────────────────────────────
+
+@app.put("/api/tasks/{task_id}/assign")
+async def assign_task_endpoint(task_id: int, request: Request):
+    """Assign a task to a user."""
+    uid = _require_user(request)
+    _get_task_for_user(task_id, uid)
+    body = await request.json()
+    assignee_id = body.get("user_id")
+    task = storage.assign_task(task_id, assignee_id)
+    # Notify the assignee
+    if assignee_id and assignee_id != uid:
+        storage.create_notification(Notification(
+            user_id=assignee_id,
+            title=f"You have been assigned to task: {task.title}",
+            body=f"Task #{task_id} has been assigned to you",
+            notification_type="assignment",
+            source_type="task",
+            source_id=task_id,
+        ))
+        from teb import events as _events
+        _events.event_bus.publish(assignee_id, "task_assigned", {
+            "task_id": task_id, "title": task.title, "assigned_by": uid,
+        })
+    return task.to_dict()
+
+
+@app.get("/api/users/me/assigned-tasks")
+async def list_my_assigned_tasks(request: Request):
+    """List tasks assigned to the current user."""
+    uid = _require_user(request)
+    tasks = storage.list_tasks_assigned_to(uid)
+    return [t.to_dict() for t in tasks]
+
+
+# ─── Presence Indicators ─────────────────────────────────────────────────────
+
+import time as _time_module
+
+_presence_store: dict[str, dict[int, float]] = {}  # "type:id" -> {user_id: timestamp}
+_PRESENCE_TTL = 60  # seconds
+
+
+@app.post("/api/presence/heartbeat")
+async def presence_heartbeat(request: Request):
+    """Update presence for the current user on a resource."""
+    uid = _require_user(request)
+    body = await request.json()
+    resource_type = body.get("resource_type", "")
+    resource_id = body.get("resource_id", "")
+    if not resource_type or resource_id == "":
+        raise HTTPException(status_code=422, detail="resource_type and resource_id are required")
+    key = f"{resource_type}:{resource_id}"
+    now = _time_module.time()
+    if key not in _presence_store:
+        _presence_store[key] = {}
+    _presence_store[key][uid] = now
+    # Clean stale entries
+    _presence_store[key] = {u: ts for u, ts in _presence_store[key].items() if now - ts < _PRESENCE_TTL}
+    return {"status": "ok"}
+
+
+@app.get("/api/presence/{resource_type}/{resource_id}")
+async def get_presence(resource_type: str, resource_id: str, request: Request):
+    """Get active users on a resource."""
+    _require_user(request)
+    key = f"{resource_type}:{resource_id}"
+    now = _time_module.time()
+    users = _presence_store.get(key, {})
+    active = [uid for uid, ts in users.items() if now - ts < _PRESENCE_TTL]
+    # Also clean up while we're here
+    if key in _presence_store:
+        _presence_store[key] = {u: ts for u, ts in _presence_store[key].items() if now - ts < _PRESENCE_TTL}
+    return {"resource_type": resource_type, "resource_id": resource_id, "active_users": active}
+
+
+# ─── Direct Messaging ────────────────────────────────────────────────────────
+
+@app.post("/api/messages", status_code=201)
+async def send_message_endpoint(request: Request):
+    """Send a direct message to another user."""
+    uid = _require_user(request)
+    body = await request.json()
+    recipient_id = body.get("recipient_id")
+    content = str(body.get("content", "")).strip()
+    if not recipient_id:
+        raise HTTPException(status_code=422, detail="recipient_id is required")
+    if not content:
+        raise HTTPException(status_code=422, detail="content must not be empty")
+    msg = DirectMessage(sender_id=uid, recipient_id=recipient_id, content=content)
+    msg = storage.send_message(msg)
+    # Notify recipient via SSE
+    from teb import events as _events
+    _events.event_bus.publish(recipient_id, "new_message", {
+        "message_id": msg.id, "sender_id": uid, "content": content[:100],
+    })
+    return msg.to_dict()
+
+
+@app.get("/api/messages/conversations")
+async def list_conversations_endpoint(request: Request):
+    """List conversation partners for the current user."""
+    uid = _require_user(request)
+    return storage.list_conversations(uid)
+
+
+@app.get("/api/messages/{other_user_id}")
+async def list_messages_endpoint(other_user_id: int, request: Request):
+    """List messages between current user and another user."""
+    uid = _require_user(request)
+    messages = storage.list_messages(uid, other_user_id)
+    return [m.to_dict() for m in messages]
+
+
+@app.put("/api/messages/{message_id}/read")
+async def mark_message_read_endpoint(message_id: int, request: Request):
+    """Mark a message as read."""
+    uid = _require_user(request)
+    ok = storage.mark_message_read(message_id, uid)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Message not found or not your message")
+    return {"read": True}
+
+
+# ─── Goal-Scoped Chat ────────────────────────────────────────────────────────
+
+@app.post("/api/goals/{goal_id}/chat", status_code=201)
+async def create_goal_chat_endpoint(goal_id: int, request: Request):
+    """Send a chat message in a goal's chat room."""
+    uid = _require_user(request)
+    body = await request.json()
+    content = str(body.get("content", "")).strip()
+    if not content:
+        raise HTTPException(status_code=422, detail="content must not be empty")
+    msg = GoalChatMessage(goal_id=goal_id, user_id=uid, content=content)
+    msg = storage.create_goal_chat_message(msg)
+    # Broadcast to collaborators via SSE
+    from teb import events as _events
+    _events.event_bus.publish_broadcast("goal_chat", {
+        "goal_id": goal_id, "message_id": msg.id, "user_id": uid, "content": content[:100],
+    })
+    return msg.to_dict()
+
+
+@app.get("/api/goals/{goal_id}/chat")
+async def list_goal_chat_endpoint(goal_id: int, request: Request):
+    """List chat messages for a goal."""
+    _require_user(request)
+    messages = storage.list_goal_chat_messages(goal_id)
+    return [m.to_dict() for m in messages]
+
+
+# ─── Email Notification Preferences ──────────────────────────────────────────
+
+@app.get("/api/users/me/email-preferences")
+async def get_email_preferences(request: Request):
+    """Get email notification preferences."""
+    uid = _require_user(request)
+    cfg = storage.get_email_notification_config(uid)
+    if not cfg:
+        cfg = EmailNotificationConfig(user_id=uid)
+    return cfg.to_dict()
+
+
+@app.put("/api/users/me/email-preferences")
+async def update_email_preferences(request: Request):
+    """Update email notification preferences."""
+    uid = _require_user(request)
+    body = await request.json()
+    freq = body.get("digest_frequency", "none")
+    if freq not in ("none", "daily", "weekly"):
+        raise HTTPException(status_code=422, detail="digest_frequency must be none, daily, or weekly")
+    cfg = EmailNotificationConfig(
+        user_id=uid,
+        digest_frequency=freq,
+        notify_on_mention=bool(body.get("notify_on_mention", True)),
+        notify_on_assignment=bool(body.get("notify_on_assignment", True)),
+        notify_on_comment=bool(body.get("notify_on_comment", True)),
+    )
+    cfg = storage.upsert_email_notification_config(cfg)
+    return cfg.to_dict()
+
+
+# ─── Push Notification Subscriptions ─────────────────────────────────────────
+
+@app.post("/api/push/subscribe", status_code=201)
+async def push_subscribe(request: Request):
+    """Register a push notification subscription."""
+    uid = _require_user(request)
+    body = await request.json()
+    endpoint = str(body.get("endpoint", "")).strip()
+    if not endpoint:
+        raise HTTPException(status_code=422, detail="endpoint is required")
+    sub = PushSubscription(
+        user_id=uid,
+        endpoint=endpoint,
+        p256dh=str(body.get("p256dh", "")),
+        auth=str(body.get("auth", "")),
+    )
+    sub = storage.save_push_subscription(sub)
+    return sub.to_dict()
+
+
+@app.delete("/api/push/unsubscribe")
+async def push_unsubscribe(request: Request):
+    """Remove a push notification subscription."""
+    uid = _require_user(request)
+    body = await request.json()
+    endpoint = str(body.get("endpoint", "")).strip()
+    if not endpoint:
+        raise HTTPException(status_code=422, detail="endpoint is required")
+    removed = storage.delete_push_subscription(endpoint, uid)
+    if not removed:
+        raise HTTPException(status_code=404, detail="Subscription not found")
+    return {"removed": True}
 
 
 if config.BASE_PATH:

@@ -37,6 +37,7 @@ class Goal:
     answers: dict = field(default_factory=dict)
     auto_execute: bool = False        # when True, tasks are auto-picked by the execution loop
     tags: str = ""                     # comma-separated tags for AI routing and categorization
+    version: int = 1                   # optimistic concurrency control
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
@@ -51,6 +52,7 @@ class Goal:
             "answers": self.answers,
             "auto_execute": self.auto_execute,
             "tags": [t.strip() for t in self.tags.split(",") if t.strip()] if self.tags else [],
+            "version": self.version,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
         }
@@ -69,6 +71,8 @@ class Task:
     due_date: str = ""                 # ISO date string (e.g. "2025-06-15")
     depends_on: str = "[]"             # JSON array of task IDs this task depends on
     tags: str = ""                     # comma-separated tags for AI routing and categorization
+    assigned_to: Optional[int] = None  # FK to users; task assignment
+    version: int = 1                   # optimistic concurrency control
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
@@ -86,6 +90,8 @@ class Task:
             "due_date": self.due_date if self.due_date else None,
             "depends_on": _json.loads(self.depends_on) if self.depends_on else [],
             "tags": [t.strip() for t in self.tags.split(",") if t.strip()] if self.tags else [],
+            "assigned_to": self.assigned_to,
+            "version": self.version,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
         }
@@ -1239,6 +1245,96 @@ class CommentReaction:
             "comment_id": self.comment_id,
             "user_id": self.user_id,
             "emoji": self.emoji,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+# ─── Phase 2: Direct Messaging ─────────────────────────────────────────────
+
+@dataclass
+class DirectMessage:
+    """Direct message between two users."""
+    sender_id: int
+    recipient_id: int
+    content: str
+    read: bool = False
+    id: Optional[int] = None
+    created_at: Optional[datetime] = None
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "sender_id": self.sender_id,
+            "recipient_id": self.recipient_id,
+            "content": self.content,
+            "read": self.read,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+# ─── Phase 2: Goal-Scoped Chat ─────────────────────────────────────────────
+
+@dataclass
+class GoalChatMessage:
+    """Chat message scoped to a goal."""
+    goal_id: int
+    user_id: int
+    content: str
+    id: Optional[int] = None
+    created_at: Optional[datetime] = None
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "goal_id": self.goal_id,
+            "user_id": self.user_id,
+            "content": self.content,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+# ─── Phase 2: Email Notification Preferences ───────────────────────────────
+
+@dataclass
+class EmailNotificationConfig:
+    """Email notification preferences for a user."""
+    user_id: int
+    digest_frequency: str = "none"     # none | daily | weekly
+    notify_on_mention: bool = True
+    notify_on_assignment: bool = True
+    notify_on_comment: bool = True
+    id: Optional[int] = None
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "user_id": self.user_id,
+            "digest_frequency": self.digest_frequency,
+            "notify_on_mention": self.notify_on_mention,
+            "notify_on_assignment": self.notify_on_assignment,
+            "notify_on_comment": self.notify_on_comment,
+        }
+
+
+# ─── Phase 2: Push Subscriptions ───────────────────────────────────────────
+
+@dataclass
+class PushSubscription:
+    """Web push notification subscription."""
+    user_id: int
+    endpoint: str
+    p256dh: str = ""
+    auth: str = ""
+    id: Optional[int] = None
+    created_at: Optional[datetime] = None
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "user_id": self.user_id,
+            "endpoint": self.endpoint,
+            "p256dh": self.p256dh,
+            "auth": self.auth,
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }
 
