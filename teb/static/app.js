@@ -539,7 +539,7 @@ const TaskDetailPanel = {
         status: statusEl ? statusEl.value : 'todo',
         description: descEl ? descEl.value : '',
         due_date: (dueEl ? dueEl.value : '') || null,
-        estimated_minutes: parseInt((estEl ? estEl.value : ''), 10) || null,
+        estimated_minutes: (estEl && estEl.value.trim()) ? parseInt(estEl.value, 10) : null,
         tags: tags,
       });
       toast.success('Saved', 'Task updated');
@@ -1234,7 +1234,7 @@ async function loadDrip() {
       if (doneMsg) doneMsg.style.display = 'block';
       // BUG-05: Only show "All tasks completed" when all tasks are actually done
       const allDone = currentTasks.length > 0 &&
-        currentTasks.filter(t => t.status === 'done').length === currentTasks.length;
+        currentTasks.every(t => t.status === 'done');
       const doneTitle = document.getElementById('drip-done-title');
       const doneDesc = document.getElementById('drip-done-desc');
       if (allDone || (res.message && res.message.includes('well done'))) {
