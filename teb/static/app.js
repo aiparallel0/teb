@@ -199,6 +199,18 @@ const Router = {
       showScreen('screen-tasks');
       updateBreadcrumbs([{text:'Home', href:'#/home'}, {text: currentGoalTitle || 'Goal', href: currentGoalId ? `#/goal/${currentGoalId}` : '#/home'}, {text:'Timeline'}]);
     },
+    '/gantt': () => {
+      showScreen('screen-tasks');
+      updateBreadcrumbs([{text:'Home', href:'#/home'}, {text: currentGoalTitle || 'Goal', href: currentGoalId ? `#/goal/${currentGoalId}` : '#/home'}, {text:'Gantt'}]);
+    },
+    '/table': () => {
+      showScreen('screen-tasks');
+      updateBreadcrumbs([{text:'Home', href:'#/home'}, {text: currentGoalTitle || 'Goal', href: currentGoalId ? `#/goal/${currentGoalId}` : '#/home'}, {text:'Table'}]);
+    },
+    '/workload': () => {
+      showScreen('screen-tasks');
+      updateBreadcrumbs([{text:'Home', href:'#/home'}, {text: currentGoalTitle || 'Goal', href: currentGoalId ? `#/goal/${currentGoalId}` : '#/home'}, {text:'Workload'}]);
+    },
     '/dashboard': () => {
       showScreen('screen-tasks');
       updateBreadcrumbs([{text:'Home', href:'#/home'}, {text:'Dashboard'}]);
