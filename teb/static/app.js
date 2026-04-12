@@ -268,7 +268,10 @@ const Router = {
       if (section) {
         section.style.display = 'block';
         document.getElementById('drip-section') && (document.getElementById('drip-section').style.display = 'none');
-        DashboardBuilder.init('all-tasks-section');
+        // DashboardBuilder is declared as `const` after init() fires (~line 3622).
+        // Defer to the next event-loop turn to avoid a TDZ ReferenceError when
+        // the page loads with #/dashboard as the initial hash.
+        setTimeout(() => DashboardBuilder.init('all-tasks-section'), 0);
       }
     },
     '/settings': () => {
