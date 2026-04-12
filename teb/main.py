@@ -4732,6 +4732,14 @@ class _PrefixMiddleware:
 
     Requests that don't start with the prefix (e.g. GET /health for infra
     probes sent directly to the port) are forwarded unchanged.
+
+    Note: We intentionally do NOT modify ``root_path``.  Starlette's
+    ``get_route_path()`` (used by ``Mount`` and ``StaticFiles``) subtracts
+    ``root_path`` from ``path`` to decide which file to serve.  If we
+    accumulated the prefix into ``root_path``, the subtraction would fail
+    for mounted sub-apps (e.g. ``/teb/static/style.css`` → ``root_path``
+    becomes ``/teb/static`` which is not a prefix of the stripped ``path``
+    ``/static/style.css``), causing every static-file request to 404.
     """
 
     def __init__(self, inner, prefix: str) -> None:
@@ -4745,11 +4753,7 @@ class _PrefixMiddleware:
             if path == self._prefix or path.startswith(self._prefix_slash):
                 # Strip the prefix so the inner app sees its natural paths
                 new_path = path[len(self._prefix):] or "/"
-                scope = dict(
-                    scope,
-                    path=new_path,
-                    root_path=scope.get("root_path", "") + self._prefix,
-                )
+                scope = dict(scope, path=new_path)
         await self._inner(scope, receive, send)
 
 
