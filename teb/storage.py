@@ -6520,3 +6520,185 @@ def get_compliance_report() -> dict:
             "audit_events_retained": True,
         },
     }
+
+
+# ─── Phase 7: Community tables & CRUD ─────────────────────────────────────────
+
+def _ensure_phase7_tables() -> None:
+    """Create Phase 7 community tables if they don't exist."""
+    with _conn() as con:
+        con.executescript("""
+            CREATE TABLE IF NOT EXISTS template_gallery (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                description TEXT DEFAULT '',
+                author TEXT DEFAULT '',
+                category TEXT DEFAULT '',
+                template_json TEXT DEFAULT '{}',
+                downloads INTEGER DEFAULT 0,
+                rating REAL DEFAULT 0.0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE TABLE IF NOT EXISTS blog_posts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                title TEXT NOT NULL,
+                slug TEXT NOT NULL UNIQUE,
+                content TEXT DEFAULT '',
+                author TEXT DEFAULT '',
+                published INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE TABLE IF NOT EXISTS roadmap_items (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                title TEXT NOT NULL,
+                description TEXT DEFAULT '',
+                status TEXT DEFAULT 'planned',
+                votes INTEGER DEFAULT 0,
+                category TEXT DEFAULT '',
+                target_date TEXT DEFAULT '',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE TABLE IF NOT EXISTS feature_votes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                roadmap_item_id INTEGER NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(user_id, roadmap_item_id)
+            );
+        """)
+
+
+from teb.models import TemplateGalleryEntry, BlogPost, RoadmapItem, FeatureVote
+
+
+@_with_retry
+def create_template_gallery_entry(entry: TemplateGalleryEntry) -> int:
+    _ensure_phase7_tables()
+    with _conn() as con:
+        cur = con.execute(
+            "INSERT INTO template_gallery (name, description, author, category, template_json) VALUES (?,?,?,?,?)",
+            (entry.name, entry.description, entry.author, entry.category, entry.template_json),
+        )
+        return cur.lastrowid
+
+
+@_with_retry
+def list_template_gallery(category: str = "") -> list:
+    _ensure_phase7_tables()
+    with _conn() as con:
+        if category:
+            rows = con.execute("SELECT * FROM template_gallery WHERE category=? ORDER BY downloads DESC", (category,)).fetchall()
+        else:
+            rows = con.execute("SELECT * FROM template_gallery ORDER BY downloads DESC").fetchall()
+    return [TemplateGalleryEntry(id=r["id"], name=r["name"], description=r["description"], author=r["author"],
+            category=r["category"], template_json=r["template_json"], downloads=r["downloads"],
+            rating=r["rating"], created_at=_parse_ts(r["created_at"])) for r in rows]
+
+
+@_with_retry
+def get_template_gallery_entry(entry_id: int) -> "TemplateGalleryEntry | None":
+    _ensure_phase7_tables()
+    with _conn() as con:
+        r = con.execute("SELECT * FROM template_gallery WHERE id=?", (entry_id,)).fetchone()
+    if not r:
+        return None
+    return TemplateGalleryEntry(id=r["id"], name=r["name"], description=r["description"], author=r["author"],
+            category=r["category"], template_json=r["template_json"], downloads=r["downloads"],
+            rating=r["rating"], created_at=_parse_ts(r["created_at"]))
+
+
+@_with_retry
+def create_blog_post(post: BlogPost) -> int:
+    _ensure_phase7_tables()
+    with _conn() as con:
+        cur = con.execute(
+            "INSERT INTO blog_posts (title, slug, content, author, published) VALUES (?,?,?,?,?)",
+            (post.title, post.slug, post.content, post.author, int(post.published)),
+        )
+        return cur.lastrowid
+
+
+@_with_retry
+def list_blog_posts(published_only: bool = True) -> list:
+    _ensure_phase7_tables()
+    with _conn() as con:
+        if published_only:
+            rows = con.execute("SELECT * FROM blog_posts WHERE published=1 ORDER BY created_at DESC").fetchall()
+        else:
+            rows = con.execute("SELECT * FROM blog_posts ORDER BY created_at DESC").fetchall()
+    return [BlogPost(id=r["id"], title=r["title"], slug=r["slug"], content=r["content"],
+            author=r["author"], published=bool(r["published"]),
+            created_at=_parse_ts(r["created_at"])) for r in rows]
+
+
+@_with_retry
+def get_blog_post_by_slug(slug: str) -> "BlogPost | None":
+    _ensure_phase7_tables()
+    with _conn() as con:
+        r = con.execute("SELECT * FROM blog_posts WHERE slug=?", (slug,)).fetchone()
+    if not r:
+        return None
+    return BlogPost(id=r["id"], title=r["title"], slug=r["slug"], content=r["content"],
+            author=r["author"], published=bool(r["published"]),
+            created_at=_parse_ts(r["created_at"]))
+
+
+@_with_retry
+def create_roadmap_item(item: RoadmapItem) -> int:
+    _ensure_phase7_tables()
+    with _conn() as con:
+        cur = con.execute(
+            "INSERT INTO roadmap_items (title, description, status, category, target_date) VALUES (?,?,?,?,?)",
+            (item.title, item.description, item.status, item.category, item.target_date),
+        )
+        return cur.lastrowid
+
+
+@_with_retry
+def list_roadmap_items(status: str = "") -> list:
+    _ensure_phase7_tables()
+    with _conn() as con:
+        if status:
+            rows = con.execute("SELECT * FROM roadmap_items WHERE status=? ORDER BY votes DESC", (status,)).fetchall()
+        else:
+            rows = con.execute("SELECT * FROM roadmap_items ORDER BY votes DESC").fetchall()
+    return [RoadmapItem(id=r["id"], title=r["title"], description=r["description"], status=r["status"],
+            votes=r["votes"], category=r["category"], target_date=r["target_date"],
+            created_at=_parse_ts(r["created_at"])) for r in rows]
+
+
+@_with_retry
+def update_roadmap_item(item_id: int, **kwargs) -> bool:
+    _ensure_phase7_tables()
+    allowed = {"title", "description", "status", "category", "target_date"}
+    updates = {k: v for k, v in kwargs.items() if k in allowed}
+    if not updates:
+        return False
+    set_clause = ", ".join(f"{k}=?" for k in updates)
+    vals = list(updates.values()) + [item_id]
+    with _conn() as con:
+        con.execute(f"UPDATE roadmap_items SET {set_clause} WHERE id=?", vals)
+    return True
+
+
+@_with_retry
+def cast_feature_vote(user_id: int, roadmap_item_id: int) -> bool:
+    _ensure_phase7_tables()
+    with _conn() as con:
+        try:
+            con.execute("INSERT INTO feature_votes (user_id, roadmap_item_id) VALUES (?,?)", (user_id, roadmap_item_id))
+            con.execute("UPDATE roadmap_items SET votes = votes + 1 WHERE id=?", (roadmap_item_id,))
+            return True
+        except Exception:
+            return False
+
+
+@_with_retry
+def remove_feature_vote(user_id: int, roadmap_item_id: int) -> bool:
+    _ensure_phase7_tables()
+    with _conn() as con:
+        cur = con.execute("DELETE FROM feature_votes WHERE user_id=? AND roadmap_item_id=?", (user_id, roadmap_item_id))
+        if cur.rowcount > 0:
+            con.execute("UPDATE roadmap_items SET votes = MAX(votes - 1, 0) WHERE id=?", (roadmap_item_id,))
+            return True
+    return False

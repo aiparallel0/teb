@@ -1742,3 +1742,88 @@ class Theme:
             "is_active": self.is_active,
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }
+
+
+# ─── Phase 7: Community models ───────────────────────────────────────────────
+
+import json as _json_std
+
+
+@dataclass
+class TemplateGalleryEntry:
+    """User-contributed goal/project template."""
+    name: str
+    description: str = ""
+    author: str = ""
+    category: str = ""
+    template_json: str = "{}"
+    downloads: int = 0
+    rating: float = 0.0
+    id: Optional[int] = None
+    created_at: Optional[datetime] = None
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id, "name": self.name, "description": self.description,
+            "author": self.author, "category": self.category,
+            "template": _json_std.loads(self.template_json) if self.template_json else {},
+            "downloads": self.downloads, "rating": self.rating,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+@dataclass
+class BlogPost:
+    """Blog post for product updates and tutorials."""
+    title: str
+    slug: str
+    content: str = ""
+    author: str = ""
+    published: bool = False
+    id: Optional[int] = None
+    created_at: Optional[datetime] = None
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id, "title": self.title, "slug": self.slug,
+            "content": self.content, "author": self.author,
+            "published": self.published,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+@dataclass
+class RoadmapItem:
+    """Public roadmap feature item."""
+    title: str
+    description: str = ""
+    status: str = "planned"  # planned | in_progress | completed
+    votes: int = 0
+    category: str = ""
+    target_date: str = ""
+    id: Optional[int] = None
+    created_at: Optional[datetime] = None
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id, "title": self.title, "description": self.description,
+            "status": self.status, "votes": self.votes, "category": self.category,
+            "target_date": self.target_date,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+@dataclass
+class FeatureVote:
+    """User vote on a roadmap item."""
+    user_id: int
+    roadmap_item_id: int
+    id: Optional[int] = None
+    created_at: Optional[datetime] = None
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id, "user_id": self.user_id,
+            "roadmap_item_id": self.roadmap_item_id,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }

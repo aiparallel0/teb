@@ -6829,6 +6829,161 @@ async def list_regions(request: Request):
     }
 
 
+# ─── Phase 7: Documentation & Community endpoints ────────────────────────────
+
+
+@app.get("/api/docs/changelog", tags=["documentation"])
+async def get_changelog():
+    """Return the project changelog."""
+    changelog_path = Path(__file__).parent.parent / "CHANGELOG.md"
+    if changelog_path.exists():
+        return {"content": changelog_path.read_text(encoding="utf-8")}
+    return {"content": "No changelog available."}
+
+
+@app.get("/api/community/links", tags=["community"])
+async def community_links():
+    """List community channels."""
+    return {"links": [
+        {"name": "GitHub Discussions", "url": "https://github.com/aiparallel0/teb/discussions", "type": "forum"},
+        {"name": "Discord", "url": "https://discord.gg/teb", "type": "chat"},
+        {"name": "Twitter/X", "url": "https://x.com/teb_app", "type": "social"},
+    ]}
+
+
+class _TemplateGalleryBody(BaseModel):
+    name: str
+    description: str = ""
+    category: str = ""
+    template: dict = {}
+
+
+@app.get("/api/templates/gallery", tags=["community"])
+async def list_template_gallery_endpoint(category: str = ""):
+    entries = storage.list_template_gallery(category)
+    return {"templates": [e.to_dict() for e in entries]}
+
+
+@app.get("/api/templates/gallery/{entry_id}", tags=["community"])
+async def get_template_gallery_entry_endpoint(entry_id: int):
+    entry = storage.get_template_gallery_entry(entry_id)
+    if not entry:
+        raise HTTPException(404, "Template not found")
+    return entry.to_dict()
+
+
+@app.post("/api/templates/gallery", tags=["community"])
+async def create_template_gallery_entry_endpoint(body: _TemplateGalleryBody, request: Request):
+    _check_api_rate_limit(request)
+    uid = _require_user(request)
+    user = storage.get_user(uid)
+    from teb.models import TemplateGalleryEntry
+    entry = TemplateGalleryEntry(
+        name=body.name, description=body.description,
+        author=user.email if user else "", category=body.category,
+        template_json=json.dumps(body.template),
+    )
+    eid = storage.create_template_gallery_entry(entry)
+    return {"id": eid}
+
+
+@app.get("/api/community/plugins", tags=["community"])
+async def community_plugins():
+    """List community-built plugins."""
+    return {"plugins": [], "message": "Community plugin directory — submit yours via PR!"}
+
+
+class _BlogPostBody(BaseModel):
+    title: str
+    slug: str
+    content: str = ""
+    published: bool = False
+
+
+@app.get("/api/blog", tags=["community"])
+async def list_blog_posts_endpoint():
+    posts = storage.list_blog_posts(published_only=True)
+    return {"posts": [p.to_dict() for p in posts]}
+
+
+@app.get("/api/blog/{slug}", tags=["community"])
+async def get_blog_post_endpoint(slug: str):
+    post = storage.get_blog_post_by_slug(slug)
+    if not post:
+        raise HTTPException(404, "Post not found")
+    return post.to_dict()
+
+
+@app.post("/api/blog", tags=["community"])
+async def create_blog_post_endpoint(body: _BlogPostBody, request: Request):
+    _check_api_rate_limit(request)
+    uid = _require_user(request)
+    user = storage.get_user(uid)
+    if not user or user.role != "admin":
+        raise HTTPException(403, "Admin only")
+    from teb.models import BlogPost
+    post = BlogPost(title=body.title, slug=body.slug, content=body.content,
+                    author=user.email, published=body.published)
+    pid = storage.create_blog_post(post)
+    return {"id": pid}
+
+
+class _RoadmapBody(BaseModel):
+    title: str
+    description: str = ""
+    status: str = "planned"
+    category: str = ""
+    target_date: str = ""
+
+
+@app.get("/api/roadmap", tags=["community"])
+async def list_roadmap_endpoint(status: str = ""):
+    items = storage.list_roadmap_items(status)
+    return {"items": [i.to_dict() for i in items]}
+
+
+@app.post("/api/roadmap", tags=["community"])
+async def create_roadmap_endpoint(body: _RoadmapBody, request: Request):
+    _check_api_rate_limit(request)
+    uid = _require_user(request)
+    user = storage.get_user(uid)
+    if not user or user.role != "admin":
+        raise HTTPException(403, "Admin only")
+    from teb.models import RoadmapItem
+    item = RoadmapItem(title=body.title, description=body.description,
+                       status=body.status, category=body.category, target_date=body.target_date)
+    iid = storage.create_roadmap_item(item)
+    return {"id": iid}
+
+
+@app.put("/api/roadmap/{item_id}", tags=["community"])
+async def update_roadmap_endpoint(item_id: int, body: _RoadmapBody, request: Request):
+    _check_api_rate_limit(request)
+    uid = _require_user(request)
+    user = storage.get_user(uid)
+    if not user or user.role != "admin":
+        raise HTTPException(403, "Admin only")
+    storage.update_roadmap_item(item_id, title=body.title, description=body.description,
+                                status=body.status, category=body.category, target_date=body.target_date)
+    return {"updated": True}
+
+
+@app.post("/api/roadmap/{item_id}/vote", tags=["community"])
+async def vote_roadmap_endpoint(item_id: int, request: Request):
+    _check_api_rate_limit(request)
+    uid = _require_user(request)
+    ok = storage.cast_feature_vote(uid, item_id)
+    return {"voted": ok}
+
+
+@app.delete("/api/roadmap/{item_id}/vote", tags=["community"])
+async def unvote_roadmap_endpoint(item_id: int, request: Request):
+    _check_api_rate_limit(request)
+    uid = _require_user(request)
+    ok = storage.remove_feature_vote(uid, item_id)
+    return {"removed": ok}
+
+
 if config.BASE_PATH:
     asgi_app = _PrefixMiddleware(app, config.BASE_PATH)
 else:
