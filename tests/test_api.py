@@ -780,3 +780,56 @@ async def test_patch_task_failed_status(client):
     r = await client.patch(f"/api/tasks/{tid}", json={"status": "failed"})
     assert r.status_code == 200
     assert r.json()["status"] == "failed"
+
+
+@pytest.mark.asyncio
+async def test_patch_task_priority_happy(client):
+    """Happy path: create a task, PATCH with priority 'high', GET it, assert priority."""
+    create = await client.post("/api/goals", json={"title": "priority test"})
+    gid = create.json()["id"]
+    decomp = await client.post(f"/api/goals/{gid}/decompose", json={})
+    tid = decomp.json()["tasks"][0]["id"]
+
+    r = await client.patch(f"/api/tasks/{tid}", json={"priority": "high"})
+    assert r.status_code == 200
+    assert r.json()["priority"] == "high"
+
+    # GET the task to verify persistence
+    tasks_resp = await client.get(f"/api/tasks?goal_id={gid}")
+    assert tasks_resp.status_code == 200
+    task_list = tasks_resp.json()
+    task = next(t for t in task_list if str(t["id"]) == str(tid))
+    assert task["priority"] == "high"
+
+
+@pytest.mark.asyncio
+async def test_patch_task_priority_invalid(client):
+    """Error case: PATCH with invalid priority returns 422."""
+    create = await client.post("/api/goals", json={"title": "priority invalid"})
+    gid = create.json()["id"]
+    decomp = await client.post(f"/api/goals/{gid}/decompose", json={})
+    tid = decomp.json()["tasks"][0]["id"]
+
+    r = await client.patch(f"/api/tasks/{tid}", json={"priority": "invalid"})
+    assert r.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_xp_endpoint_happy(client):
+    """Happy path: GET /api/users/me/xp returns xp and level."""
+    r = await client.get("/api/users/me/xp")
+    assert r.status_code == 200
+    data = r.json()
+    assert "total_xp" in data
+    assert "level" in data
+
+
+@pytest.mark.asyncio
+async def test_xp_endpoint_requires_auth():
+    """Auth test: GET without token returns 401."""
+    from httpx import AsyncClient, ASGITransport
+    from teb.main import app
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as c:
+        r = await c.get("/api/users/me/xp")
+        assert r.status_code == 401

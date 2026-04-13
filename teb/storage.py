@@ -624,6 +624,24 @@ def _run_migrations(con: sqlite3.Connection) -> None:
     if not _has_column("spending_budgets", "autopilot_threshold"):
         con.execute("ALTER TABLE spending_budgets ADD COLUMN autopilot_threshold REAL NOT NULL DEFAULT 50.0")
 
+    # tasks.priority (high | normal | low)
+    if not _has_column("tasks", "priority"):
+        con.execute("ALTER TABLE tasks ADD COLUMN priority TEXT DEFAULT 'normal'")
+
+    # agent_activity table
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS agent_activity (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            goal_id INTEGER NOT NULL,
+            agent_type TEXT NOT NULL,
+            action TEXT NOT NULL,
+            detail TEXT DEFAULT '',
+            status TEXT DEFAULT 'running',
+            created_at TEXT DEFAULT (datetime('now'))
+        )
+    """)
+    con.execute("CREATE INDEX IF NOT EXISTS idx_agent_activity_goal ON agent_activity(goal_id)")
+
     # deployments table
     con.execute("""
         CREATE TABLE IF NOT EXISTS deployments (
@@ -1677,6 +1695,7 @@ def _row_to_task(row: sqlite3.Row) -> Task:
     t.depends_on = row["depends_on"] if "depends_on" in row.keys() else "[]"
     t.tags = row["tags"] if "tags" in row.keys() else ""
     t.assigned_to = row["assigned_to"] if "assigned_to" in row.keys() else None
+    t.priority = row["priority"] if "priority" in row.keys() else "normal"
     t.version = row["version"] if "version" in row.keys() else 1
     t.created_at = datetime.fromisoformat(row["created_at"])
     t.updated_at = datetime.fromisoformat(row["updated_at"])
@@ -1689,12 +1708,12 @@ def create_task(task: Task) -> Task:
     with _conn() as con:
         cur = con.execute(
             "INSERT INTO tasks (goal_id, parent_id, title, description, estimated_minutes, "
-            "status, order_index, due_date, depends_on, tags, created_at, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "status, order_index, due_date, depends_on, tags, priority, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 task.goal_id, task.parent_id, task.title, task.description,
                 task.estimated_minutes, task.status, task.order_index,
-                task.due_date, task.depends_on, task.tags, now, now,
+                task.due_date, task.depends_on, task.tags, task.priority, now, now,
             ),
         )
         task.id = cur.lastrowid
@@ -1730,12 +1749,12 @@ def update_task(task: Task) -> Task:
     with _conn() as con:
         cur = con.execute(
             "UPDATE tasks SET title=?, description=?, estimated_minutes=?, status=?, "
-            "order_index=?, parent_id=?, due_date=?, depends_on=?, tags=?, assigned_to=?, version=version+1, updated_at=? "
+            "order_index=?, parent_id=?, due_date=?, depends_on=?, tags=?, assigned_to=?, priority=?, version=version+1, updated_at=? "
             "WHERE id=? AND version=?",
             (
                 task.title, task.description, task.estimated_minutes,
                 task.status, task.order_index, task.parent_id,
-                task.due_date, task.depends_on, task.tags, task.assigned_to, now, task.id, task.version,
+                task.due_date, task.depends_on, task.tags, task.assigned_to, task.priority, now, task.id, task.version,
             ),
         )
         if cur.rowcount == 0:
@@ -2264,6 +2283,59 @@ def list_agent_messages(goal_id: int, agent_type: Optional[str] = None) -> List[
     with _conn() as con:
         rows = con.execute(query, params).fetchall()
     return [_row_to_agent_message(r) for r in rows]
+
+
+# ─── Agent Activity ──────────────────────────────────────────────────────────
+
+@_with_retry
+def store_agent_activity(goal_id: int, agent_type: str, action: str, detail: str = "", status: str = "running") -> int:
+    """Record an agent activity entry. Returns the activity ID."""
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        cur = con.execute(
+            "INSERT INTO agent_activity (goal_id, agent_type, action, detail, status, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (goal_id, agent_type, action, detail, status, now),
+        )
+        return cur.lastrowid  # type: ignore[return-value]
+
+
+@_with_retry
+def update_agent_activity_status(activity_id: int, status: str, detail: str = "") -> None:
+    """Update the status (and optional detail) of an agent activity entry."""
+    with _conn() as con:
+        if detail:
+            con.execute(
+                "UPDATE agent_activity SET status = ?, detail = ? WHERE id = ?",
+                (status, detail, activity_id),
+            )
+        else:
+            con.execute(
+                "UPDATE agent_activity SET status = ? WHERE id = ?",
+                (status, activity_id),
+            )
+
+
+def get_agent_activity(goal_id: int, limit: int = 50) -> list:
+    """Get recent agent activity for a goal."""
+    from teb.models import AgentActivity
+    with _conn() as con:
+        rows = con.execute(
+            "SELECT * FROM agent_activity WHERE goal_id = ? ORDER BY created_at DESC LIMIT ?",
+            (goal_id, limit),
+        ).fetchall()
+    return [
+        AgentActivity(
+            id=r["id"],
+            goal_id=r["goal_id"],
+            agent_type=r["agent_type"],
+            action=r["action"],
+            detail=r["detail"] or "",
+            status=r["status"] or "running",
+            created_at=r["created_at"] or "",
+        )
+        for r in rows
+    ]
 
 
 # ─── Browser Actions ────────────────────────────────────────────────────────

@@ -72,6 +72,7 @@ class Task:
     depends_on: str = "[]"             # JSON array of task IDs this task depends on
     tags: str = ""                     # comma-separated tags for AI routing and categorization
     assigned_to: Optional[int] = None  # FK to users; task assignment
+    priority: str = "normal"             # high | normal | low
     version: int = 1                   # optimistic concurrency control
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
@@ -91,6 +92,7 @@ class Task:
             "depends_on": _json.loads(self.depends_on) if self.depends_on else [],
             "tags": [t.strip() for t in self.tags.split(",") if t.strip()] if self.tags else [],
             "assigned_to": self.assigned_to,
+            "priority": self.priority,
             "version": self.version,
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
@@ -331,6 +333,31 @@ class AgentHandoff:
             "output_summary": self.output_summary,
             "status": self.status,
             "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+# ─── Agent Activity ─────────────────────────────────────────────────────────
+
+@dataclass
+class AgentActivity:
+    """A record of agent execution activity for a goal."""
+    id: int
+    goal_id: int
+    agent_type: str
+    action: str
+    detail: str
+    status: str  # "running" | "done" | "error"
+    created_at: str
+
+    def to_dict(self) -> dict:
+        return {
+            "id": self.id,
+            "goal_id": self.goal_id,
+            "agent_type": self.agent_type,
+            "action": self.action,
+            "detail": self.detail,
+            "status": self.status,
+            "created_at": self.created_at,
         }
 
 

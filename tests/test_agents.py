@@ -596,3 +596,25 @@ class TestAgentAPI:
         data = resp.json()
         assert data["total_tasks"] > 0
         assert data["completion_pct"] == 0  # nothing done yet
+
+    def test_agent_activity_happy_path(self, client, goal):
+        """Happy path: orchestrate a goal and verify agent_activity is returned."""
+        client.post(f"/api/goals/{goal.id}/orchestrate")
+        resp = client.get(f"/api/goals/{goal.id}/agent-activity")
+        assert resp.status_code == 200
+        data = resp.json()
+        assert "activity" in data
+        assert isinstance(data["activity"], list)
+
+    def test_agent_activity_requires_auth(self):
+        """Auth test: GET without token returns 401."""
+        from fastapi.testclient import TestClient
+        from teb.main import app
+        c = TestClient(app)
+        resp = c.get("/api/goals/1/agent-activity")
+        assert resp.status_code == 401
+
+    def test_agent_activity_nonexistent_goal(self, client):
+        """Error case: GET for nonexistent goal returns 404."""
+        resp = client.get("/api/goals/99999/agent-activity")
+        assert resp.status_code == 404
