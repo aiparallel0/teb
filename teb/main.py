@@ -7270,6 +7270,73 @@ async def rebalance_goal(goal_id: int, request: Request):
 
 # ─── Phase 6: Social Gamification ────────────────────────────────────────────
 
+
+# ─── Success Graph ────────────────────────────────────────────────────────────
+
+@app.get("/api/success-graph/stats", tags=["success-graph"])
+async def success_graph_stats(request: Request, goal_type: Optional[str] = Query(default=None)):
+    """Get statistics about the success path graph."""
+    _require_user(request)
+    from teb.success_graph import get_graph_stats
+    return get_graph_stats(goal_type)
+
+
+@app.get("/api/success-graph/path", tags=["success-graph"])
+async def success_graph_best_path(request: Request, goal_type: str = Query(...)):
+    """Get the highest-weight execution path for a goal type."""
+    _require_user(request)
+    from teb.success_graph import get_best_path
+    path = get_best_path(goal_type)
+    return {"goal_type": goal_type, "path": path, "steps": len(path)}
+
+
+@app.get("/api/success-graph/paths", tags=["success-graph"])
+async def success_graph_top_paths(
+    request: Request,
+    goal_type: str = Query(...),
+    top_k: int = Query(default=3, ge=1, le=10),
+):
+    """Get the top-K proven execution paths for a goal type."""
+    _require_user(request)
+    from teb.success_graph import get_top_paths
+    paths = get_top_paths(goal_type, top_k=top_k)
+    return {"goal_type": goal_type, "paths": paths, "count": len(paths)}
+
+
+
+# ─── Execution Memory ─────────────────────────────────────────────────────────
+
+@app.get("/api/goals/{goal_id}/execution-memory", tags=["execution-memory"])
+async def get_execution_memory(goal_id: int, request: Request, limit: int = Query(default=50, ge=1, le=200)):
+    """Get execution memory (API call history) for a goal."""
+    user_id = _require_user(request)
+    _get_goal_for_user(goal_id, user_id)
+    from teb.memory import get_memory_for_goal
+    entries = get_memory_for_goal(goal_id, limit=limit)
+    return {"goal_id": goal_id, "entries": entries, "count": len(entries)}
+
+
+@app.get("/api/execution-memory/stats", tags=["execution-memory"])
+async def execution_memory_stats(request: Request, goal_id: Optional[int] = Query(default=None)):
+    """Get aggregate execution memory statistics."""
+    _require_user(request)
+    from teb.memory import get_memory_stats
+    return get_memory_stats(goal_id)
+
+
+@app.get("/api/execution-memory/advice", tags=["execution-memory"])
+async def execution_memory_advice(
+    request: Request,
+    endpoint: str = Query(...),
+    method: str = Query(default="GET"),
+):
+    """Check execution memory for advice on whether to proceed with an API call."""
+    _require_user(request)
+    from teb.memory import should_execute
+    advice = should_execute(endpoint, method)
+    return advice.to_dict()
+
+
 @app.get("/api/users/me/streak", tags=["gamification"])
 async def get_user_streak(request: Request):
     """Get the current user's streak."""

@@ -993,6 +993,22 @@ def _build_context_for_ai(goal: Goal) -> str:
     except Exception:
         pass
 
+    # 5. Success graph: proven execution sequences from completed goals
+    try:
+        from teb.success_graph import get_top_paths
+        graph_paths = get_top_paths(template_name if 'template_name' in dir() else _detect_template(goal), top_k=3)
+        if graph_paths:
+            graph_lines = ["PROVEN EXECUTION SEQUENCES (from success graph):"]
+            for i, path in enumerate(graph_paths, 1):
+                steps_str = " → ".join(
+                    f"{s['title']} (~{int(s.get('avg_minutes', 30))}min)"
+                    for s in path[:10]
+                )
+                graph_lines.append(f"  Sequence {i}: {steps_str}")
+            sections.append("\n".join(graph_lines))
+    except Exception:
+        pass
+
     return "\n\n".join(sections)
 
 
@@ -2263,12 +2279,26 @@ def capture_success_path(goal: Goal, tasks: List[Task]) -> Optional[SuccessPath]
     # Store deviations in the steps_json alongside step data
     path_data = {"steps": steps, "deviations": deviations}
 
-    return SuccessPath(
+    sp = SuccessPath(
         goal_type=template_name,
         steps_json=json.dumps(path_data),
         outcome_summary=". ".join(outcome_parts),
         source_goal_id=goal.id,
     )
+
+    # Update the success graph with this completion's task sequence
+    try:
+        from teb.success_graph import update_graph_from_completed_goal
+        task_dicts = [
+            {"title": t.title, "status": t.status,
+             "estimated_minutes": t.estimated_minutes, "order_index": t.order_index}
+            for t in sorted(completed, key=lambda x: x.order_index)
+        ]
+        update_graph_from_completed_goal(template_name, task_dicts)
+    except Exception:
+        logger.warning("Failed to update success graph", exc_info=True)
+
+    return sp
 
 
 def apply_success_paths(
