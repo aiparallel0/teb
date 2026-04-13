@@ -48,7 +48,7 @@
   </div>
 
   <!-- Animated gradient mesh background -->
-  <div id="gradient-mesh" class="gradient-mesh" aria-hidden="true">
+  <div class="gradient-mesh" aria-hidden="true">
     <div class="gradient-mesh-blob"></div>
   </div>
 
@@ -299,7 +299,7 @@
       <!-- Drip mode: single task card -->
       <div id="drip-section" class="drip-section">
         <div id="drip-card" class="drip-card" style="display:none">
-          <div class="drip-label" style="display:inline-flex;align-items:center;gap:6px;background:var(--accent-soft);padding:3px 10px;border-radius:var(--radius-full);font-size:var(--text-xs);color:var(--accent);font-weight:var(--font-weight-semibold);text-transform:uppercase;letter-spacing:.06em;margin-bottom:var(--space-sm)">
+          <div class="drip-label focus-label">
             <span style="font-size:.9rem">🎯</span> Next task
           </div>
           <div class="drip-title" id="drip-title"></div>
@@ -312,8 +312,8 @@
               <div class="drip-timer-label">Focus time</div>
             </div>
             <div style="display:flex;gap:4px;margin-left:auto">
-              <button id="btn-drip-timer-toggle" class="drip-timer-btn">▶ Start</button>
-              <button id="btn-drip-timer-reset" class="drip-timer-btn">Reset</button>
+              <button id="btn-drip-timer-toggle" class="drip-timer-btn" aria-label="Start focus timer">▶ Start</button>
+              <button id="btn-drip-timer-reset" class="drip-timer-btn" aria-label="Reset focus timer">Reset</button>
             </div>
           </div>
           <div id="drip-skip-suggestion" class="drip-skip-suggestion" style="display:none"></div>

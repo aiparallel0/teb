@@ -843,7 +843,10 @@ function updateSidebarUser() {
     area.style.display = 'flex';
     const initial = email.charAt(0).toUpperCase();
     if (avatar) avatar.textContent = initial;
-    if (name) name.textContent = email.split('@')[0];
+    // Safely extract username from email
+    const atIdx = email.indexOf('@');
+    const displayName = atIdx > 0 ? email.substring(0, atIdx) : 'User';
+    if (name) name.textContent = displayName;
   } else {
     area.style.display = 'none';
   }
@@ -932,6 +935,15 @@ function animateCounter(el, targetValue) {
     if (progress < 1) requestAnimationFrame(step);
   }
   requestAnimationFrame(step);
+}
+
+// ─── Elapsed time formatting ──────────────────────────────────────────────────
+
+function formatElapsedTime(seconds) {
+  if (seconds < 60) return `${seconds}s`;
+  const m = Math.floor(seconds / 60);
+  const s = seconds % 60;
+  return s > 0 ? `${m}m ${s}s` : `${m}m`;
 }
 
 // ─── Debounce ─────────────────────────────────────────────────────────────────
@@ -1427,7 +1439,7 @@ const DripTimer = {
   start() {
     this._running = true;
     const btn = document.getElementById('btn-drip-timer-toggle');
-    if (btn) { btn.textContent = '⏸ Pause'; btn.classList.add('active'); }
+    if (btn) { btn.textContent = '⏸ Pause'; btn.classList.add('active'); btn.setAttribute('aria-label', 'Pause focus timer'); }
     this._interval = setInterval(() => {
       this._seconds++;
       this._updateDisplay();
@@ -1438,7 +1450,7 @@ const DripTimer = {
     this._running = false;
     clearInterval(this._interval);
     const btn = document.getElementById('btn-drip-timer-toggle');
-    if (btn) { btn.textContent = '▶ Start'; btn.classList.remove('active'); }
+    if (btn) { btn.textContent = '▶ Start'; btn.classList.remove('active'); btn.setAttribute('aria-label', 'Start focus timer'); }
   },
 
   reset() {
@@ -1470,7 +1482,7 @@ on('btn-drip-done', 'click', async () => {
   const elapsed = DripTimer.stop();
   try {
     await api.patch(`/api/tasks/${tid}`, { status: 'done' });
-    const elapsedStr = elapsed >= 60 ? `${Math.floor(elapsed/60)}m ${elapsed%60}s` : `${elapsed}s`;
+    const elapsedStr = elapsed > 0 ? formatElapsedTime(elapsed) : '';
     toast.success('Task completed!', elapsed > 0 ? `Great job — took ${elapsedStr}.` : 'Great job — keep it up.');
     showCelebration('✅');
     await refreshGoalView();
@@ -1554,7 +1566,7 @@ function buildTaskCard(task, subtasks, byParent, depth) {
 
   // Build tags HTML if available
   const tags = task.tags || [];
-  const tagsHtml = tags.length ? `<div class="kanban-card-tags" style="margin-top:4px">${tags.map(t => `<span class="tag">${escHtml(t)}</span>`).join('')}</div>` : '';
+  const tagsHtml = tags.length ? `<div class="kanban-card-tags">${tags.map(t => `<span class="tag">${escHtml(t)}</span>`).join('')}</div>` : '';
 
   // Due date display
   const dueHtml = task.due_date ? `<span class="due-date" title="Due ${task.due_date}">📅 ${task.due_date}</span>` : '';
