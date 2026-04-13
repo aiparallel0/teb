@@ -35,6 +35,12 @@
     </div>
   </div>
 
+  <!-- Decompose progress banner -->
+  <div id="decompose-progress-banner" class="decompose-progress-banner" style="display:none" role="status" aria-live="polite">
+    <div class="loading-spinner-sm"></div>
+    <span>Decomposing your goal into tasks…</span>
+  </div>
+
   <!-- Command Palette (Cmd/Ctrl+K) -->
   <div id="command-palette" class="command-palette-overlay" style="display:none" role="dialog" aria-label="Command palette">
     <div class="command-palette">
@@ -263,6 +269,7 @@
           </div>
           <!-- Orchestrate button -->
           <button id="btn-orchestrate" class="btn-secondary btn-sm">Orchestrate</button>
+          <button id="btn-delete-goal" class="btn-secondary btn-sm" style="color:var(--danger)" title="Delete this goal">Delete Goal</button>
         </div>
         <div class="progress-bar-wrap">
           <div class="progress-bar-bg">

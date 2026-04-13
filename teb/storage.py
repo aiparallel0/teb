@@ -1771,6 +1771,18 @@ def delete_tasks_for_goal(goal_id: int) -> None:
         con.execute("DELETE FROM tasks WHERE goal_id = ?", (goal_id,))
 
 
+@_with_retry
+def delete_goal(goal_id: int) -> None:
+    """Delete a goal and all its related data (tasks, checkins, outcomes, budgets)."""
+    with _conn() as con:
+        con.execute("DELETE FROM tasks WHERE goal_id = ?", (goal_id,))
+        con.execute("DELETE FROM checkins WHERE goal_id = ?", (goal_id,))
+        con.execute("DELETE FROM outcome_metrics WHERE goal_id = ?", (goal_id,))
+        con.execute("DELETE FROM spending_budgets WHERE goal_id = ?", (goal_id,))
+        con.execute("DELETE FROM spending_requests WHERE goal_id = ?", (goal_id,))
+        con.execute("DELETE FROM goals WHERE id = ?", (goal_id,))
+
+
 def delete_task(task_id: int) -> None:
     """Delete a task and its children (CASCADE handles children)."""
     with _conn() as con:
