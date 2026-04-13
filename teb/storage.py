@@ -1771,6 +1771,20 @@ def delete_tasks_for_goal(goal_id: int) -> None:
         con.execute("DELETE FROM tasks WHERE goal_id = ?", (goal_id,))
 
 
+@_with_retry
+def delete_goal(goal_id: int) -> None:
+    """Delete a goal and all its related data (tasks, checkins, outcomes, budgets)."""
+    with _conn() as con:
+        con.execute("DELETE FROM tasks WHERE goal_id = ?", (goal_id,))
+        # Guard against tables that may not exist in older schemas
+        for table in ("checkins", "outcome_metrics", "spending_budgets", "spending_requests"):
+            try:
+                con.execute(f"DELETE FROM {table} WHERE goal_id = ?", (goal_id,))
+            except Exception:
+                pass
+        con.execute("DELETE FROM goals WHERE id = ?", (goal_id,))
+
+
 def delete_task(task_id: int) -> None:
     """Delete a task and its children (CASCADE handles children)."""
     with _conn() as con:

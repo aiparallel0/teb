@@ -958,6 +958,16 @@ async def patch_goal(goal_id: int, body: GoalPatch, request: Request):
         raise HTTPException(status_code=409, detail="Goal was modified by another request.")
     return goal.to_dict()
 
+@app.delete("/api/goals/{goal_id}", status_code=200)
+async def delete_goal_endpoint(goal_id: int, request: Request):
+    uid = _require_user(request)
+    goal = _get_goal_for_user(goal_id, uid)
+    storage.delete_goal(goal_id)
+    from teb import events as _events  # noqa: E402
+    _events.event_bus.publish(uid, "goal_deleted", {"goal_id": goal_id, "title": goal.title})
+    return {"ok": True, "deleted_goal_id": goal_id}
+
+
 @app.post("/api/goals/{goal_id}/decompose")
 async def decompose_goal(goal_id: int, request: Request):
     _check_api_rate_limit(request)

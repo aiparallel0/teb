@@ -5327,3 +5327,323 @@ body.sidebar-collapsed .sidebar-user-info { display: none; }
     gap: 0.5rem;
   }
 }
+
+/* ─── Decompose progress banner ───────────────────────────────────── */
+
+.decompose-progress-banner {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: var(--z-toast, 1100);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-sm, 0.5rem);
+  padding: var(--space-sm, 0.5rem) var(--space-md, 1rem);
+  background: var(--primary, #1a1a2e);
+  color: #fff;
+  font-size: var(--text-sm, 0.8125rem);
+  font-weight: var(--font-weight-medium, 500);
+  animation: slideDownBanner 0.3s var(--ease-out, ease-out);
+}
+
+@keyframes slideDownBanner {
+  from { transform: translateY(-100%); }
+  to { transform: translateY(0); }
+}
+
+/* ─── Goal item delete button ──────────────────────────────────────── */
+
+.goal-item {
+  position: relative;
+}
+
+.goal-item-delete {
+  position: absolute;
+  right: var(--space-sm, 0.5rem);
+  top: 50%;
+  transform: translateY(-50%);
+  background: none;
+  border: none;
+  color: var(--muted, #78716c);
+  font-size: var(--text-lg, 1.0625rem);
+  cursor: pointer;
+  padding: var(--space-xs, 0.25rem) var(--space-sm, 0.5rem);
+  border-radius: var(--radius-sm, 4px);
+  opacity: 0;
+  transition: opacity var(--duration-fast, 0.15s), color var(--duration-fast, 0.15s), background var(--duration-fast, 0.15s);
+}
+
+.goal-item:hover .goal-item-delete,
+.goal-item-delete:focus-visible {
+  opacity: 1;
+}
+
+.goal-item-delete:hover {
+  color: var(--danger, #e74c3c);
+  background: var(--danger-soft, rgba(231,76,60,.08));
+}
+
+/* ─── Keyboard Shortcuts Help Overlay ──────────────────────────────── */
+
+.shortcut-help-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-modal, 1000);
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: fadeIn var(--duration-fast, 0.15s) var(--ease-out, ease-out);
+}
+
+.shortcut-help-card {
+  background: var(--surface, #fff);
+  border-radius: var(--radius-xl, 12px);
+  box-shadow: var(--shadow-xl);
+  padding: var(--space-xl, 2rem);
+  max-width: 600px;
+  width: 90vw;
+  max-height: 80vh;
+  overflow-y: auto;
+}
+
+.shortcut-help-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--space-lg, 1.5rem);
+}
+
+.shortcut-help-header h3 {
+  font-family: var(--font-display);
+  font-size: var(--text-xl, 1.25rem);
+  font-weight: var(--font-weight-semibold, 600);
+  margin: 0;
+}
+
+.shortcut-help-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: var(--space-lg, 1.5rem);
+}
+
+.shortcut-group h4 {
+  font-size: var(--text-sm, 0.8125rem);
+  font-weight: var(--font-weight-semibold, 600);
+  color: var(--text-secondary, #57534e);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin: 0 0 var(--space-sm, 0.5rem);
+}
+
+.shortcut-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs, 0.25rem);
+  padding: var(--space-xs, 0.25rem) 0;
+  font-size: var(--text-sm, 0.8125rem);
+}
+
+.shortcut-row kbd {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 24px;
+  height: 24px;
+  padding: 0 var(--space-xs, 0.25rem);
+  border-radius: var(--radius-sm, 4px);
+  border: 1px solid var(--border, #e8e4de);
+  background: var(--bg-alt, #f4f2ed);
+  font-family: var(--font-mono);
+  font-size: 0.7rem;
+  font-weight: var(--font-weight-medium, 500);
+  color: var(--text-secondary, #57534e);
+}
+
+.shortcut-row span {
+  margin-left: var(--space-sm, 0.5rem);
+  color: var(--text, #1c1917);
+}
+
+/* ─── Task detail panel slide-out polish ───────────────────────────── */
+
+.task-detail-panel {
+  position: fixed;
+  top: 0;
+  right: 0;
+  width: min(420px, 90vw);
+  height: 100vh;
+  background: var(--surface, #fff);
+  border-left: 1px solid var(--border, #e8e4de);
+  box-shadow: var(--shadow-xl);
+  z-index: var(--z-modal, 1000);
+  transform: translateX(100%);
+  transition: transform var(--duration-normal, 0.25s) var(--ease-out, cubic-bezier(.2,.8,.2,1));
+  overflow-y: auto;
+  padding: var(--space-lg, 1.5rem);
+}
+
+.task-detail-panel.open {
+  transform: translateX(0);
+}
+
+.task-detail-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  margin-bottom: var(--space-lg, 1.5rem);
+  padding-bottom: var(--space-md, 1rem);
+  border-bottom: 1px solid var(--border-subtle, #ece9e1);
+}
+
+.task-detail-title {
+  font-family: var(--font-display);
+  font-size: var(--text-xl, 1.25rem);
+  font-weight: var(--font-weight-medium, 500);
+  line-height: var(--leading-tight, 1.2);
+  flex: 1;
+  margin: 0;
+}
+
+.task-detail-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-md, 1rem);
+}
+
+.task-detail-field label {
+  display: block;
+  font-size: var(--text-xs, 0.75rem);
+  font-weight: var(--font-weight-semibold, 600);
+  color: var(--text-secondary, #57534e);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: var(--space-xs, 0.25rem);
+}
+
+.task-detail-actions {
+  display: flex;
+  gap: var(--space-sm, 0.5rem);
+  margin-top: var(--space-md, 1rem);
+  padding-top: var(--space-md, 1rem);
+  border-top: 1px solid var(--border-subtle, #ece9e1);
+}
+
+/* ─── Filter bar polish ────────────────────────────────────────────── */
+
+.filter-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm, 0.5rem);
+  padding: var(--space-sm, 0.5rem) 0;
+  flex-wrap: wrap;
+}
+
+.filter-select {
+  padding: var(--space-xs, 0.25rem) var(--space-sm, 0.5rem);
+  border: 1px solid var(--border, #e8e4de);
+  border-radius: var(--radius-sm, 4px);
+  background: var(--surface, #fff);
+  color: var(--text, #1c1917);
+  font-size: var(--text-sm, 0.8125rem);
+  font-family: var(--font-body);
+  min-width: 130px;
+}
+
+/* ─── Batch operations bar polish ──────────────────────────────────── */
+
+.batch-bar {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  z-index: var(--z-sticky, 200);
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm, 0.5rem);
+  padding: var(--space-sm, 0.5rem) var(--space-lg, 1.5rem);
+  background: var(--surface, #fff);
+  border-top: 1px solid var(--border, #e8e4de);
+  box-shadow: var(--shadow-lg);
+  animation: slideUpBar 0.2s var(--ease-out, ease-out);
+}
+
+@keyframes slideUpBar {
+  from { transform: translateY(100%); }
+  to { transform: translateY(0); }
+}
+
+.batch-count {
+  font-size: var(--text-sm, 0.8125rem);
+  font-weight: var(--font-weight-semibold, 600);
+  color: var(--text-secondary, #57534e);
+  margin-right: auto;
+}
+
+/* ─── Keyboard focus on task cards ─────────────────────────────────── */
+
+.task-card.keyboard-focus {
+  outline: 2px solid var(--accent, #c9a84c);
+  outline-offset: 2px;
+  border-radius: var(--radius-md, 6px);
+}
+
+/* ─── Loading spinner small ────────────────────────────────────────── */
+
+.loading-spinner-sm {
+  width: 16px;
+  height: 16px;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: spin 0.6s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* ─── Subtask progress in detail panel ─────────────────────────────── */
+
+.subtask-progress {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm, 0.5rem);
+  font-size: var(--text-xs, 0.75rem);
+  color: var(--text-secondary, #57534e);
+}
+
+.subtask-progress-bar {
+  flex: 1;
+  height: 4px;
+  background: var(--bg-alt, #f4f2ed);
+  border-radius: var(--radius-full, 9999px);
+  overflow: hidden;
+}
+
+.subtask-progress-fill {
+  height: 100%;
+  background: var(--success, #5a7a5a);
+  border-radius: var(--radius-full, 9999px);
+  transition: width var(--duration-normal, 0.25s) var(--ease-out, ease-out);
+}
+
+/* ─── Skip link visibility ─────────────────────────────────────────── */
+
+.skip-link {
+  position: absolute;
+  top: -100px;
+  left: 0;
+  background: var(--primary, #1a1a2e);
+  color: #fff;
+  padding: var(--space-sm, 0.5rem) var(--space-md, 1rem);
+  z-index: 10000;
+  text-decoration: none;
+  border-radius: 0 0 var(--radius-md, 6px) 0;
+}
+
+.skip-link:focus {
+  top: 0;
+}

@@ -745,11 +745,10 @@ const TaskDetailPanel = {
       const descEl = document.getElementById('task-detail-desc');
       const dueEl = document.getElementById('task-detail-due');
       const estEl = document.getElementById('task-detail-est');
-      await api.patch(`/api/goals/${currentGoalId}/tasks/${taskId}`, {
+      await api.patch(`/api/tasks/${taskId}`, {
         status: statusEl ? statusEl.value : 'todo',
-        description: descEl ? descEl.value : '',
+        notes: descEl ? descEl.value : '',
         due_date: (dueEl ? dueEl.value : '') || null,
-        estimated_minutes: (estEl && estEl.value.trim()) ? parseInt(estEl.value, 10) : null,
         tags: tags,
       });
       toast.success('Saved', 'Task updated');
@@ -764,7 +763,7 @@ const TaskDetailPanel = {
     if (!this._currentTask || !currentGoalId) return;
     if (!confirm('Delete this task?')) return;
     try {
-      await api.del(`/api/goals/${currentGoalId}/tasks/${this._currentTask.id}`);
+      await api.del(`/api/tasks/${this._currentTask.id}`);
       toast.info('Deleted', 'Task removed');
       this.close();
       await refreshGoalView();
@@ -812,7 +811,7 @@ const BatchOps = {
     if (!currentGoalId || this._selected.size === 0) return;
     const ids = Array.from(this._selected);
     for (const id of ids) {
-      try { await api.patch(`/api/goals/${currentGoalId}/tasks/${id}`, { status }); }
+      try { await api.patch(`/api/tasks/${id}`, { status }); }
       catch (e) { console.warn('Batch update failed for', id, e); }
     }
     toast.success('Updated', `${ids.length} task(s) set to ${status}`);
@@ -825,7 +824,7 @@ const BatchOps = {
     if (!confirm(`Delete ${this._selected.size} task(s)?`)) return;
     const ids = Array.from(this._selected);
     for (const id of ids) {
-      try { await api.del(`/api/goals/${currentGoalId}/tasks/${id}`); }
+      try { await api.del(`/api/tasks/${id}`); }
       catch (e) { console.warn('Batch delete failed for', id, e); }
     }
     toast.info('Deleted', `${ids.length} task(s) removed`);
@@ -891,7 +890,7 @@ function initKeyboardShortcuts() {
         const task = currentTasks.find(t => t.id === taskId);
         if (task) {
           const newStatus = task.status === 'done' ? 'todo' : 'done';
-          api.patch(`/api/goals/${currentGoalId}/tasks/${taskId}`, { status: newStatus })
+          api.patch(`/api/tasks/${taskId}`, { status: newStatus })
             .then(() => refreshGoalView())
             .catch(err => toast.error('Error', err.message));
         }
@@ -919,6 +918,23 @@ function initKeyboardShortcuts() {
       if (activeScreen.id === 'screen-landing') { document.getElementById('btn-create-goal').click(); e.preventDefault(); }
       else if (activeScreen.id === 'screen-clarify') { document.getElementById('btn-clarify-next').click(); e.preventDefault(); }
     }
+
+    // ?: show keyboard shortcuts help
+    if (e.key === '?') {
+      e.preventDefault();
+      ShortcutHelp.toggle();
+    }
+
+    // g then h: go home
+    if (e.key === 'g') {
+      const _waitForSecond = (ev) => {
+        document.removeEventListener('keydown', _waitForSecond);
+        if (ev.key === 'h') { Router.navigate('#/home'); }
+        else if (ev.key === 'd') { Router.navigate('#/dashboard'); }
+      };
+      setTimeout(() => document.removeEventListener('keydown', _waitForSecond), 1000);
+      document.addEventListener('keydown', _waitForSecond);
+    }
   });
 }
 
@@ -933,7 +949,7 @@ function initQuickAdd() {
     const title = input.value.trim();
     if (!title || !currentGoalId) return;
     try {
-      await api.post(`/api/goals/${currentGoalId}/tasks`, { title, description: '' });
+      await api.post('/api/tasks', { goal_id: currentGoalId, title, description: '', estimated_minutes: 30 });
       input.value = '';
       toast.success('Added', `Task "${title}" created`);
       await refreshGoalView();
@@ -975,7 +991,7 @@ function initTouchGestures() {
     if (_touchEl && _touchEl.classList.contains('swiped')) {
       const taskId = _touchEl.dataset.taskId;
       if (taskId && currentGoalId) {
-        api.patch(`/api/goals/${currentGoalId}/tasks/${taskId}`, { status: 'done' })
+        api.patch(`/api/tasks/${taskId}`, { status: 'done' })
           .then(() => { toast.success('Done', 'Task completed!'); refreshGoalView(); })
           .catch(() => {});
       }
@@ -1288,7 +1304,19 @@ async function loadGoalList() {
             <span class="goal-item-progress-text">${pct}%</span>
           </div>` : ''}
         </div>
+        <button class="goal-item-delete" title="Delete goal" aria-label="Delete goal" data-goal-id="${g.id}">✕</button>
       `;
+      li.querySelector('.goal-item-delete').addEventListener('click', async (e) => {
+        e.stopPropagation();
+        if (!confirm('Delete this goal and all its tasks? This cannot be undone.')) return;
+        try {
+          await api.del('/api/goals/' + g.id);
+          toast.info('Deleted', 'Goal removed.');
+          loadGoalList();
+        } catch (err) {
+          toast.error('Error', err.message);
+        }
+      });
       li.addEventListener('click', () => openGoal(g.id));
       ul.appendChild(li);
     });
@@ -1953,7 +1981,7 @@ function buildTaskCard(task, subtasks, byParent, depth) {
     const newTitle = titleEl.textContent.trim();
     if (newTitle && newTitle !== task.title) {
       try {
-        await api.patch(`/api/goals/${currentGoalId}/tasks/${task.id}`, { title: newTitle });
+        await api.patch(`/api/tasks/${task.id}`, { title: newTitle });
         task.title = newTitle;
       } catch (e) { titleEl.textContent = task.title; toast.error('Error', e.message); }
     }
@@ -2272,6 +2300,21 @@ function renderStatusChart(tasks) {
 
 on('back-from-tasks', 'click', () => {
   Router.navigate('#/home');
+});
+
+on('btn-delete-goal', 'click', async () => {
+  if (!currentGoalId) return;
+  if (!confirm('Delete this goal and all its tasks? This cannot be undone.')) return;
+  try {
+    await api.del('/api/goals/' + currentGoalId);
+    toast.info('Deleted', 'Goal removed.');
+    currentGoalId = null;
+    currentGoalTitle = '';
+    currentTasks = [];
+    Router.navigate('#/home');
+  } catch (e) {
+    toast.error('Error', e.message);
+  }
 });
 
 on('btn-redecompose', 'click', async () => {
@@ -3336,6 +3379,61 @@ const TaskFilter = {
 
 // ─── Init ─────────────────────────────────────────────────────────────────────
 
+// ─── Keyboard Shortcuts Help Overlay ──────────────────────────────────────────
+
+const ShortcutHelp = {
+  _visible: false,
+  _overlay: null,
+
+  toggle() {
+    this._visible ? this.hide() : this.show();
+  },
+
+  show() {
+    this._visible = true;
+    if (this._overlay) { this._overlay.style.display = 'flex'; return; }
+    this._overlay = document.createElement('div');
+    this._overlay.className = 'shortcut-help-overlay';
+    this._overlay.addEventListener('click', (e) => { if (e.target === this._overlay) this.hide(); });
+    this._overlay.innerHTML = `
+      <div class="shortcut-help-card">
+        <div class="shortcut-help-header">
+          <h3>Keyboard Shortcuts</h3>
+          <button class="btn-close" aria-label="Close" id="_shortcut_close">&times;</button>
+        </div>
+        <div class="shortcut-help-grid">
+          <div class="shortcut-group">
+            <h4>Navigation</h4>
+            <div class="shortcut-row"><kbd>G</kbd> <kbd>H</kbd><span>Go to Home</span></div>
+            <div class="shortcut-row"><kbd>G</kbd> <kbd>D</kbd><span>Go to Dashboard</span></div>
+            <div class="shortcut-row"><kbd>⌘</kbd> <kbd>K</kbd><span>Command Palette</span></div>
+          </div>
+          <div class="shortcut-group">
+            <h4>Tasks</h4>
+            <div class="shortcut-row"><kbd>J</kbd><span>Next task</span></div>
+            <div class="shortcut-row"><kbd>K</kbd><span>Previous task</span></div>
+            <div class="shortcut-row"><kbd>X</kbd><span>Toggle complete</span></div>
+            <div class="shortcut-row"><kbd>E</kbd><span>Edit task</span></div>
+            <div class="shortcut-row"><kbd>N</kbd><span>New task</span></div>
+          </div>
+          <div class="shortcut-group">
+            <h4>General</h4>
+            <div class="shortcut-row"><kbd>?</kbd><span>This help</span></div>
+            <div class="shortcut-row"><kbd>Esc</kbd><span>Close panels</span></div>
+            <div class="shortcut-row"><kbd>⌘</kbd> <kbd>⏎</kbd><span>Submit form</span></div>
+          </div>
+        </div>
+      </div>`;
+    document.body.appendChild(this._overlay);
+    this._overlay.querySelector('#_shortcut_close').addEventListener('click', () => this.hide());
+  },
+
+  hide() {
+    this._visible = false;
+    if (this._overlay) this._overlay.style.display = 'none';
+  }
+};
+
 function showSettingsModal() {
   const modal = document.getElementById('settings-modal');
   if (modal) modal.style.display = 'flex';
@@ -3361,6 +3459,7 @@ function init() {
   TaskDetailPanel.init();
   BatchOps.init();
   UnifiedSearch.init();
+  TaskFilter.init();
   setupCharCounter('goal-desc', 'goal-desc-counter');
 
   // Wire mood selector
@@ -3415,6 +3514,9 @@ function init() {
 
   // Initialize router (handles initial route)
   Router.init();
+
+  // Auto-start onboarding tour for first-time users
+  try { new OnboardingTour().init(); } catch (_) { /* non-critical */ }
 }
 
 init();
