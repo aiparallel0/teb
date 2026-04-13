@@ -829,6 +829,27 @@ function updateHeaderUser() {
     if (emailEl) emailEl.textContent = '';
     if (authBtn) authBtn.style.display = 'inline-flex';
   }
+  // Update sidebar user area
+  updateSidebarUser();
+}
+
+function updateSidebarUser() {
+  const email = localStorage.getItem('teb_email');
+  const area = document.getElementById('sidebar-user-area');
+  const avatar = document.getElementById('sidebar-avatar');
+  const name = document.getElementById('sidebar-user-name');
+  if (!area) return;
+  if (email) {
+    area.style.display = 'flex';
+    const initial = email.charAt(0).toUpperCase();
+    if (avatar) avatar.textContent = initial;
+    // Safely extract username from email
+    const atIdx = email.indexOf('@');
+    const displayName = atIdx > 0 ? email.substring(0, atIdx) : 'User';
+    if (name) name.textContent = displayName;
+  } else {
+    area.style.display = 'none';
+  }
 }
 
 function showError(elId, msg) {
@@ -914,6 +935,15 @@ function animateCounter(el, targetValue) {
     if (progress < 1) requestAnimationFrame(step);
   }
   requestAnimationFrame(step);
+}
+
+// ─── Elapsed time formatting ──────────────────────────────────────────────────
+
+function formatElapsedTime(seconds) {
+  if (seconds < 60) return `${seconds}s`;
+  const m = Math.floor(seconds / 60);
+  const s = seconds % 60;
+  return s > 0 ? `${m}m ${s}s` : `${m}m`;
 }
 
 // ─── Debounce ─────────────────────────────────────────────────────────────────
@@ -1041,24 +1071,40 @@ async function loadGoalList() {
     updateSidebarGoals(goals);
     CommandPalette._goals = goals;
 
+    // Update goal stats overview
+    updateGoalStats(goals);
+
     if (!goals.length) {
       ul.innerHTML = `
         <li class="empty-state-large">
           <div class="empty-state-icon">📌</div>
           <div class="empty-state-title">No goals yet</div>
-          <div class="empty-state-desc">Define your first objective above to get started.</div>
+          <div class="empty-state-desc">Define your first objective above and let AI break it into actionable steps.</div>
         </li>`;
       return;
     }
     goals.forEach(g => {
       const li = document.createElement('li');
       li.className = 'goal-item';
+      // Calculate progress if tasks are available
+      const tasks = g.tasks || [];
+      const topLevel = tasks.filter(t => t.parent_id === null);
+      const done = topLevel.filter(t => t.status === 'done' || t.status === 'skipped').length;
+      const pct = topLevel.length ? Math.round((done / topLevel.length) * 100) : 0;
+      const statusLabel = g.status.replace('_', ' ');
       li.innerHTML = `
-        <div>
+        <div style="flex:1;min-width:0">
           <span class="goal-item-title">${escHtml(g.title)}</span>
-          <div style="font-size:var(--text-xs);color:var(--muted);margin-top:.15rem">${timeAgo(g.created_at)}</div>
+          <div style="display:flex;align-items:center;gap:var(--space-sm);margin-top:.35rem;flex-wrap:wrap">
+            <span class="goal-item-status status-${g.status}">${statusLabel}</span>
+            <span style="font-size:var(--text-xs);color:var(--muted)">${timeAgo(g.created_at)}</span>
+            ${topLevel.length ? `<span style="font-size:var(--text-xs);color:var(--muted)">· ${topLevel.length} tasks</span>` : ''}
+          </div>
+          ${topLevel.length ? `<div class="goal-item-progress">
+            <div class="goal-item-progress-bar"><div class="goal-item-progress-fill" style="width:${pct}%"></div></div>
+            <span class="goal-item-progress-text">${pct}%</span>
+          </div>` : ''}
         </div>
-        <span class="goal-item-status status-${g.status}">${g.status.replace('_', ' ')}</span>
       `;
       li.addEventListener('click', () => openGoal(g.id));
       ul.appendChild(li);
@@ -1067,6 +1113,32 @@ async function loadGoalList() {
     ul.innerHTML = '';
     console.warn('Could not load goal list', e);
   }
+}
+
+function updateGoalStats(goals) {
+  const container = document.getElementById('goal-stats-overview');
+  if (!container) return;
+  if (!goals || !goals.length) {
+    container.style.display = 'none';
+    return;
+  }
+  container.style.display = 'grid';
+  const total = goals.length;
+  const completed = goals.filter(g => g.status === 'done').length;
+  const active = goals.filter(g => g.status === 'in_progress' || g.status === 'decomposed').length;
+  let totalTasks = 0;
+  goals.forEach(g => {
+    const tasks = g.tasks || [];
+    totalTasks += tasks.filter(t => t.parent_id === null).length;
+  });
+  const totalEl = document.getElementById('stat-total-goals');
+  const completedEl = document.getElementById('stat-completed-goals');
+  const activeEl = document.getElementById('stat-active-goals');
+  const tasksEl = document.getElementById('stat-total-tasks');
+  if (totalEl) animateCounter(totalEl, total);
+  if (completedEl) animateCounter(completedEl, completed);
+  if (activeEl) animateCounter(activeEl, active);
+  if (tasksEl) animateCounter(tasksEl, totalTasks);
 }
 
 async function openGoal(goalId) {
@@ -1293,6 +1365,9 @@ async function loadDrip() {
     if (dripMeta) dripMeta.textContent = `~${res.task.estimated_minutes} min`;
     if (msg) msg.textContent = res.message || '';
 
+    // Initialize focus timer for this task
+    DripTimer.init();
+
     // Skip suggestion (P2.2)
     const skipSug = document.getElementById('drip-skip-suggestion');
     if (skipSug) {
@@ -1341,14 +1416,75 @@ async function loadDrip() {
   }
 }
 
+// ─── Drip Focus Timer ─────────────────────────────────────────────────────────
+
+const DripTimer = {
+  _interval: null,
+  _seconds: 0,
+  _running: false,
+
+  init() {
+    const timerEl = document.getElementById('drip-timer');
+    if (timerEl) timerEl.style.display = 'flex';
+    this.reset();
+    on('btn-drip-timer-toggle', 'click', () => this.toggle());
+    on('btn-drip-timer-reset', 'click', () => this.reset());
+  },
+
+  toggle() {
+    if (this._running) this.pause();
+    else this.start();
+  },
+
+  start() {
+    this._running = true;
+    const btn = document.getElementById('btn-drip-timer-toggle');
+    if (btn) { btn.textContent = '⏸ Pause'; btn.classList.add('active'); btn.setAttribute('aria-label', 'Pause focus timer'); }
+    this._interval = setInterval(() => {
+      this._seconds++;
+      this._updateDisplay();
+    }, 1000);
+  },
+
+  pause() {
+    this._running = false;
+    clearInterval(this._interval);
+    const btn = document.getElementById('btn-drip-timer-toggle');
+    if (btn) { btn.textContent = '▶ Start'; btn.classList.remove('active'); btn.setAttribute('aria-label', 'Start focus timer'); }
+  },
+
+  reset() {
+    this.pause();
+    this._seconds = 0;
+    this._updateDisplay();
+  },
+
+  _updateDisplay() {
+    const display = document.getElementById('drip-timer-display');
+    if (!display) return;
+    const m = Math.floor(this._seconds / 60);
+    const s = this._seconds % 60;
+    display.textContent = `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+  },
+
+  stop() {
+    this.pause();
+    return this._seconds;
+  }
+};
+
 // BUG-06: Don't parseInt task IDs — they may be UUIDs/strings
 on('btn-drip-done', 'click', async () => {
   const card = document.getElementById('drip-card');
   const tid = card ? card.dataset.taskId : null;
   if (!tid) return;
+  // Stop timer and log time
+  const elapsed = DripTimer.stop();
   try {
     await api.patch(`/api/tasks/${tid}`, { status: 'done' });
-    toast.success('Task completed!', 'Great job — keep it up.');
+    const elapsedStr = elapsed > 0 ? formatElapsedTime(elapsed) : '';
+    toast.success('Task completed!', elapsed > 0 ? `Great job — took ${elapsedStr}.` : 'Great job — keep it up.');
+    showCelebration('✅');
     await refreshGoalView();
     loadDrip();
   } catch (e) {
@@ -1420,6 +1556,7 @@ function buildTaskCard(task, subtasks, byParent, depth) {
   card.className = `task-card task-item${task.status === 'done' ? ' done-card' : ''}`;
   card.dataset.id = task.id;
   card.dataset.taskId = task.id;
+  card.dataset.status = task.status;
 
   const cbClass = task.status === 'done' ? 'checked' : '';
   const hasSubtasks = subtasks.length > 0;
@@ -1427,13 +1564,25 @@ function buildTaskCard(task, subtasks, byParent, depth) {
   const subtaskDone = hasSubtasks ? subtasks.filter(s => s.status === 'done').length : 0;
   const subtaskPct = hasSubtasks ? Math.round((subtaskDone / subtasks.length) * 100) : 0;
 
+  // Build tags HTML if available
+  const tags = task.tags || [];
+  const tagsHtml = tags.length ? `<div class="kanban-card-tags">${tags.map(t => `<span class="tag">${escHtml(t)}</span>`).join('')}</div>` : '';
+
+  // Due date display
+  const dueHtml = task.due_date ? `<span class="due-date" title="Due ${task.due_date}">📅 ${task.due_date}</span>` : '';
+
   card.innerHTML = `
     <div class="task-header">
       <input type="checkbox" class="task-select-checkbox" data-id="${task.id}" title="Select for batch" aria-label="Select task" />
       <div class="task-checkbox ${cbClass}" data-id="${task.id}" title="Mark done"></div>
       <div class="task-info">
         <div class="task-title task-title-editable" contenteditable="true" data-task-id="${task.id}" spellcheck="false">${escHtml(task.title)}</div>
-        <div class="task-meta">~${task.estimated_minutes} min${hasSubtasks ? ` · ${subtasks.length} sub-tasks` : ''}</div>
+        <div class="task-meta">
+          <span class="task-time-pill">⏱ ${task.estimated_minutes}m</span>
+          ${dueHtml}
+          ${hasSubtasks ? `<span style="font-size:var(--text-xs);color:var(--muted)">${subtasks.length} sub-tasks</span>` : ''}
+        </div>
+        ${tagsHtml}
         ${hasSubtasks ? `<div class="subtask-progress">
           <div class="subtask-progress-bar"><div class="subtask-progress-fill" style="width:${subtaskPct}%"></div></div>
           <span>${subtaskDone}/${subtasks.length}</span>
