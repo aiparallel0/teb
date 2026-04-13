@@ -1,19 +1,21 @@
 [project]
 name = "teb"
-version = "0.1.0"
+version = "2.0.0"
 description = "Task Execution Bridge — bridges vague goals to executed tasks with AI-powered decomposition, autonomous execution, and outcome tracking"
 readme = "README.md"
 license = {text = "MIT"}
 requires-python = ">=3.12"
 keywords = ["ai", "task-management", "automation", "goal-tracking", "agents"]
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 4 - Beta",
     "Framework :: FastAPI",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
     "Topic :: Office/Business :: Scheduling",
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Typing :: Typed",
 ]
 
 dependencies = [
@@ -34,6 +36,9 @@ dependencies = [
 dev = [
     "pytest==8.3.4",
     "pytest-asyncio==0.24.0",
+    "pytest-cov>=6.0",
+    "ruff>=0.8.0",
+    "mypy>=1.13.0",
 ]
 
 [project.scripts]
@@ -56,3 +61,49 @@ asyncio_mode = "auto"
 
 [tool.setuptools.packages.find]
 include = ["teb*"]
+
+# ─── Ruff (linter + formatter) ────────────────────────────────────────────────
+
+[tool.ruff]
+target-version = "py312"
+line-length = 120
+
+[tool.ruff.lint]
+select = [
+    "E",     # pycodestyle errors
+    "W",     # pycodestyle warnings
+    "F",     # pyflakes
+    "I",     # isort
+    "B",     # flake8-bugbear
+    "UP",    # pyupgrade
+    "S",     # flake8-bandit (security)
+    "T20",   # flake8-print
+    "SIM",   # flake8-simplify
+]
+ignore = [
+    "E402",   # module-level import not at top (intentional late imports in main.py)
+    "E501",   # line too long (handled by formatter)
+    "S101",   # assert used (fine in tests)
+    "S105",   # possible hardcoded password (false positives on test values)
+    "S106",   # possible hardcoded password argument
+    "B008",   # function call in default argument (FastAPI Query/Depends pattern)
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S101", "S105", "S106", "T20"]
+"teb/main.py" = ["E402"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+# ─── Mypy (type checking) ────────────────────────────────────────────────────
+
+[tool.mypy]
+python_version = "3.12"
+warn_return_any = true
+warn_unused_configs = true
+check_untyped_defs = true
+ignore_missing_imports = true
+disallow_untyped_defs = false
+exclude = ["tests/", "migrations/"]

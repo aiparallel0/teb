@@ -555,6 +555,14 @@ def init_db() -> None:
             );
             CREATE INDEX IF NOT EXISTS idx_api_usage_user ON api_usage_log(user_id);
             CREATE INDEX IF NOT EXISTS idx_api_usage_time ON api_usage_log(created_at);
+
+            -- Schema version tracking for migration history
+            CREATE TABLE IF NOT EXISTS schema_versions (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                version     TEXT    NOT NULL,
+                description TEXT    NOT NULL DEFAULT '',
+                applied_at  TEXT    NOT NULL
+            );
         """)
 
         # ─── Lightweight schema migrations ────────────────────────────────
@@ -1287,6 +1295,18 @@ def _run_migrations(con: sqlite3.Connection) -> None:
     _safe_add_column(con, "tasks", "version", "INTEGER NOT NULL DEFAULT 1")
     _safe_add_column(con, "tasks", "assigned_to", "INTEGER DEFAULT NULL")
 
+    # ─── Record current schema version ───────────────────────────────────
+    _CURRENT_SCHEMA_VERSION = "2.0.0"
+    row = con.execute(
+        "SELECT version FROM schema_versions ORDER BY id DESC LIMIT 1"
+    ).fetchone()
+    last_version = row["version"] if row else None
+    if last_version != _CURRENT_SCHEMA_VERSION:
+        con.execute(
+            "INSERT INTO schema_versions (version, description, applied_at) VALUES (?, ?, ?)",
+            (_CURRENT_SCHEMA_VERSION, "Professional quality improvements", datetime.now(timezone.utc).isoformat()),
+        )
+
 
 def _safe_add_column(con: sqlite3.Connection, table: str, column: str, col_type: str) -> None:
     """Add a column to a table if it doesn't already exist."""
@@ -1434,6 +1454,58 @@ def get_system_stats() -> dict:
         "total_executions": total_executions,
         "spending_approved": spending_approved,
     }
+
+
+def get_database_health() -> dict:
+    """Return database health diagnostics: size, table count, WAL status, schema version."""
+    import os as _os
+    with _conn() as con:
+        # Table count
+        table_count = con.execute(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table'"
+        ).fetchone()[0]
+
+        # WAL mode check
+        journal_mode = con.execute("PRAGMA journal_mode").fetchone()[0]
+
+        # Integrity check (quick variant — only checks first page)
+        integrity = con.execute("PRAGMA quick_check(1)").fetchone()[0]
+
+        # Schema version
+        schema_row = con.execute(
+            "SELECT version, applied_at FROM schema_versions ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+        schema_version = schema_row["version"] if schema_row else "unknown"
+        schema_applied_at = schema_row["applied_at"] if schema_row else None
+
+    # File size
+    db_file = _db_path()
+    try:
+        db_size_mb = round(_os.path.getsize(db_file) / (1024 * 1024), 2)
+    except OSError:
+        db_size_mb = -1
+
+    return {
+        "status": "ok" if integrity == "ok" else "degraded",
+        "table_count": table_count,
+        "journal_mode": journal_mode,
+        "integrity": integrity,
+        "schema_version": schema_version,
+        "schema_applied_at": schema_applied_at,
+        "size_mb": db_size_mb,
+    }
+
+
+def get_schema_versions() -> list:
+    """Return all recorded schema version history."""
+    with _conn() as con:
+        rows = con.execute(
+            "SELECT version, description, applied_at FROM schema_versions ORDER BY id"
+        ).fetchall()
+    return [
+        {"version": r["version"], "description": r["description"], "applied_at": r["applied_at"]}
+        for r in rows
+    ]
 
 
 def record_failed_login(user_id: int) -> int:
