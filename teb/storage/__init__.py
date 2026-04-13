@@ -7,6 +7,10 @@ For backward compatibility, all public symbols are re-exported here.
 """
 # Re-export base infrastructure
 from teb.storage.base import (  # noqa: F401
+    _BUSY_TIMEOUT_MS,
+    _DB_PATH,
+    _MAX_RETRIES,
+    _REVENUE_UNITS,
     _conn,
     _db_path,
     _decrypt_value,

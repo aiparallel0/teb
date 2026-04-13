@@ -33,6 +33,10 @@ from teb.models import (
     Workspace, WorkspaceMember,
 )
 
+# ─── Domain routers (extracted from monolith) ─────────────────────────────────
+from teb.routers.health import router as health_router, set_start_time as _set_health_start_time, increment_request_metrics
+from teb.routers.auth import router as auth_router, set_rate_limiter as _set_auth_rate_limiter
+
 # ─── Logging ──────────────────────────────────────────────────────────────────
 
 class _JsonFormatter(logging.Formatter):
@@ -254,6 +258,7 @@ async def _autonomous_execution_loop() -> None:
 async def lifespan(app: FastAPI):
     global _auto_exec_task, _APP_START_TIME
     _APP_START_TIME = time.monotonic()
+    _set_health_start_time(_APP_START_TIME)
 
     # ── Configuration validation at startup ───────────────────────────────
     _validate_startup_config()
@@ -370,6 +375,14 @@ app.add_middleware(RequestIdMiddleware)
 # Static files
 _STATIC_DIR = Path(__file__).parent / "static"
 _TEMPLATES_DIR = Path(__file__).parent / "templates"
+
+
+# ─── Include domain routers ───────────────────────────────────────────────────
+app.include_router(health_router)
+app.include_router(auth_router)
+
+# Wire up shared state for routers
+_set_auth_rate_limiter(_check_rate_limit)
 
 app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
 
@@ -532,32 +545,6 @@ class DripClarifyAnswer(BaseModel):
     answer: str
 
 
-class AuthRegister(BaseModel):
-    email: str = Field(..., min_length=3, max_length=254, description="Email address")
-    password: str = Field(..., min_length=6, max_length=128, description="Password (min 6 characters)")
-
-    @field_validator("email")
-    @classmethod
-    def validate_email(cls, v: str) -> str:
-        # Robust email format check
-        if not re.match(r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$", v.strip()):
-            raise ValueError("Invalid email address format")
-        return v.strip().lower()
-
-
-class AuthLogin(BaseModel):
-    email: str = Field(..., min_length=3, max_length=254)
-    password: str = Field(..., min_length=1, max_length=128)
-
-
-class AuthRefresh(BaseModel):
-    refresh_token: str
-
-
-class AuthLogout(BaseModel):
-    refresh_token: Optional[str] = None
-
-
 class TelegramUpdate(BaseModel):
     """Minimal Telegram webhook update structure."""
     message: Optional[dict] = None
@@ -698,175 +685,13 @@ def _increment_request_metrics(status_code: int) -> None:
     _metrics["requests_by_status"][key] = _metrics["requests_by_status"].get(key, 0) + 1
     if status_code >= 500:
         _metrics["errors_total"] += 1
+    # Also update the health router's metrics copy
+    increment_request_metrics(status_code)
 
 
-@app.get("/health", tags=["health"])
-async def health_check():
-    """Comprehensive health check — database, AI, payments, uptime, and version."""
-    import platform
-    import shutil
+# Health routes moved to teb/routers/health.py
 
-    components: dict = {}
-
-    # Database connectivity
-    try:
-        with storage._conn() as con:
-            con.execute("SELECT 1")
-            row = con.execute(
-                "SELECT COUNT(*) AS cnt FROM sqlite_master WHERE type='table'"
-            ).fetchone()
-            table_count = row["cnt"] if row else 0
-        components["database"] = {"status": "ok", "tables": table_count}
-        db_ok = True
-    except Exception as exc:
-        components["database"] = {"status": "error", "detail": str(exc)}
-        db_ok = False
-
-    # AI provider availability
-    ai_provider = config.get_ai_provider()
-    components["ai"] = {
-        "status": "ok" if ai_provider else "unconfigured",
-        "provider": ai_provider or "none",
-    }
-
-    # Payment providers
-    from teb import payments as _pay
-    providers = _pay.list_providers()
-    components["payments"] = {
-        "status": "ok" if any(p["configured"] for p in providers) else "unconfigured",
-        "providers": providers,
-    }
-
-    # Disk space
-    try:
-        disk = shutil.disk_usage("/")
-        disk_free_mb = round(disk.free / (1024 * 1024), 1)
-        disk_pct = round((disk.used / disk.total) * 100, 1)
-        components["disk"] = {
-            "status": "ok" if disk_pct < 90 else "warning",
-            "free_mb": disk_free_mb,
-            "used_percent": disk_pct,
-        }
-    except Exception:
-        components["disk"] = {"status": "unknown"}
-
-    # Overall status
-    status = "healthy" if db_ok else "degraded"
-    code = 200 if db_ok else 503
-    uptime_seconds = round(time.monotonic() - _APP_START_TIME, 1)
-
-    return JSONResponse(
-        status_code=code,
-        content={
-            "status": status,
-            "version": "2.0.0",
-            "uptime_seconds": uptime_seconds,
-            "python_version": platform.python_version(),
-            "components": components,
-        },
-    )
-
-
-@app.get("/api/health/ready", tags=["health"])
-async def readiness_probe():
-    """Readiness probe for container orchestration (Kubernetes, ECS, etc.).
-
-    Returns 200 if the database is reachable and the app can serve traffic.
-    Returns 503 if the app is not ready.
-    """
-    try:
-        with storage._conn() as con:
-            con.execute("SELECT 1")
-        return JSONResponse(
-            status_code=200,
-            content={"ready": True},
-        )
-    except Exception:
-        logger.warning("Readiness probe failed", exc_info=True)
-        return JSONResponse(
-            status_code=503,
-            content={"ready": False, "detail": "Database connectivity check failed"},
-        )
-
-
-@app.get("/api/health/live", tags=["health"])
-async def liveness_probe():
-    """Liveness probe — always returns 200 if the process is running."""
-    return {"alive": True}
-
-
-@app.get("/api/metrics", tags=["health"])
-async def get_metrics():
-    """Basic application metrics (request counts, uptime, error rate).
-
-    Returns JSON metrics suitable for monitoring dashboards.
-    For Prometheus-format metrics, use a dedicated exporter.
-    """
-    uptime_seconds = round(time.monotonic() - _APP_START_TIME, 1)
-    total = max(_metrics["requests_total"], 1)
-    error_rate = round(_metrics["errors_total"] / total * 100, 2)
-
-    return {
-        "uptime_seconds": uptime_seconds,
-        "requests_total": _metrics["requests_total"],
-        "requests_by_status": _metrics["requests_by_status"],
-        "errors_total": _metrics["errors_total"],
-        "error_rate_percent": error_rate,
-    }
-
-
-# ─── Auth ─────────────────────────────────────────────────────────────────────
-
-@app.post("/api/auth/register", status_code=201)
-async def register(body: AuthRegister, request: Request):
-    """Register a new user and return a JWT token."""
-    _check_rate_limit(request)
-    try:
-        result = auth.register_user(body.email, body.password)
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc))
-    return result
-
-
-@app.post("/api/auth/login")
-async def login(body: AuthLogin, request: Request):
-    """Log in and return a JWT token."""
-    _check_rate_limit(request)
-    try:
-        result = auth.login_user(body.email, body.password)
-    except ValueError as exc:
-        raise HTTPException(status_code=401, detail=str(exc))
-    return result
-
-
-@app.get("/api/auth/me")
-async def auth_me(request: Request):
-    """Get the current authenticated user."""
-    uid = _require_user(request)
-    user = storage.get_user(uid)
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-    return user.to_dict()
-
-
-@app.post("/api/auth/refresh")
-async def auth_refresh(request: Request, body: AuthRefresh):
-    """Exchange a refresh token for a new access token + refresh token."""
-    _check_rate_limit(request)
-    try:
-        result = auth.refresh_access_token(body.refresh_token)
-    except ValueError as exc:
-        raise HTTPException(status_code=401, detail=str(exc))
-    return result
-
-
-@app.post("/api/auth/logout")
-async def auth_logout(request: Request, body: AuthLogout):
-    """Revoke refresh tokens. Revokes all tokens if no specific token provided."""
-    uid = _require_user(request)
-    auth.logout_user(uid, body.refresh_token)
-    return {"message": "Logged out"}
-
+# Auth routes moved to teb/routers/auth.py
 
 # ─── Frontend ─────────────────────────────────────────────────────────────────
 
