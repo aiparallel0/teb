@@ -47,11 +47,23 @@
     </div>
   </div>
 
+  <!-- Animated gradient mesh background -->
+  <div id="gradient-mesh" class="gradient-mesh" aria-hidden="true">
+    <div class="gradient-mesh-blob"></div>
+  </div>
+
   <!-- Sidebar -->
   <aside id="sidebar" class="sidebar" role="navigation" aria-label="Main navigation">
     <div class="sidebar-header">
       <h1 class="sidebar-logo"><em>teb</em></h1>
       <button id="btn-sidebar-collapse" class="sidebar-collapse-btn" title="Collapse sidebar" aria-label="Collapse sidebar">◀</button>
+    </div>
+    <div id="sidebar-user-area" class="sidebar-user" style="display:none">
+      <div id="sidebar-avatar" class="sidebar-avatar">?</div>
+      <div class="sidebar-user-info">
+        <div id="sidebar-user-name" class="sidebar-user-name"></div>
+        <div class="sidebar-user-role">Member</div>
+      </div>
     </div>
     <nav class="sidebar-nav" role="navigation">
       <a href="#/home" class="sidebar-link active" data-route="home" data-shortcut="G H">
@@ -136,7 +148,8 @@
         <p class="tagline">From ambition to execution.</p>
       </header>
       <div class="card" id="auth-card">
-        <h2 id="auth-title">Sign in</h2>
+        <h2 id="auth-title" style="font-family:var(--font-display);font-size:var(--text-2xl);font-weight:var(--font-weight-medium);text-align:center;margin-bottom:var(--space-md)">Sign in</h2>
+        <p style="text-align:center;color:var(--text-secondary);font-size:var(--text-sm);margin-bottom:var(--space-lg)">AI-powered goal decomposition & task execution</p>
         <label for="auth-email">Email</label>
         <input id="auth-email" type="email" placeholder="you@example.com" autocomplete="email" />
         <label for="auth-password" class="mt">Password</label>
@@ -163,8 +176,34 @@
           <button id="btn-logout" class="btn-secondary btn-sm">Sign out</button>
         </div>
       </header>
+
+      <!-- Goal Stats Overview -->
+      <div id="goal-stats-overview" class="goal-stats-overview" style="display:none">
+        <div class="goal-stat-card">
+          <div class="goal-stat-icon">🎯</div>
+          <div id="stat-total-goals" class="goal-stat-value">0</div>
+          <div class="goal-stat-label">Total Goals</div>
+        </div>
+        <div class="goal-stat-card">
+          <div class="goal-stat-icon">✅</div>
+          <div id="stat-completed-goals" class="goal-stat-value">0</div>
+          <div class="goal-stat-label">Completed</div>
+        </div>
+        <div class="goal-stat-card">
+          <div class="goal-stat-icon">⚡</div>
+          <div id="stat-active-goals" class="goal-stat-value">0</div>
+          <div class="goal-stat-label">Active</div>
+        </div>
+        <div class="goal-stat-card">
+          <div class="goal-stat-icon">📋</div>
+          <div id="stat-total-tasks" class="goal-stat-value">0</div>
+          <div class="goal-stat-label">Tasks</div>
+        </div>
+      </div>
+
       <div class="card">
-        <label for="goal-title">Define your objective</label>
+        <label for="goal-title" style="font-family:var(--font-display);font-size:var(--text-lg);font-weight:var(--font-weight-medium)">What do you want to achieve?</label>
+        <p style="font-size:var(--text-sm);color:var(--text-secondary);margin-bottom:var(--space-sm)">Describe your goal and let AI break it down into actionable tasks.</p>
         <input id="goal-title" type="text" placeholder="Launch a SaaS product, master Rust, run a sub-3h marathon…" autocomplete="off" />
         <label for="goal-desc" class="mt">Context &amp; constraints <span style="font-weight:400;color:var(--muted)">(optional)</span></label>
         <textarea id="goal-desc" rows="3" placeholder="Timeline, resources, prior attempts, constraints…" maxlength="2000"></textarea>
@@ -173,7 +212,7 @@
         <div class="error" id="error-landing" role="alert"></div>
       </div>
       <div id="goal-list-section" class="mt">
-        <h3>Previous goals</h3>
+        <h3 style="font-family:var(--font-display);font-size:var(--text-lg);font-weight:var(--font-weight-medium);margin-bottom:var(--space-sm)">Your goals</h3>
         <ul id="goal-list" class="goal-list"></ul>
       </div>
     </section>
@@ -260,10 +299,23 @@
       <!-- Drip mode: single task card -->
       <div id="drip-section" class="drip-section">
         <div id="drip-card" class="drip-card" style="display:none">
-          <div class="drip-label">Next task</div>
+          <div class="drip-label" style="display:inline-flex;align-items:center;gap:6px;background:var(--accent-soft);padding:3px 10px;border-radius:var(--radius-full);font-size:var(--text-xs);color:var(--accent);font-weight:var(--font-weight-semibold);text-transform:uppercase;letter-spacing:.06em;margin-bottom:var(--space-sm)">
+            <span style="font-size:.9rem">🎯</span> Next task
+          </div>
           <div class="drip-title" id="drip-title"></div>
           <div class="drip-desc" id="drip-desc"></div>
           <div class="drip-meta" id="drip-meta"></div>
+          <!-- Focus Timer -->
+          <div id="drip-timer" class="drip-timer" style="display:none">
+            <div>
+              <div id="drip-timer-display" class="drip-timer-display">00:00</div>
+              <div class="drip-timer-label">Focus time</div>
+            </div>
+            <div style="display:flex;gap:4px;margin-left:auto">
+              <button id="btn-drip-timer-toggle" class="drip-timer-btn">▶ Start</button>
+              <button id="btn-drip-timer-reset" class="drip-timer-btn">Reset</button>
+            </div>
+          </div>
           <div id="drip-skip-suggestion" class="drip-skip-suggestion" style="display:none"></div>
           <div id="drip-adaptive-question" class="drip-adaptive-q" style="display:none">
             <label id="drip-q-text"></label>
@@ -272,7 +324,7 @@
           </div>
           <div id="drip-stall-msg" class="drip-stall-msg" style="display:none"></div>
           <div class="drip-actions">
-            <button class="btn-primary" id="btn-drip-done">Complete — next</button>
+            <button class="btn-primary" id="btn-drip-done">✓ Complete — next</button>
             <button class="btn-secondary btn-sm" id="btn-drip-skip">Skip this task</button>
           </div>
         </div>

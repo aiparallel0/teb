@@ -3631,3 +3631,1080 @@ picture img { width: 100%; height: auto; }
 .achievement-desc { font-size: var(--text-xs); color: var(--text-secondary); }
 .achievement-date { font-size: var(--text-xs); color: var(--muted); margin-top: .15rem; }
 .gamification-content { padding: var(--space-md); }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   UI Enhancement — Drastic Visual Improvement
+   Animated backgrounds, richer cards, improved micro-interactions,
+   better spacing, enhanced dark mode, polished empty states
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ─── Animated Gradient Mesh Background (Auth & Landing) ──────────────────── */
+.gradient-mesh {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  overflow: hidden;
+  pointer-events: none;
+}
+.gradient-mesh::before,
+.gradient-mesh::after {
+  content: '';
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(100px);
+  opacity: .18;
+  animation: meshFloat 20s ease-in-out infinite alternate;
+}
+.gradient-mesh::before {
+  width: 60vw; height: 60vw;
+  top: -20%; left: -10%;
+  background: radial-gradient(circle, var(--gold-400), var(--amber-300));
+}
+.gradient-mesh::after {
+  width: 50vw; height: 50vw;
+  bottom: -20%; right: -15%;
+  background: radial-gradient(circle, var(--sage-400), var(--navy-300));
+  animation-delay: -10s;
+  animation-direction: alternate-reverse;
+}
+@keyframes meshFloat {
+  0%   { transform: translate(0, 0) scale(1); }
+  33%  { transform: translate(3%, 5%) scale(1.05); }
+  66%  { transform: translate(-2%, 3%) scale(.97); }
+  100% { transform: translate(1%, -2%) scale(1.02); }
+}
+[data-theme="dark"] .gradient-mesh::before { opacity: .08; }
+[data-theme="dark"] .gradient-mesh::after  { opacity: .06; }
+
+/* Third blob for richer texture */
+.gradient-mesh-blob {
+  position: absolute;
+  width: 40vw; height: 40vw;
+  top: 30%; left: 40%;
+  border-radius: 50%;
+  filter: blur(120px);
+  opacity: .12;
+  background: radial-gradient(circle, var(--accent), var(--navy-400));
+  animation: meshFloat 25s ease-in-out infinite alternate-reverse;
+  animation-delay: -5s;
+}
+[data-theme="dark"] .gradient-mesh-blob { opacity: .05; }
+
+/* ─── Enhanced Hero Section ───────────────────────────────────────────────── */
+.hero {
+  padding-top: var(--space-2xl);
+  padding-bottom: var(--space-lg);
+}
+.hero h1 {
+  position: relative;
+  display: inline-block;
+}
+.hero h1::after {
+  content: '';
+  display: block;
+  width: 60px;
+  height: 3px;
+  background: linear-gradient(90deg, var(--gold-400), var(--gold-600));
+  margin: var(--space-sm) auto 0;
+  border-radius: var(--radius-full);
+}
+.hero .tagline {
+  margin-top: var(--space-md);
+  opacity: 0;
+  animation: taglineFadeIn .8s ease-out .3s forwards;
+}
+@keyframes taglineFadeIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+/* ─── Redesigned Goal Creation Card ──────────────────────────────────────── */
+#screen-landing > .card {
+  border-left: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  padding: var(--space-2xl);
+  position: relative;
+  overflow: hidden;
+  background: var(--surface);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+#screen-landing > .card::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 3px;
+  background: linear-gradient(90deg, var(--gold-400), var(--accent), var(--sage-400));
+  background-size: 200% 100%;
+  animation: gradientSlide 6s linear infinite;
+}
+@keyframes gradientSlide {
+  0%   { background-position: 0% 50%; }
+  50%  { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+
+/* AI-inspired prompt input styling */
+#goal-title {
+  font-size: var(--text-xl);
+  padding: 1rem 1.25rem;
+  border: 2px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg);
+  transition: all var(--duration-normal) var(--ease-out);
+}
+#goal-title:focus {
+  border-color: var(--gold-400);
+  box-shadow: 0 0 0 4px rgba(201,168,76,.1), var(--shadow-md);
+  background: var(--surface);
+}
+#goal-title::placeholder {
+  font-style: italic;
+  color: var(--placeholder);
+}
+
+#goal-desc {
+  border-radius: var(--radius-lg);
+  border: 2px solid var(--border);
+}
+#goal-desc:focus {
+  border-color: var(--gold-400);
+  box-shadow: 0 0 0 4px rgba(201,168,76,.1);
+}
+
+#btn-create-goal {
+  margin-top: var(--space-md);
+  padding: .85rem 2rem;
+  font-size: var(--text-lg);
+  border-radius: var(--radius-lg);
+  background: linear-gradient(135deg, var(--gold-500), var(--gold-600));
+  box-shadow: 0 4px 16px rgba(201,168,76,.25);
+  letter-spacing: .02em;
+}
+#btn-create-goal:hover {
+  background: linear-gradient(135deg, var(--gold-600), var(--gold-700));
+  box-shadow: 0 6px 24px rgba(201,168,76,.35);
+  transform: translateY(-2px);
+}
+
+/* ─── Goal Stats Overview ────────────────────────────────────────────────── */
+.goal-stats-overview {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: var(--space-sm);
+  margin: var(--space-lg) 0;
+}
+.goal-stat-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-md) var(--space-lg);
+  text-align: center;
+  position: relative;
+  overflow: hidden;
+  transition: all var(--duration-fast) var(--ease-out);
+}
+.goal-stat-card::before {
+  content: '';
+  position: absolute;
+  bottom: 0; left: 0; right: 0;
+  height: 3px;
+  background: var(--accent);
+  transform: scaleX(0);
+  transition: transform var(--duration-normal) var(--ease-out);
+}
+.goal-stat-card:hover { 
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-md);
+}
+.goal-stat-card:hover::before { transform: scaleX(1); }
+.goal-stat-value {
+  font-family: var(--font-display);
+  font-size: var(--text-3xl);
+  font-weight: var(--font-weight-semibold);
+  color: var(--accent);
+  line-height: 1.1;
+}
+.goal-stat-label {
+  font-size: var(--text-xs);
+  color: var(--muted);
+  margin-top: var(--space-xs);
+  text-transform: uppercase;
+  letter-spacing: .08em;
+}
+.goal-stat-icon {
+  font-size: 1.5rem;
+  margin-bottom: var(--space-xs);
+  opacity: .7;
+}
+
+/* ─── Enhanced Goal List Cards ────────────────────────────────────────────── */
+.goal-item {
+  border: 1px solid var(--border);
+  border-left: 4px solid transparent;
+  border-radius: var(--radius-lg);
+  padding: 1rem 1.25rem;
+  cursor: pointer;
+  position: relative;
+  overflow: hidden;
+  background: var(--surface);
+}
+.goal-item::after {
+  content: '→';
+  position: absolute;
+  right: 1.25rem;
+  top: 50%;
+  transform: translateY(-50%) translateX(4px);
+  opacity: 0;
+  color: var(--accent);
+  font-size: var(--text-lg);
+  transition: all var(--duration-fast) var(--ease-out);
+}
+.goal-item:hover::after {
+  opacity: 1;
+  transform: translateY(-50%) translateX(0);
+}
+.goal-item:hover {
+  border-left-color: var(--gold-400);
+  box-shadow: var(--shadow-md);
+  transform: translateY(-2px);
+}
+.goal-item:active {
+  transform: translateY(0);
+  box-shadow: var(--shadow-sm);
+}
+.goal-item-title {
+  font-family: var(--font-display);
+  font-weight: var(--font-weight-medium);
+  font-size: var(--text-lg);
+  line-height: var(--leading-tight);
+  padding-right: 2rem;
+}
+.goal-item-progress {
+  display: flex;
+  align-items: center;
+  gap: var(--space-xs);
+  margin-top: var(--space-xs);
+}
+.goal-item-progress-bar {
+  flex: 1;
+  height: 3px;
+  background: var(--border);
+  border-radius: var(--radius-full);
+  overflow: hidden;
+  max-width: 120px;
+}
+.goal-item-progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--sage-400), var(--sage-500));
+  border-radius: var(--radius-full);
+  transition: width .4s var(--ease-out);
+}
+.goal-item-progress-text {
+  font-size: var(--text-xs);
+  color: var(--muted);
+  font-weight: var(--font-weight-medium);
+}
+
+/* ─── Enhanced Task Cards ─────────────────────────────────────────────────── */
+.task-card {
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  padding: 1rem 1.25rem;
+  background: var(--surface);
+  position: relative;
+  transition: all var(--duration-fast) var(--ease-out);
+}
+.task-card::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 4px; right: 0; bottom: 0;
+  background: linear-gradient(135deg, transparent 0%, var(--accent-soft) 100%);
+  opacity: 0;
+  transition: opacity var(--duration-fast);
+  border-radius: 0 var(--radius-lg) var(--radius-lg) 0;
+  pointer-events: none;
+}
+.task-card:hover::before { opacity: 1; }
+.task-card:hover {
+  border-left-color: var(--accent);
+  box-shadow: var(--shadow-md);
+  transform: translateY(-1px);
+}
+.task-card.done-card {
+  border-left-color: var(--success);
+  opacity: .55;
+}
+.task-card.done-card:hover { opacity: .75; }
+.task-card[data-status="in_progress"] { border-left-color: var(--amber-400); }
+.task-card[data-status="done"] { border-left-color: var(--success); }
+.task-card[data-status="failed"] { border-left-color: var(--danger); }
+.task-card[data-status="executing"] { border-left-color: var(--navy-400); }
+
+/* Task checkbox enhancement */
+.task-checkbox {
+  width: 22px; height: 22px; min-width: 22px;
+  border-radius: 50%;
+  border: 2px solid var(--border);
+  display: flex; align-items: center; justify-content: center;
+  cursor: pointer;
+  transition: all var(--duration-fast) var(--ease-spring);
+  position: relative;
+}
+.task-checkbox:hover {
+  border-color: var(--success);
+  background: var(--success-soft);
+  transform: scale(1.1);
+}
+.task-checkbox.checked {
+  background: var(--success);
+  border-color: var(--success);
+  transform: scale(1);
+}
+.task-checkbox.checked::after {
+  content: '✓';
+  color: #fff;
+  font-size: .8rem;
+  font-weight: var(--font-weight-bold);
+  animation: checkPop .3s var(--ease-spring);
+}
+@keyframes checkPop {
+  0%   { transform: scale(0); }
+  60%  { transform: scale(1.3); }
+  100% { transform: scale(1); }
+}
+
+/* Task title enhancement */
+.task-title {
+  font-family: var(--font-display);
+  font-weight: var(--font-weight-medium);
+  font-size: var(--text-base);
+  line-height: var(--leading-tight);
+  color: var(--text);
+}
+.task-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  margin-top: .25rem;
+  flex-wrap: wrap;
+}
+
+/* Task time estimate pill */
+.task-time-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: var(--text-xs);
+  color: var(--muted);
+  background: var(--bg-alt);
+  padding: 2px 8px;
+  border-radius: var(--radius-full);
+}
+
+/* ─── Enhanced Progress Bar ───────────────────────────────────────────────── */
+.progress-bar-fill {
+  background: linear-gradient(90deg, var(--sage-400), var(--sage-500), var(--gold-400));
+  background-size: 200% 100%;
+  position: relative;
+}
+.progress-bar-fill::after {
+  content: '';
+  position: absolute;
+  top: 0; right: 0;
+  width: 100%; height: 100%;
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,.3), transparent);
+  animation: progressShine 2s ease-in-out infinite;
+}
+@keyframes progressShine {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(100%); }
+}
+
+/* Progress milestone markers */
+.progress-milestones {
+  position: relative;
+  display: flex;
+  justify-content: space-between;
+  margin-top: 2px;
+}
+.progress-milestone {
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  background: var(--border);
+  transition: all var(--duration-fast);
+}
+.progress-milestone.reached {
+  background: var(--success);
+  box-shadow: 0 0 6px var(--success);
+}
+
+/* ─── Enhanced Drip Card ──────────────────────────────────────────────────── */
+.drip-card {
+  border: 1px solid var(--border);
+  border-left: 5px solid var(--accent);
+  border-radius: var(--radius-xl);
+  padding: var(--space-2xl);
+  background: var(--surface);
+  position: relative;
+  overflow: hidden;
+}
+.drip-card::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 5px; right: 0;
+  height: 1px;
+  background: linear-gradient(90deg, var(--accent), transparent 80%);
+}
+.drip-card::after {
+  content: '';
+  position: absolute;
+  top: 0; right: 0;
+  width: 150px; height: 150px;
+  background: radial-gradient(circle, var(--accent-soft) 0%, transparent 70%);
+  opacity: .5;
+  pointer-events: none;
+}
+
+/* Focus timer in drip card */
+.drip-timer {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  margin: var(--space-sm) 0;
+  padding: var(--space-sm) var(--space-md);
+  background: var(--bg-alt);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-subtle);
+}
+.drip-timer-display {
+  font-family: var(--font-mono);
+  font-size: var(--text-2xl);
+  font-weight: var(--font-weight-semibold);
+  color: var(--accent);
+  letter-spacing: .05em;
+  line-height: 1;
+}
+.drip-timer-label {
+  font-size: var(--text-xs);
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: .06em;
+}
+.drip-timer-btn {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 4px 10px;
+  font-size: var(--text-xs);
+  cursor: pointer;
+  color: var(--text-secondary);
+  transition: all var(--duration-fast);
+}
+.drip-timer-btn:hover { border-color: var(--accent); color: var(--accent); }
+.drip-timer-btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+
+/* Enhanced drip done button */
+#btn-drip-done {
+  padding: .85rem 2rem;
+  font-size: var(--text-base);
+  border-radius: var(--radius-lg);
+  background: linear-gradient(135deg, var(--sage-500), var(--sage-600));
+  box-shadow: 0 4px 12px rgba(90,122,90,.25);
+  position: relative;
+  overflow: hidden;
+}
+#btn-drip-done:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 20px rgba(90,122,90,.35);
+}
+
+/* ─── Enhanced Sidebar ────────────────────────────────────────────────────── */
+.sidebar {
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+}
+.sidebar-header {
+  padding: var(--space-lg) var(--space-md);
+  border-bottom: 1px solid var(--border-subtle);
+  position: relative;
+}
+.sidebar-logo {
+  background: linear-gradient(135deg, var(--text), var(--gold-500));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* User avatar area in sidebar */
+.sidebar-user {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  padding: var(--space-md);
+  border-bottom: 1px solid var(--border-subtle);
+}
+.sidebar-avatar {
+  width: 36px; height: 36px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, var(--gold-400), var(--accent));
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  font-family: var(--font-display);
+  font-weight: var(--font-weight-semibold);
+  font-size: var(--text-sm);
+  flex-shrink: 0;
+}
+.sidebar-user-info {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+}
+.sidebar-user-name {
+  font-size: var(--text-sm);
+  font-weight: var(--font-weight-medium);
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sidebar-user-role {
+  font-size: var(--text-xs);
+  color: var(--muted);
+}
+body.sidebar-collapsed .sidebar-user-info { display: none; }
+
+/* Sidebar link enhancement */
+.sidebar-link {
+  border-radius: 0;
+  margin: 0 var(--space-xs);
+  border-radius: var(--radius-md);
+  transition: all var(--duration-fast) var(--ease-out);
+}
+.sidebar-link:hover {
+  background: var(--bg-alt);
+  transform: translateX(2px);
+}
+.sidebar-link.active {
+  background: var(--primary-soft);
+  transform: none;
+}
+.sidebar-link.active::before {
+  content: '';
+  position: absolute;
+  left: -4px; top: 25%; bottom: 25%;
+  width: 3px;
+  background: var(--gold-400);
+  border-radius: var(--radius-full);
+}
+
+/* ─── Enhanced Sidebar Goals Section ──────────────────────────────────────── */
+.sidebar-goals-list {
+  padding: var(--space-xs) 0;
+}
+.sidebar-goal-link {
+  border-radius: var(--radius-md);
+  margin: 0 var(--space-xs);
+  transition: all var(--duration-fast);
+}
+.sidebar-goal-link:hover {
+  background: var(--bg-alt);
+  transform: translateX(2px);
+}
+
+/* ─── Frosted Glass Mobile Bottom Nav ─────────────────────────────────────── */
+.mobile-nav {
+  background: rgba(250,249,246,.85);
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
+  border-top: 1px solid rgba(0,0,0,.08);
+}
+[data-theme="dark"] .mobile-nav {
+  background: rgba(13,13,20,.85);
+  border-top: 1px solid rgba(255,255,255,.08);
+}
+.mobile-nav-item {
+  position: relative;
+  transition: all var(--duration-fast);
+}
+.mobile-nav-item.active {
+  color: var(--primary);
+}
+.mobile-nav-item.active::before {
+  content: '';
+  position: absolute;
+  top: -6px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 20px;
+  height: 3px;
+  background: var(--gold-400);
+  border-radius: var(--radius-full);
+}
+
+/* ─── Enhanced Header Bar ─────────────────────────────────────────────────── */
+.header-bar {
+  background: rgba(250,249,246,.92);
+  backdrop-filter: blur(12px) saturate(180%);
+  -webkit-backdrop-filter: blur(12px) saturate(180%);
+  border-bottom: 1px solid rgba(0,0,0,.06);
+}
+[data-theme="dark"] .header-bar {
+  background: rgba(13,13,20,.92);
+  border-bottom: 1px solid rgba(255,255,255,.06);
+}
+
+/* Command palette trigger enhancement */
+.header-action-btn {
+  border-radius: var(--radius-lg);
+  padding: 6px 14px;
+  font-size: var(--text-sm);
+  transition: all var(--duration-fast) var(--ease-out);
+}
+.header-action-btn:hover {
+  background: var(--primary-soft);
+  border-color: var(--gold-400);
+  transform: translateY(-1px);
+}
+
+/* ─── Enhanced Command Palette ────────────────────────────────────────────── */
+.command-palette {
+  border-radius: 16px;
+  box-shadow: 0 24px 80px rgba(0,0,0,.2), 0 0 0 1px rgba(0,0,0,.05);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+}
+[data-theme="dark"] .command-palette {
+  box-shadow: 0 24px 80px rgba(0,0,0,.5), 0 0 0 1px rgba(255,255,255,.08);
+}
+.command-palette-input-wrap input {
+  font-size: var(--text-xl);
+}
+.cmd-result {
+  border-radius: var(--radius-md);
+  margin: 0 var(--space-xs);
+  transition: all var(--duration-fast);
+}
+.cmd-result:hover, .cmd-result.selected {
+  background: var(--primary-soft);
+}
+
+/* ─── Enhanced Empty States ───────────────────────────────────────────────── */
+.empty-state {
+  padding: var(--space-2xl) var(--space-lg);
+}
+.empty-state-icon {
+  font-size: 3rem;
+  margin-bottom: var(--space-md);
+  display: inline-block;
+  animation: emptyStateFloat 3s ease-in-out infinite;
+}
+@keyframes emptyStateFloat {
+  0%, 100% { transform: translateY(0); }
+  50%      { transform: translateY(-8px); }
+}
+.empty-state-title {
+  font-family: var(--font-display);
+  font-size: var(--text-xl);
+  font-weight: var(--font-weight-medium);
+  color: var(--text);
+  margin-bottom: var(--space-sm);
+}
+.empty-state-desc {
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+  max-width: 320px;
+  margin: 0 auto;
+  line-height: var(--leading-relaxed);
+}
+
+/* ─── Enhanced Focus Banner ───────────────────────────────────────────────── */
+.focus-banner {
+  border: 1px solid var(--border);
+  border-left: 5px solid var(--accent);
+  border-radius: var(--radius-xl);
+  padding: 1.5rem 1.75rem;
+  background: var(--surface);
+  position: relative;
+  overflow: hidden;
+}
+.focus-banner::before {
+  content: '';
+  position: absolute;
+  top: 0; right: 0;
+  width: 200px; height: 100%;
+  background: linear-gradient(135deg, transparent 50%, var(--primary-soft) 100%);
+  pointer-events: none;
+}
+.focus-label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-xs);
+  background: var(--accent-soft);
+  padding: 3px 10px;
+  border-radius: var(--radius-full);
+  font-size: var(--text-xs);
+  color: var(--accent);
+  font-weight: var(--font-weight-semibold);
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  margin-bottom: var(--space-sm);
+}
+
+/* ─── Enhanced Check-in Section ───────────────────────────────────────────── */
+.checkin-section {
+  border-radius: var(--radius-xl);
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--sage-500);
+  overflow: hidden;
+}
+.checkin-section h3 {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+}
+.checkin-section h3::before {
+  content: '📝';
+  font-size: 1.2rem;
+}
+.checkin-feedback {
+  border-radius: var(--radius-lg);
+  padding: var(--space-md);
+}
+
+/* ─── Enhanced Outcome Section ────────────────────────────────────────────── */
+.outcome-section {
+  border-radius: var(--radius-xl);
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--accent);
+}
+.outcome-metric-card {
+  border-radius: var(--radius-lg);
+  padding: var(--space-md);
+  transition: all var(--duration-fast) var(--ease-out);
+  border: 1px solid var(--border);
+}
+.outcome-metric-card:hover {
+  border-color: var(--accent);
+  transform: translateX(4px);
+  box-shadow: var(--shadow-sm);
+}
+
+/* ─── Enhanced Auth Screen ────────────────────────────────────────────────── */
+#screen-auth {
+  min-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+#screen-auth .card {
+  border-left: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  padding: var(--space-2xl);
+  position: relative;
+  overflow: hidden;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+#screen-auth .card::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 3px;
+  background: linear-gradient(90deg, var(--gold-400), var(--accent));
+}
+#screen-auth .hero h1 {
+  font-size: var(--text-5xl);
+  margin-bottom: var(--space-sm);
+}
+#screen-auth .hero h1::after {
+  width: 40px;
+}
+#screen-auth #btn-auth-submit {
+  width: 100%;
+  margin-top: var(--space-lg);
+  padding: .85rem 1.5rem;
+  font-size: var(--text-lg);
+  border-radius: var(--radius-lg);
+  background: linear-gradient(135deg, var(--gold-500), var(--gold-600));
+  box-shadow: 0 4px 16px rgba(201,168,76,.25);
+}
+#screen-auth #btn-auth-submit:hover {
+  background: linear-gradient(135deg, var(--gold-600), var(--gold-700));
+  box-shadow: 0 6px 24px rgba(201,168,76,.35);
+  transform: translateY(-2px);
+}
+
+/* Auth form input enhancement */
+#screen-auth input[type="email"],
+#screen-auth input[type="password"] {
+  padding: .75rem 1rem;
+  border: 2px solid var(--border);
+  border-radius: var(--radius-lg);
+  font-size: var(--text-base);
+}
+#screen-auth input:focus {
+  border-color: var(--gold-400);
+  box-shadow: 0 0 0 4px rgba(201,168,76,.1);
+}
+
+/* Auth toggle link enhancement */
+.auth-toggle {
+  margin-top: var(--space-md);
+  text-align: center;
+  font-size: var(--text-sm);
+  color: var(--text-secondary);
+}
+.auth-skip {
+  margin-top: var(--space-sm);
+  text-align: center;
+}
+
+/* ─── Enhanced Dark Mode Specifics ────────────────────────────────────────── */
+[data-theme="dark"] .card {
+  border-left-color: var(--accent);
+  box-shadow: 0 4px 24px rgba(0,0,0,.3), inset 0 1px 0 rgba(255,255,255,.03);
+}
+[data-theme="dark"] #screen-landing > .card {
+  background: rgba(22,22,31,.9);
+  border-color: rgba(255,255,255,.06);
+}
+[data-theme="dark"] #screen-auth .card {
+  background: rgba(22,22,31,.9);
+  border-color: rgba(255,255,255,.06);
+}
+[data-theme="dark"] .goal-item {
+  background: var(--surface);
+  border-color: var(--border);
+}
+[data-theme="dark"] .goal-item:hover {
+  background: var(--surface-raised);
+  border-left-color: var(--gold-400);
+  box-shadow: 0 8px 24px rgba(201,168,76,.08);
+}
+[data-theme="dark"] .task-card {
+  background: var(--surface);
+}
+[data-theme="dark"] .task-card:hover {
+  background: var(--surface-raised);
+  box-shadow: 0 8px 24px rgba(0,0,0,.3);
+}
+[data-theme="dark"] .sidebar-logo {
+  background: linear-gradient(135deg, var(--text), var(--gold-400));
+  -webkit-background-clip: text;
+  background-clip: text;
+}
+[data-theme="dark"] .drip-card {
+  background: var(--surface);
+  box-shadow: 0 4px 24px rgba(201,168,76,.06);
+}
+[data-theme="dark"] .focus-banner {
+  background: var(--surface);
+}
+[data-theme="dark"] .header-bar {
+  background: rgba(13,13,20,.95);
+}
+[data-theme="dark"] #btn-create-goal {
+  box-shadow: 0 4px 16px rgba(201,168,76,.2);
+}
+[data-theme="dark"] .goal-stat-card {
+  background: var(--surface);
+  border-color: var(--border);
+}
+[data-theme="dark"] .goal-stat-value { color: var(--gold-400); }
+
+/* ─── Smooth Task Completion Animation ────────────────────────────────────── */
+@keyframes taskComplete {
+  0%   { background-color: rgba(90,122,90,.15); }
+  100% { background-color: transparent; }
+}
+.task-card.just-completed {
+  animation: taskComplete .8s var(--ease-out);
+}
+
+/* ─── Enhanced Kanban Cards ───────────────────────────────────────────────── */
+.kanban-card {
+  border-radius: var(--radius-lg);
+  padding: var(--space-md);
+  border-left: 4px solid var(--accent);
+  transition: all var(--duration-fast) var(--ease-out);
+}
+.kanban-card:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-lg);
+}
+
+/* ─── Enhanced Collapsible Panels ─────────────────────────────────────────── */
+.collapsible-panel {
+  border-radius: var(--radius-xl);
+  overflow: hidden;
+}
+.collapsible-panel summary {
+  padding: var(--space-md) var(--space-lg);
+  font-size: var(--text-base);
+}
+.collapsible-panel[open] summary {
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+/* ─── Better Modal Styling ────────────────────────────────────────────────── */
+.modal {
+  background: rgba(26,26,46,.4);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+}
+[data-theme="dark"] .modal {
+  background: rgba(0,0,0,.5);
+}
+.modal-content {
+  border-radius: var(--radius-xl);
+  box-shadow: 0 24px 80px rgba(0,0,0,.15);
+}
+[data-theme="dark"] .modal-content {
+  box-shadow: 0 24px 80px rgba(0,0,0,.5);
+}
+
+/* ─── Task Detail Panel Enhancement ───────────────────────────────────────── */
+.task-detail-panel {
+  border-radius: var(--radius-xl) 0 0 var(--radius-xl);
+  box-shadow: -10px 0 40px rgba(0,0,0,.1);
+}
+[data-theme="dark"] .task-detail-panel {
+  box-shadow: -10px 0 40px rgba(0,0,0,.4);
+}
+
+/* ─── Enhanced Quick-add Bar ──────────────────────────────────────────────── */
+.quick-add-bar {
+  border: 2px dashed var(--border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-sm) var(--space-md);
+  transition: all var(--duration-fast);
+}
+.quick-add-bar:focus-within {
+  border-color: var(--accent);
+  border-style: solid;
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+}
+.quick-add-bar input {
+  font-size: var(--text-sm);
+  padding: 6px 10px;
+}
+
+/* ─── Notification Dot ────────────────────────────────────────────────────── */
+.notification-dot {
+  position: absolute;
+  top: -2px; right: -2px;
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  background: var(--danger);
+  border: 2px solid var(--surface);
+  animation: notifPulse 2s ease-in-out infinite;
+}
+@keyframes notifPulse {
+  0%, 100% { transform: scale(1); }
+  50%      { transform: scale(1.2); }
+}
+
+/* ─── Enhanced Streak Badge ───────────────────────────────────────────────── */
+.streak-badge {
+  background: linear-gradient(135deg, var(--amber-100), var(--gold-100));
+  border: 1px solid var(--gold-400);
+  border-radius: var(--radius-full);
+  padding: 6px 14px;
+}
+[data-theme="dark"] .streak-badge {
+  background: rgba(201,168,76,.1);
+  border-color: rgba(201,168,76,.3);
+}
+
+/* ─── XP Bar Enhancement ──────────────────────────────────────────────────── */
+.xp-bar-fill {
+  background: linear-gradient(90deg, var(--gold-400), var(--gold-500), var(--accent));
+  background-size: 200% 100%;
+  animation: xpBarShine 3s linear infinite;
+  position: relative;
+}
+@keyframes xpBarShine {
+  0%   { background-position: 0% 50%; }
+  100% { background-position: 200% 50%; }
+}
+.xp-level-badge {
+  background: linear-gradient(135deg, var(--gold-500), var(--gold-600));
+  box-shadow: 0 2px 8px rgba(201,168,76,.25);
+}
+
+/* ─── Achievement Card Enhancement ────────────────────────────────────────── */
+.achievement-card.unlocked {
+  border-color: var(--gold-400);
+  background: linear-gradient(135deg, var(--surface), var(--primary-soft));
+  position: relative;
+  overflow: hidden;
+}
+.achievement-card.unlocked::before {
+  content: '';
+  position: absolute;
+  top: -50%; right: -50%;
+  width: 100%; height: 100%;
+  background: radial-gradient(circle, var(--primary-soft) 0%, transparent 70%);
+  pointer-events: none;
+}
+
+/* ─── Enhanced Toast Notifications ────────────────────────────────────────── */
+.toast {
+  border-radius: var(--radius-lg);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+
+/* ─── Hover Transform Utility ─────────────────────────────────────────────── */
+.hover-lift {
+  transition: transform var(--duration-fast) var(--ease-out),
+              box-shadow var(--duration-fast) var(--ease-out);
+}
+.hover-lift:hover {
+  transform: translateY(-3px);
+  box-shadow: var(--shadow-lg);
+}
+
+/* ─── Text Gradient Utility ───────────────────────────────────────────────── */
+.text-gradient-gold {
+  background: linear-gradient(135deg, var(--gold-400), var(--gold-600));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* ─── Additional Mobile Responsive Enhancement ────────────────────────────── */
+@media (max-width: 768px) {
+  #screen-auth {
+    min-height: auto;
+    padding-top: var(--space-xl);
+  }
+  .drip-card {
+    padding: var(--space-xl);
+  }
+  .drip-timer-display {
+    font-size: var(--text-xl);
+  }
+  .goal-stats-overview {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .goal-stat-value { font-size: var(--text-2xl); }
+  .quick-add-bar {
+    flex-direction: column;
+    gap: var(--space-xs);
+  }
+  .quick-add-bar input { padding: 10px; }
+}
+
+@media (max-width: 400px) {
+  .goal-stats-overview { grid-template-columns: 1fr 1fr; gap: var(--space-xs); }
+  .goal-stat-card { padding: var(--space-sm); }
+  .goal-stat-value { font-size: var(--text-xl); }
+}
