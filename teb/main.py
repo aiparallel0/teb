@@ -3668,6 +3668,89 @@ async def mcp_list_tools(request: Request):
     return {"tools": mcp_server.MCP_TOOLS}
 
 
+# ─── MCP Client (outbound tool calls to external MCP servers) ────────────────
+
+@app.get("/api/mcp/servers", tags=["mcp-client"])
+async def list_mcp_servers_endpoint(request: Request):
+    """List all registered external MCP servers."""
+    _require_user(request)
+    from teb import mcp_client  # noqa: E402
+    return [s.to_dict() for s in mcp_client.list_mcp_servers()]
+
+
+@app.post("/api/mcp/servers", status_code=201, tags=["mcp-client"])
+async def register_mcp_server_endpoint(request: Request):
+    """Register an external MCP server for teb to use as a tool source."""
+    _require_user(request)
+    body = await request.json()
+    name = body.get("name", "").strip()
+    url = body.get("url", "").strip()
+    if not name or not url:
+        raise HTTPException(status_code=422, detail="name and url are required")
+    from teb import mcp_client  # noqa: E402
+    try:
+        server = mcp_client.register_mcp_server(
+            name=name, url=url,
+            description=body.get("description", ""),
+            auth_header=body.get("auth_header", ""),
+            auth_value=body.get("auth_value", ""),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    return server.to_dict()
+
+
+@app.delete("/api/mcp/servers/{server_name}", tags=["mcp-client"])
+async def unregister_mcp_server_endpoint(server_name: str, request: Request):
+    """Remove an external MCP server from the registry."""
+    _require_user(request)
+    from teb import mcp_client  # noqa: E402
+    ok = mcp_client.unregister_mcp_server(server_name)
+    if not ok:
+        raise HTTPException(status_code=404, detail=f"Server '{server_name}' not found")
+    return {"deleted": server_name}
+
+
+@app.post("/api/mcp/servers/{server_name}/discover", tags=["mcp-client"])
+async def discover_mcp_tools_endpoint(server_name: str, request: Request):
+    """Discover available tools on a registered MCP server."""
+    _require_user(request)
+    from teb import mcp_client  # noqa: E402
+    tools = mcp_client.discover_tools(server_name)
+    return {"server": server_name, "tools": [t.to_dict() for t in tools]}
+
+
+@app.post("/api/mcp/call", tags=["mcp-client"])
+async def call_mcp_tool_endpoint(request: Request):
+    """Call a tool on an external MCP server.
+
+    Body: {"server": "name", "tool": "tool_name", "arguments": {...}}
+    """
+    _require_user(request)
+    body = await request.json()
+    server_name = body.get("server", "")
+    tool_name = body.get("tool", "")
+    arguments = body.get("arguments", {})
+    if not server_name or not tool_name:
+        raise HTTPException(status_code=422, detail="server and tool are required")
+    from teb import mcp_client  # noqa: E402
+    result = mcp_client.call_tool(server_name, tool_name, arguments)
+    return result.to_dict()
+
+
+@app.post("/api/mcp/find-tools", tags=["mcp-client"])
+async def find_mcp_tools_endpoint(request: Request):
+    """Find MCP tools relevant to a task description."""
+    _require_user(request)
+    body = await request.json()
+    description = body.get("description", "")
+    if not description:
+        raise HTTPException(status_code=422, detail="description is required")
+    from teb import mcp_client  # noqa: E402
+    tools = mcp_client.find_tools_for_task(description)
+    return {"tools": [t.to_dict() for t in tools], "count": len(tools)}
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # Step 8: Execution Sandbox Isolation
 # ═══════════════════════════════════════════════════════════════════════════════

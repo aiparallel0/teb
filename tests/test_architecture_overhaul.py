@@ -472,3 +472,92 @@ async def test_goal_stream_endpoint(client):
     # Verify the route is registered by checking a non-existent goal gets 404
     resp = await client.get("/api/goals/999999/stream")
     assert resp.status_code in (404, 200)
+
+
+# ─── Phase 3D: MCP Client ────────────────────────────────────────────────────
+
+class TestMCPClient:
+    """Test MCP client module (in-memory, no external calls)."""
+
+    def test_register_server(self):
+        from teb.mcp_client import register_mcp_server, list_mcp_servers, unregister_mcp_server
+        server = register_mcp_server(
+            name="test-server",
+            url="https://mcp.example.com",
+            description="Test MCP server",
+        )
+        assert server.name == "test-server"
+        assert server.url == "https://mcp.example.com"
+        servers = list_mcp_servers()
+        assert any(s.name == "test-server" for s in servers)
+        unregister_mcp_server("test-server")
+
+    def test_register_rejects_private_url(self):
+        from teb.mcp_client import register_mcp_server
+        with pytest.raises(ValueError, match="private or disallowed"):
+            register_mcp_server(name="bad", url="http://169.254.169.254/metadata")
+
+    def test_unregister_nonexistent(self):
+        from teb.mcp_client import unregister_mcp_server
+        assert unregister_mcp_server("nonexistent") is False
+
+    def test_find_tool_empty(self):
+        from teb.mcp_client import find_tool
+        assert find_tool("nonexistent_tool") is None
+
+    def test_call_tool_unregistered_server(self):
+        from teb.mcp_client import call_tool
+        result = call_tool("no_such_server", "tool_name")
+        assert not result.success
+        assert "not registered" in result.error
+
+    def test_server_to_dict(self):
+        from teb.mcp_client import MCPServer, MCPToolDef
+        server = MCPServer(
+            name="test",
+            url="https://example.com",
+            tools=[MCPToolDef(name="deploy", description="Deploy app")],
+        )
+        d = server.to_dict()
+        assert d["name"] == "test"
+        assert d["tool_count"] == 1
+
+    def test_call_result_to_dict(self):
+        from teb.mcp_client import MCPCallResult
+        r = MCPCallResult(success=True, content={"deployed": True}, tool_name="deploy")
+        d = r.to_dict()
+        assert d["success"] is True
+        assert d["content"]["deployed"] is True
+
+
+@pytest.mark.anyio
+async def test_mcp_client_list_servers(client):
+    """Test listing MCP servers via API."""
+    resp = await client.get("/api/mcp/servers")
+    assert resp.status_code == 200
+    assert isinstance(resp.json(), list)
+
+
+@pytest.mark.anyio
+async def test_mcp_client_register_server(client):
+    """Test registering and unregistering an MCP server via API."""
+    resp = await client.post("/api/mcp/servers", json={
+        "name": "api-test-server",
+        "url": "https://mcp-tools.example.com",
+        "description": "Test",
+    })
+    assert resp.status_code == 201
+    assert resp.json()["name"] == "api-test-server"
+
+    resp = await client.delete("/api/mcp/servers/api-test-server")
+    assert resp.status_code == 200
+
+
+@pytest.mark.anyio
+async def test_mcp_client_find_tools(client):
+    """Test finding MCP tools by description."""
+    resp = await client.post("/api/mcp/find-tools", json={
+        "description": "deploy application to vercel",
+    })
+    assert resp.status_code == 200
+    assert "tools" in resp.json()
