@@ -39,6 +39,7 @@ dev = [
     "pytest-cov>=6.0",
     "ruff>=0.8.0",
     "mypy>=1.13.0",
+    "pyyaml>=6.0",       # ← add this
 ]
 
 [project.scripts]
