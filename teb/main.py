@@ -390,6 +390,13 @@ class GoalCreate(BaseModel):
     tags: Optional[str] = Field(None, max_length=_MAX_TAG_LEN, description="Comma-separated tags")
 
 
+
+class GoalPatch(BaseModel):
+    title: Optional[str] = Field(None, min_length=1, max_length=_MAX_TITLE_LEN)
+    description: Optional[str] = Field(None, max_length=_MAX_DESCRIPTION_LEN)
+    status: Optional[str] = None
+    tags: Optional[str] = Field(None, max_length=_MAX_TAG_LEN)
+
 class TaskPatch(BaseModel):
     status: Optional[str] = None
     notes: Optional[str] = Field(None, max_length=_MAX_DESCRIPTION_LEN)
@@ -925,6 +932,31 @@ async def get_goal(goal_id: int, request: Request):
     data["tasks"] = [t.to_dict() for t in tasks]
     return data
 
+
+
+@app.patch("/api/goals/{goal_id}")
+async def patch_goal(goal_id: int, body: GoalPatch, request: Request):
+    uid = _require_user(request)
+    goal = _get_goal_for_user(goal_id, uid)
+    if body.title is not None:
+        stripped = body.title.strip()
+        if not stripped:
+            raise HTTPException(status_code=422, detail="title must not be empty")
+        goal.title = stripped
+    if body.description is not None:
+        goal.description = body.description
+    if body.status is not None:
+        valid_statuses = {"drafting", "clarifying", "decomposed", "in_progress", "done"}
+        if body.status not in valid_statuses:
+            raise HTTPException(status_code=422, detail=f"status must be one of {valid_statuses}")
+        goal.status = body.status
+    if body.tags is not None:
+        goal.tags = body.tags
+    try:
+        goal = storage.update_goal(goal)
+    except storage.VersionConflictError:
+        raise HTTPException(status_code=409, detail="Goal was modified by another request.")
+    return goal.to_dict()
 
 @app.post("/api/goals/{goal_id}/decompose")
 async def decompose_goal(goal_id: int, request: Request):

@@ -833,3 +833,26 @@ async def test_xp_endpoint_requires_auth():
     async with AsyncClient(transport=transport, base_url="http://test") as c:
         r = await c.get("/api/users/me/xp")
         assert r.status_code == 401
+
+
+# ─── PATCH /api/goals/{goal_id} Tests ──────────────────────────────────────
+
+@pytest.mark.asyncio
+async def test_patch_goal_title_happy(client):
+    """Happy path: PATCH goal title updates it."""
+    create = await client.post("/api/goals", json={"title": "original title"})
+    gid = create.json()["id"]
+
+    r = await client.patch(f"/api/goals/{gid}", json={"title": "updated title"})
+    assert r.status_code == 200
+    assert r.json()["title"] == "updated title"
+
+
+@pytest.mark.asyncio
+async def test_patch_goal_empty_title_rejected(client):
+    """Error case: PATCH with empty title returns 422."""
+    create = await client.post("/api/goals", json={"title": "will edit"})
+    gid = create.json()["id"]
+
+    r = await client.patch(f"/api/goals/{gid}", json={"title": "   "})
+    assert r.status_code == 422

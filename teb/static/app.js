@@ -1361,6 +1361,26 @@ on('btn-create-goal', 'click', async () => {
   }
 });
 
+// Quick-capture: expand/collapse description panel
+on('btn-expand-desc', 'click', () => {
+  const panel = document.getElementById('goal-desc-panel');
+  const btn = document.getElementById('btn-expand-desc');
+  if (!panel || !btn) return;
+  const visible = panel.style.display !== 'none';
+  panel.style.display = visible ? 'none' : 'block';
+  btn.textContent = visible ? '+ Add details' : '− Hide details';
+});
+
+// Quick-capture: expand/collapse description panel
+on('btn-expand-desc', 'click', () => {
+  const panel = document.getElementById('goal-desc-panel');
+  const btn = document.getElementById('btn-expand-desc');
+  if (!panel || !btn) return;
+  const visible = panel.style.display !== 'none';
+  panel.style.display = visible ? 'none' : 'block';
+  btn.textContent = visible ? '+ Add details' : '− Hide details';
+});
+
 // Enter key on goal title input
 on('goal-title', 'keydown', e => {
   if (e.key === 'Enter') {
@@ -1371,16 +1391,30 @@ on('goal-title', 'keydown', e => {
 
 // ─── Clarify screen ───────────────────────────────────────────────────────────
 
+let _clarifyStep = 0;
+let _clarifyTotal = 0;
+
 async function startClarifyFlow(goal) {
   const titleEl = document.getElementById('clarify-goal-title');
   if (titleEl) titleEl.textContent = goal.title;
+  _clarifyStep = 0;
+  _clarifyTotal = goal.answers ? Object.keys(goal.answers).length : 0;
   const q = await api.get(`/api/goals/${goal.id}/next_question`);
   if (q.done) {
     await triggerDecompose(goal.id);
     return;
   }
+  _clarifyStep = 1;
+  if (q.total) _clarifyTotal = q.total;
+  else _clarifyTotal = Math.max(_clarifyTotal, 4);
   showQuestion(q.question);
+  updateClarifyProgress();
   showScreen('screen-clarify');
+}
+
+function updateClarifyProgress() {
+  const indicator = document.getElementById('clarify-step-indicator');
+  if (indicator) indicator.textContent = `${_clarifyStep} / ${_clarifyTotal}`;
 }
 
 function showQuestion(q) {
@@ -1414,7 +1448,9 @@ async function submitClarifyAnswer() {
     if (res.done) {
       await triggerDecompose(currentGoalId);
     } else {
+      _clarifyStep++;
       showQuestion(res.next_question);
+      updateClarifyProgress();
     }
   } catch (e) {
     showError('error-clarify', e.message);
@@ -1434,14 +1470,32 @@ on('back-from-clarify', 'click', () => {
 // ─── Decompose ────────────────────────────────────────────────────────────────
 
 async function triggerDecompose(goalId) {
-  showLoading('Decomposing…');
+  // Show decomposition progress banner instead of generic loading
+  const banner = document.getElementById('decompose-progress-banner');
+  if (banner) { banner.style.display = 'flex'; banner.classList.add('active'); }
+  showLoading('Decomposing your goal…');
   try {
     await api.post(`/api/goals/${goalId}/decompose`, {});
     const goal = await api.get(`/api/goals/${goalId}`);
     hideLoading();
+    if (banner) { banner.style.display = 'none'; banner.classList.remove('active'); }
     await showTasksScreen(goal, /* freshDecompose */ true);
+    // Animate task cards in with stagger
+    requestAnimationFrame(() => {
+      const cards = document.querySelectorAll('.task-card');
+      cards.forEach((card, i) => {
+        card.style.opacity = '0';
+        card.style.transform = 'translateY(12px)';
+        setTimeout(() => {
+          card.style.transition = 'opacity 200ms ease, transform 200ms ease';
+          card.style.opacity = '1';
+          card.style.transform = 'translateY(0)';
+        }, i * 50);
+      });
+    });
   } catch (e) {
     hideLoading();
+    if (banner) { banner.style.display = 'none'; banner.classList.remove('active'); }
     showError('error-clarify', e.message);
   }
 }
@@ -1527,6 +1581,47 @@ async function showTasksScreen(goal, freshDecompose) {
   if (_currentViewType !== 'list') {
     ViewSwitcher.loadView(_currentViewType);
   }
+
+  // Goal title inline edit
+  const goalTitleEl = document.getElementById('tasks-goal-title');
+  if (goalTitleEl) {
+    goalTitleEl.setAttribute('contenteditable', 'true');
+    goalTitleEl.setAttribute('spellcheck', 'false');
+    goalTitleEl.classList.add('goal-title-editable');
+    goalTitleEl.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); goalTitleEl.blur(); }
+      if (e.key === 'Escape') { goalTitleEl.textContent = currentGoalTitle; goalTitleEl.blur(); }
+    });
+    goalTitleEl.addEventListener('blur', async () => {
+      const newTitle = goalTitleEl.textContent.trim();
+      if (newTitle && newTitle !== currentGoalTitle && currentGoalId) {
+        try {
+          await api.patch(`/api/goals/${currentGoalId}`, { title: newTitle });
+          currentGoalTitle = newTitle;
+          updateBreadcrumbs([{text:'Home', href:'#/home'}, {text: newTitle}]);
+        } catch (e) {
+          goalTitleEl.textContent = currentGoalTitle;
+          toast.error('Error', e.message);
+        }
+      }
+    });
+  }
+
+  // Goal progress summary bar
+  const topLevelTasks = currentTasks.filter(t => t.parent_id === null);
+  const doneTasks = topLevelTasks.filter(t => t.status === 'done' || t.status === 'skipped').length;
+  const totalTaskCount = topLevelTasks.length;
+  const pctDone = totalTaskCount ? Math.round((doneTasks / totalTaskCount) * 100) : 0;
+  const summaryBar = document.getElementById('goal-progress-summary');
+  if (summaryBar) {
+    summaryBar.style.display = totalTaskCount ? 'block' : 'none';
+    summaryBar.innerHTML = `<div class="goal-progress-bar-track"><div class="goal-progress-bar-fill" style="width:${pctDone}%"></div></div><span class="goal-progress-label">${doneTasks} of ${totalTaskCount} tasks done · ${pctDone}%</span>`;
+  }
+
+  // Load ROI summary card
+  loadRoiSummaryCard();
+  // Load streak for check-in prompt
+  loadStreakCheckinPrompt();
 }
 
 // ─── Drip Mode ────────────────────────────────────────────────────────────────
@@ -1952,12 +2047,64 @@ async function toggleTaskDone(task) {
 
 async function patchTaskStatus(taskId, status) {
   showError('error-tasks', '');
+  // Optimistic DOM update
+  const card = document.querySelector(`.task-card[data-id="${taskId}"]`);
+  const prevStatus = card ? card.dataset.status : null;
+  if (card) {
+    card.dataset.status = status;
+    if (status === 'done') {
+      card.classList.add('done-card', 'task-completing');
+      const titleEl = card.querySelector('.task-title');
+      if (titleEl) titleEl.classList.add('task-title-strikethrough');
+      // Show brief completion badge
+      const badge = document.createElement('span');
+      badge.className = 'task-done-badge';
+      badge.textContent = '✓';
+      card.querySelector('.task-header')?.appendChild(badge);
+      setTimeout(() => { if (badge.parentNode) badge.remove(); }, 1500);
+    } else {
+      card.classList.remove('done-card', 'task-completing');
+      const titleEl = card.querySelector('.task-title');
+      if (titleEl) titleEl.classList.remove('task-title-strikethrough');
+    }
+    // Update checkbox visual
+    const cb = card.querySelector('.task-checkbox');
+    if (cb) cb.classList.toggle('checked', status === 'done');
+    // Update status select
+    const sel = card.querySelector('.task-status-select');
+    if (sel) sel.value = status;
+  }
+  // Update progress bar immediately
+  const idx = currentTasks.findIndex(t => String(t.id) === String(taskId));
+  if (idx !== -1) currentTasks[idx].status = status;
+  updateProgress(currentTasks);
+  // Update kanban column counts
+  updateKanbanCounts();
+
   try {
     await api.patch(`/api/tasks/${taskId}`, { status });
     await refreshGoalView();
   } catch (e) {
+    // Revert optimistic update on failure
+    if (card && prevStatus) {
+      card.dataset.status = prevStatus;
+      card.classList.toggle('done-card', prevStatus === 'done');
+    }
+    if (idx !== -1) currentTasks[idx].status = prevStatus || 'todo';
+    updateProgress(currentTasks);
+    renderError(document.getElementById('task-list'), e.message, () => refreshGoalView());
     showError('error-tasks', e.message);
   }
+}
+
+function updateKanbanCounts() {
+  document.querySelectorAll('.kanban-column').forEach(col => {
+    const status = col.dataset.status;
+    if (!status) return;
+    const count = currentTasks.filter(t => t.status === status && t.parent_id === null).length;
+    const badge = col.querySelector('.kanban-col-count');
+    if (badge) badge.textContent = count;
+  });
 }
 
 async function decomposeTask(taskId) {
@@ -2425,74 +2572,106 @@ function stopAutopilotPolling() {
 
 // ─── Agent activity ──────────────────────────────────────────────────────────
 
+const AGENT_COLORS = {
+  coordinator: '#6366f1', marketing: '#ec4899', web_dev: '#14b8a6',
+  outreach: '#f97316', research: '#eab308', finance: '#22c55e'
+};
+const AGENT_ROLES = {
+  coordinator: 'Strategy & delegation',
+  marketing: 'Positioning, content, SEO',
+  web_dev: 'Technical setup & deploy',
+  outreach: 'Cold outreach & campaigns',
+  research: 'Competitive analysis',
+  finance: 'Budgeting & pricing'
+};
+
+const AGENT_COLORS = {
+  coordinator: '#6366f1', marketing: '#ec4899', web_dev: '#14b8a6',
+  outreach: '#f97316', research: '#eab308', finance: '#22c55e'
+};
+const AGENT_ROLES = {
+  coordinator: 'Strategy & delegation', marketing: 'Positioning, content, SEO',
+  web_dev: 'Technical setup & deploy', outreach: 'Cold outreach & campaigns',
+  research: 'Competitive analysis', finance: 'Budgeting & pricing'
+};
+
 async function loadAgentActivity() {
   if (!currentGoalId) return;
   const panel = document.getElementById('agent-activity-panel');
   const content = document.getElementById('agent-activity-content');
+  if (!panel || !content) return;
   try {
-    const data = await api.get(`/api/goals/${currentGoalId}/agent-activity`);
+    const data = await api.get('/api/goals/' + currentGoalId + '/agent-activity');
     const handoffs = data.handoffs || [];
     const messages = data.messages || [];
-    if (!handoffs.length && !messages.length) {
-      panel.style.display = 'none';
-      return;
-    }
-    panel.style.display = 'block';
-
-    let html = '<div class="agent-timeline">';
-
-    // Agent summary
     const agents = data.agents_involved || [];
     const tasksByAgent = data.tasks_by_agent || {};
-    if (agents.length) {
-      html += `<div class="agent-timeline-item agent-strategy">
-        <div class="agent-timeline-icon">●</div>
-        <div class="agent-timeline-body">
-          <div class="agent-timeline-title">Agents: ${agents.map(a => `<span class="agent-badge agent-from">${escHtml(a)}</span>`).join(' ')}</div>
-          <div class="agent-timeline-text">${data.total_tasks_created || 0} tasks created${Object.keys(tasksByAgent).length ? ' — ' + Object.entries(tasksByAgent).map(([a, c]) => `${a}: ${c}`).join(', ') : ''}</div>
-        </div>
-      </div>`;
-    }
+    panel.style.display = 'block';
+    let html = '';
 
-    // Handoffs
-    handoffs.forEach(h => {
-      const statusIcon = h.status === 'completed' ? '✅' : h.status === 'failed' ? '❌' : '⏳';
-      html += `<div class="agent-timeline-item">
-        <div class="agent-timeline-icon">${statusIcon}</div>
-        <div class="agent-timeline-body">
-          <div class="agent-timeline-title">
-            <span class="agent-badge agent-from">${escHtml(h.from_agent || '')}</span>
-            <span class="agent-arrow">→</span>
-            <span class="agent-badge agent-to">${escHtml(h.to_agent || '')}</span>
-          </div>
-          ${h.input_summary ? `<div class="agent-timeline-input">${escHtml(h.input_summary)}</div>` : ''}
-          ${h.output_summary ? `<div class="agent-timeline-output">${escHtml(h.output_summary)}</div>` : ''}
-        </div>
-      </div>`;
+    // Agent roster: all 6 agents as cards
+    html += '<div class="agent-roster">';
+    ['coordinator','marketing','web_dev','outreach','research','finance'].forEach(name => {
+      const involved = agents.includes(name);
+      const tc = tasksByAgent[name] || 0;
+      const color = AGENT_COLORS[name] || '#94a3b8';
+      const role = AGENT_ROLES[name] || '';
+      const stCls = involved ? (tc > 0 ? 'agent-status-done' : 'agent-status-running') : 'agent-status-idle';
+      const stLabel = involved ? (tc > 0 ? 'done' : 'running') : 'idle';
+      html += '<div class="agent-roster-card" data-agent="' + escHtml(name) + '" style="border-left:3px solid ' + color + '"><div class="agent-roster-name">' + escHtml(name.replace('_',' ')) + '</div><div class="agent-roster-role">' + escHtml(role) + '</div><div class="agent-roster-status ' + stCls + '"><span class="agent-status-dot"></span> ' + escHtml(stLabel) + (tc ? ' · ' + tc + ' tasks' : '') + '</div></div>';
     });
+    html += '</div>';
+
+    // Delegation chain
+    if (handoffs.length) {
+      html += '<div class="agent-delegation-chain"><h4 class="agent-section-title">Delegation Chain</h4><div class="agent-timeline">';
+      handoffs.forEach(h => {
+        const icon = h.status === 'completed' ? '✅' : h.status === 'failed' ? '❌' : '⏳';
+        html += '<div class="agent-timeline-item"><div class="agent-timeline-icon">' + icon + '</div><div class="agent-timeline-body"><div class="agent-timeline-title"><span class="agent-badge agent-from">' + escHtml(h.from_agent||'') + '</span><span class="agent-arrow">→</span><span class="agent-badge agent-to">' + escHtml(h.to_agent||'') + '</span></div>' + (h.input_summary ? '<div class="agent-timeline-input">' + escHtml(h.input_summary) + '</div>' : '') + (h.output_summary ? '<div class="agent-timeline-output">' + escHtml(h.output_summary) + '</div>' : '') + '</div></div>';
+      });
+      html += '</div></div>';
+    } else {
+      html += '<div class="agent-empty-delegation"><p class="empty-state__subtitle">Run orchestration to see agent delegation.</p></div>';
+    }
 
     // Messages
     if (messages.length) {
-      html += '<div class="agent-messages-section">';
-      html += '<div class="agent-messages-title">Agent Communication</div>';
-      messages.slice(0, 10).forEach(m => {
-        const typeIcon = m.message_type === 'request' ? '?' : m.message_type === 'response' ? '→' : m.message_type === 'context' ? '•' : 'i';
-        html += `<div class="agent-msg-card">
-          <span class="agent-msg-icon">${typeIcon}</span>
-          <span class="agent-badge agent-from">${escHtml(m.from_agent || '')}</span>
-          <span class="agent-arrow">→</span>
-          <span class="agent-badge agent-to">${escHtml(m.to_agent || '')}</span>
-          <div class="agent-msg-content">${escHtml(m.content || '')}</div>
-        </div>`;
+      html += '<div class="agent-messages-section"><h4 class="agent-section-title">Agent Messages</h4>';
+      messages.slice(0,15).forEach(m => {
+        const t = m.created_at ? timeAgo(m.created_at) : '';
+        html += '<div class="agent-msg-card"><div class="agent-msg-header"><span class="agent-badge agent-from">' + escHtml(m.from_agent||'') + '</span><span class="agent-arrow">→</span><span class="agent-badge agent-to">' + escHtml(m.to_agent||'') + '</span>' + (t ? '<span class="agent-msg-time">' + escHtml(t) + '</span>' : '') + '</div><div class="agent-msg-content">' + escHtml(m.content||'') + '</div></div>';
       });
       html += '</div>';
     }
 
-    html += '</div>';
+    if (!handoffs.length && !messages.length && !agents.length) html = '<p class="agent-empty">Run orchestration to see agent activity.</p>';
     content.innerHTML = html;
+
+    // Wire agent card clicks for detail drawer
+    content.querySelectorAll('.agent-roster-card').forEach(card => {
+      card.addEventListener('click', () => openAgentDrawer(card.dataset.agent, data));
+    });
   } catch (e) {
-    panel.style.display = 'none';
+    if (panel) panel.style.display = 'none';
   }
+}
+
+function openAgentDrawer(agentName, actData) {
+  let drawer = document.getElementById('agent-detail-drawer');
+  if (!drawer) {
+    drawer = document.createElement('div');
+    drawer.id = 'agent-detail-drawer';
+    drawer.className = 'agent-drawer';
+    document.body.appendChild(drawer);
+  }
+  const color = AGENT_COLORS[agentName] || '#94a3b8';
+  const role = AGENT_ROLES[agentName] || '';
+  const hoffs = (actData.handoffs || []).filter(h => h.from_agent === agentName || h.to_agent === agentName);
+  const msgs = (actData.messages || []).filter(m => m.from_agent === agentName || m.to_agent === agentName);
+  drawer.innerHTML = '<div class="agent-drawer-header" style="border-bottom:2px solid ' + color + '"><h3>' + escHtml(agentName.replace('_',' ')) + '</h3><p class="agent-drawer-role">' + escHtml(role) + '</p><button class="agent-drawer-close" id="agent-drawer-close-btn">&times;</button></div><div class="agent-drawer-body"><h4>Handoffs (' + hoffs.length + ')</h4>' + (hoffs.length ? hoffs.map(h => '<div class="agent-drawer-item"><span class="agent-badge">' + escHtml(h.from_agent) + '</span> → <span class="agent-badge">' + escHtml(h.to_agent) + '</span>' + (h.input_summary ? '<p class="agent-drawer-text">' + escHtml(h.input_summary) + '</p>' : '') + '</div>').join('') : '<p class="empty-state__subtitle">No handoffs</p>') + '<h4>Messages (' + msgs.length + ')</h4>' + (msgs.length ? msgs.map(m => '<div class="agent-drawer-item"><strong>' + escHtml(m.from_agent) + '</strong>: ' + escHtml(m.content||'') + '</div>').join('') : '<p class="empty-state__subtitle">No messages</p>') + '</div>';
+  drawer.classList.add('open');
+  const closeBtn = drawer.querySelector('#agent-drawer-close-btn');
+  if (closeBtn) closeBtn.addEventListener('click', () => drawer.classList.remove('open'));
 }
 
 on('btn-add-all-outcomes', 'click', async () => {
@@ -2840,6 +3019,549 @@ on('admin-modal', 'click', (e) => {
   }
 });
 
+
+// ─── ROI Summary Card (Feature Area 4) ───────────────────────────────────────
+
+async function loadRoiSummaryCard() {
+  const container = document.getElementById('roi-summary-inline');
+  if (!container || !currentGoalId) return;
+  try {
+    const [budgets, spending, outcomes] = await Promise.all([
+      api.get(`/api/goals/${currentGoalId}/budgets`).catch(() => []),
+      api.get(`/api/goals/${currentGoalId}/spending`).catch(() => ({ total_spent: 0 })),
+      api.get(`/api/goals/${currentGoalId}/outcomes`).catch(() => []),
+    ]);
+    const totalBudget = Array.isArray(budgets) ? budgets.reduce((s, b) => s + (b.total_limit || 0), 0) : 0;
+    const totalSpent = spending.total_spent || 0;
+    const totalEarned = Array.isArray(outcomes) ? outcomes.filter(o => o.unit === '$').reduce((s, o) => s + (o.current_value || 0), 0) : 0;
+    const netRoi = totalEarned - totalSpent;
+
+    if (totalBudget === 0 && totalSpent === 0 && totalEarned === 0) {
+      renderEmpty(container, { icon: '💰', title: 'No financial data', subtitle: 'Set a budget and track revenue to see your ROI.' });
+      return;
+    }
+    container.innerHTML = `<div class="roi-inline-card">
+      <div class="roi-inline-item"><span class="roi-inline-label">Budget</span><span class="roi-inline-value">$${totalBudget.toFixed(0)}</span></div>
+      <div class="roi-inline-item"><span class="roi-inline-label">Spent</span><span class="roi-inline-value roi-spent">$${totalSpent.toFixed(0)}</span></div>
+      <div class="roi-inline-item"><span class="roi-inline-label">Earned</span><span class="roi-inline-value roi-earned">$${totalEarned.toFixed(0)}</span></div>
+      <div class="roi-inline-item"><span class="roi-inline-label">Net ROI</span><span class="roi-inline-value ${netRoi >= 0 ? 'roi-positive' : 'roi-negative'}">${netRoi >= 0 ? '+' : ''}$${netRoi.toFixed(0)}</span></div>
+    </div>`;
+  } catch (_) { /* non-critical */ }
+}
+
+// ─── Milestone Celebration (Feature Area 4) ──────────────────────────────────
+
+function checkMilestoneCelebration(metric) {
+  if (!metric || !metric.id) return;
+  const thresholds = [25, 50, 75, 100];
+  const pct = metric.target_value > 0 ? Math.round((metric.current_value / metric.target_value) * 100) : 0;
+  const storageKey = 'teb_milestones_' + metric.id;
+  const acknowledged = JSON.parse(localStorage.getItem(storageKey) || '[]');
+  for (const t of thresholds) {
+    if (pct >= t && !acknowledged.includes(t)) {
+      acknowledged.push(t);
+      localStorage.setItem(storageKey, JSON.stringify(acknowledged));
+      triggerMilestoneConfetti();
+      toast.success('Milestone reached!', `${t}% of ${metric.label}`);
+      break;
+    }
+  }
+}
+
+function triggerMilestoneConfetti() {
+  const overlay = document.createElement('div');
+  overlay.className = 'milestone-confetti';
+  document.body.appendChild(overlay);
+  const colors = ['#3b82f6', '#8b5cf6', '#22c55e', '#f59e0b', '#ef4444', '#ec4899'];
+  for (let i = 0; i < 60; i++) {
+    const p = document.createElement('div');
+    p.className = 'confetti-particle';
+    p.style.left = Math.random() * 100 + '%';
+    p.style.top = '-10px';
+    p.style.backgroundColor = colors[Math.floor(Math.random() * colors.length)];
+    p.style.setProperty('--duration', (1 + Math.random() * 1) + 's');
+    p.style.animationDelay = Math.random() * 0.3 + 's';
+    p.style.width = (5 + Math.random() * 5) + 'px';
+    p.style.height = (5 + Math.random() * 5) + 'px';
+    overlay.appendChild(p);
+  }
+  setTimeout(() => overlay.remove(), 2000);
+}
+
+// ─── Streak-Aware Check-in Prompt (Feature Area 6) ───────────────────────────
+
+async function loadStreakCheckinPrompt() {
+  const prompt = document.getElementById('streak-checkin-prompt');
+  if (!prompt || !currentGoalId) return;
+  try {
+    const checkins = await api.get(`/api/goals/${currentGoalId}/checkins?limit=1`);
+    if (!Array.isArray(checkins) || checkins.length === 0) {
+      prompt.style.display = 'block';
+      prompt.innerHTML = '<span class="streak-prompt-text">No check-in today — how\'s it going? <a href="#" id="streak-prompt-link">→</a></span>';
+    } else {
+      const last = new Date(checkins[0].created_at);
+      const hoursSince = (Date.now() - last.getTime()) / 3600000;
+      if (hoursSince > 24) {
+        prompt.style.display = 'block';
+        prompt.innerHTML = '<span class="streak-prompt-text">No check-in today — how\'s it going? <a href="#" id="streak-prompt-link">→</a></span>';
+      } else {
+        prompt.style.display = 'none';
+        return;
+      }
+    }
+    const link = document.getElementById('streak-prompt-link');
+    if (link) link.addEventListener('click', (e) => {
+      e.preventDefault();
+      const checkinSection = document.getElementById('checkin-section');
+      if (checkinSection) checkinSection.scrollIntoView({ behavior: 'smooth' });
+    });
+  } catch (_) { prompt.style.display = 'none'; }
+}
+
+// ─── Nudge Banner with localStorage dismiss (Feature Area 6) ─────────────────
+
+function isNudgeAcknowledged(nudgeId) {
+  const acked = JSON.parse(localStorage.getItem('teb_nudges_acked') || '[]');
+  return acked.includes(String(nudgeId));
+}
+
+function acknowledgeNudge(nudgeId) {
+  const acked = JSON.parse(localStorage.getItem('teb_nudges_acked') || '[]');
+  if (!acked.includes(String(nudgeId))) {
+    acked.push(String(nudgeId));
+    localStorage.setItem('teb_nudges_acked', JSON.stringify(acked));
+  }
+}
+
+// ─── Execution Step Inspector (Feature Area 5) ──────────────────────────────
+
+function renderExecutionStep(log) {
+  const statusColor = (log.status === 'success') ? 'var(--color-success)' : 'var(--color-error)';
+  const isExpanded = false;
+  // Parse request/response summaries
+  let method = '', url = '', statusCode = '', responseBody = '';
+  const reqSummary = log.request_summary || '';
+  const resSummary = log.response_summary || '';
+  const methodMatch = reqSummary.match(/^(GET|POST|PUT|PATCH|DELETE)\s+(\S+)/i);
+  if (methodMatch) { method = methodMatch[1]; url = methodMatch[2]; }
+  const statusMatch = resSummary.match(/^(\d{3})/);
+  if (statusMatch) statusCode = statusMatch[1];
+  responseBody = resSummary.substring(statusCode.length).trim();
+
+  const truncatedBody = responseBody.length > 500 ? responseBody.substring(0, 500) : responseBody;
+  const needsShowMore = responseBody.length > 500;
+
+  return `<div class="exec-step" data-expanded="false">
+    <div class="exec-step-header">
+      <span class="exec-step-status" style="color:${statusColor}">${log.status === 'success' ? '✓' : '✕'}</span>
+      <span class="exec-step-action">${escHtml(log.action || '')}</span>
+      ${method ? `<span class="exec-step-method">${escHtml(method)}</span>` : ''}
+      ${statusCode ? `<span class="exec-step-code" style="color:${statusCode.startsWith('2') ? 'var(--color-success)' : statusCode.startsWith('4') || statusCode.startsWith('5') ? 'var(--color-error)' : 'var(--color-warning)'}">${escHtml(statusCode)}</span>` : ''}
+      <span class="exec-step-time">${log.created_at ? timeAgo(log.created_at) : ''}</span>
+    </div>
+    <div class="exec-step-detail" style="display:none">
+      ${url ? `<div class="exec-detail-row"><strong>URL:</strong> ${escHtml(url)}</div>` : ''}
+      ${reqSummary ? `<details class="exec-detail-block"><summary>Request</summary><pre>${escHtml(reqSummary)}</pre></details>` : ''}
+      <div class="exec-detail-row"><strong>Response:</strong></div>
+      <pre class="exec-response-body">${escHtml(truncatedBody)}</pre>
+      ${needsShowMore ? '<button class="btn-sm btn-secondary exec-show-more">Show more</button>' : ''}
+    </div>
+  </div>`;
+}
+
+// ─── Simple Markdown Renderer (Feature Area 6) ──────────────────────────────
+
+function simpleMarkdown(text) {
+  if (!text) return '';
+  return escHtml(text)
+    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    .replace(/\*(.+?)\*/g, '<em>$1</em>')
+    .replace(/^- (.+)$/gm, '<li>$1</li>')
+    .replace(/(<li>.*<\/li>)/s, '<ul>$1</ul>')
+    .replace(/\n\n/g, '</p><p>')
+    .replace(/^/, '<p>').replace(/$/, '</p>');
+}
+
+// ─── Unified Search (Feature Area 7) ────────────────────────────────────────
+
+const UnifiedSearch = {
+  _visible: false,
+  _selectedIdx: -1,
+  _results: [],
+
+  init() {
+    const input = document.getElementById('global-search-input');
+    const panel = document.getElementById('search-results-panel');
+    if (!input || !panel) return;
+
+    const doSearch = debounce(async (query) => {
+      if (!query || query.length < 2) { this.hide(); return; }
+      try {
+        const [goals, tasks] = await Promise.all([
+          api.get(`/api/goals?q=${encodeURIComponent(query)}`).catch(() => []),
+          api.get(`/api/tasks?q=${encodeURIComponent(query)}`).catch(() => []),
+        ]);
+        this._results = [];
+        (goals || []).slice(0, 5).forEach(g => this._results.push({ type: 'goal', data: g }));
+        (tasks || []).slice(0, 8).forEach(t => this._results.push({ type: 'task', data: t }));
+        this.renderResults(panel);
+      } catch (_) { this.hide(); }
+    }, 250);
+
+    input.addEventListener('input', () => doSearch(input.value.trim()));
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'ArrowDown') { e.preventDefault(); this.moveSelection(1); }
+      else if (e.key === 'ArrowUp') { e.preventDefault(); this.moveSelection(-1); }
+      else if (e.key === 'Enter') { e.preventDefault(); this.activateSelected(); }
+      else if (e.key === 'Escape') { this.hide(); input.blur(); }
+    });
+    input.addEventListener('blur', () => setTimeout(() => this.hide(), 200));
+  },
+
+  renderResults(panel) {
+    if (!this._results.length) { this.hide(); return; }
+    this._visible = true;
+    this._selectedIdx = -1;
+    panel.style.display = 'block';
+
+    const goalResults = this._results.filter(r => r.type === 'goal');
+    const taskResults = this._results.filter(r => r.type === 'task');
+    let html = '';
+    if (goalResults.length) {
+      html += '<div class="search-group-header">Goals</div>';
+      goalResults.forEach((r, i) => {
+        const idx = this._results.indexOf(r);
+        html += `<div class="search-result-item" data-idx="${idx}">
+          <span class="search-result-icon">🎯</span>
+          <span class="search-result-title">${escHtml(r.data.title)}</span>
+          <span class="search-result-status status-${r.data.status}">${escHtml(r.data.status)}</span>
+        </div>`;
+      });
+    }
+    if (taskResults.length) {
+      html += '<div class="search-group-header">Tasks</div>';
+      taskResults.forEach((r) => {
+        const idx = this._results.indexOf(r);
+        html += `<div class="search-result-item" data-idx="${idx}">
+          <span class="search-result-icon">📋</span>
+          <span class="search-result-title">${escHtml(r.data.title)}</span>
+          <span class="search-result-status status-${r.data.status}">${escHtml(r.data.status)}</span>
+        </div>`;
+      });
+    }
+    panel.innerHTML = html;
+    panel.querySelectorAll('.search-result-item').forEach(item => {
+      item.addEventListener('mousedown', (e) => {
+        e.preventDefault();
+        const idx = parseInt(item.dataset.idx, 10);
+        if (!isNaN(idx)) { this._selectedIdx = idx; this.activateSelected(); }
+      });
+    });
+  },
+
+  moveSelection(delta) {
+    this._selectedIdx = Math.max(-1, Math.min(this._results.length - 1, this._selectedIdx + delta));
+    const panel = document.getElementById('search-results-panel');
+    if (!panel) return;
+    panel.querySelectorAll('.search-result-item').forEach((item, i) => {
+      const idx = parseInt(item.dataset.idx, 10);
+      item.classList.toggle('selected', idx === this._selectedIdx);
+    });
+  },
+
+  activateSelected() {
+    if (this._selectedIdx < 0 || this._selectedIdx >= this._results.length) return;
+    const r = this._results[this._selectedIdx];
+    this.hide();
+    if (r.type === 'goal') {
+      openGoal(r.data.id);
+    } else if (r.type === 'task') {
+      Router.navigate(`#/goal/${r.data.goal_id}`);
+    }
+  },
+
+  hide() {
+    this._visible = false;
+    const panel = document.getElementById('search-results-panel');
+    if (panel) panel.style.display = 'none';
+  }
+};
+
+// ─── Task Filter Bar (Feature Area 7) ───────────────────────────────────────
+
+const TaskFilter = {
+  _filters: { status: [], priority: [], goalId: null },
+
+  init() {
+    const bar = document.getElementById('task-filter-bar');
+    if (!bar) return;
+    bar.innerHTML = `
+      <div class="filter-bar">
+        <select id="filter-status" class="filter-select" multiple title="Filter by status">
+          <option value="">All statuses</option>
+          <option value="todo">To do</option>
+          <option value="in_progress">In progress</option>
+          <option value="done">Done</option>
+          <option value="failed">Failed</option>
+        </select>
+        <select id="filter-priority" class="filter-select" multiple title="Filter by priority">
+          <option value="">All priorities</option>
+          <option value="high">High</option>
+          <option value="normal">Normal</option>
+          <option value="low">Low</option>
+        </select>
+        <button id="btn-clear-filters" class="btn-secondary btn-sm">Clear</button>
+      </div>`;
+    const statusSel = document.getElementById('filter-status');
+    const prioritySel = document.getElementById('filter-priority');
+    const clearBtn = document.getElementById('btn-clear-filters');
+    if (statusSel) statusSel.addEventListener('change', () => this.apply());
+    if (prioritySel) prioritySel.addEventListener('change', () => this.apply());
+    if (clearBtn) clearBtn.addEventListener('click', () => this.clear());
+  },
+
+  apply() {
+    const statusSel = document.getElementById('filter-status');
+    const prioritySel = document.getElementById('filter-priority');
+    const statuses = statusSel ? Array.from(statusSel.selectedOptions).map(o => o.value).filter(Boolean) : [];
+    const priorities = prioritySel ? Array.from(prioritySel.selectedOptions).map(o => o.value).filter(Boolean) : [];
+
+    const cards = document.querySelectorAll('.task-card');
+    cards.forEach(card => {
+      const st = card.dataset.status || '';
+      const pr = card.querySelector('.priority-dot')?.title?.replace('Priority: ', '') || 'normal';
+      const showStatus = !statuses.length || statuses.includes(st);
+      const showPriority = !priorities.length || priorities.includes(pr);
+      card.style.display = (showStatus && showPriority) ? '' : 'none';
+    });
+  },
+
+  clear() {
+    const statusSel = document.getElementById('filter-status');
+    const prioritySel = document.getElementById('filter-priority');
+    if (statusSel) statusSel.selectedIndex = -1;
+    if (prioritySel) prioritySel.selectedIndex = -1;
+    document.querySelectorAll('.task-card').forEach(card => card.style.display = '');
+  }
+};
+
+
+// ─── ROI Summary Card (Feature Area 4) ───────────────────────────────────────
+
+async function loadRoiSummaryCard() {
+  const container = document.getElementById('roi-summary-inline');
+  if (!container || !currentGoalId) return;
+  try {
+    const [budgets, spending, outcomes] = await Promise.all([
+      api.get('/api/goals/' + currentGoalId + '/budgets').catch(() => []),
+      api.get('/api/goals/' + currentGoalId + '/spending').catch(() => ({ total_spent: 0 })),
+      api.get('/api/goals/' + currentGoalId + '/outcomes').catch(() => []),
+    ]);
+    const totalBudget = Array.isArray(budgets) ? budgets.reduce((s, b) => s + (b.total_limit || 0), 0) : 0;
+    const totalSpent = spending.total_spent || 0;
+    const totalEarned = Array.isArray(outcomes) ? outcomes.filter(o => o.unit === '$').reduce((s, o) => s + (o.current_value || 0), 0) : 0;
+    const netRoi = totalEarned - totalSpent;
+    if (totalBudget === 0 && totalSpent === 0 && totalEarned === 0) {
+      renderEmpty(container, { icon: '💰', title: 'No financial data', subtitle: 'Set a budget and track revenue to see your ROI.' });
+      return;
+    }
+    container.innerHTML = '<div class="roi-inline-card"><div class="roi-inline-item"><span class="roi-inline-label">Budget</span><span class="roi-inline-value">$' + totalBudget.toFixed(0) + '</span></div><div class="roi-inline-item"><span class="roi-inline-label">Spent</span><span class="roi-inline-value roi-spent">$' + totalSpent.toFixed(0) + '</span></div><div class="roi-inline-item"><span class="roi-inline-label">Earned</span><span class="roi-inline-value roi-earned">$' + totalEarned.toFixed(0) + '</span></div><div class="roi-inline-item"><span class="roi-inline-label">Net ROI</span><span class="roi-inline-value ' + (netRoi >= 0 ? 'roi-positive' : 'roi-negative') + '">' + (netRoi >= 0 ? '+' : '') + '$' + netRoi.toFixed(0) + '</span></div></div>';
+  } catch (_) { /* non-critical */ }
+}
+
+// ─── Milestone Celebration (Feature Area 4) ──────────────────────────────────
+
+function checkMilestoneCelebration(metric) {
+  if (!metric || !metric.id) return;
+  const thresholds = [25, 50, 75, 100];
+  const pct = metric.target_value > 0 ? Math.round((metric.current_value / metric.target_value) * 100) : 0;
+  const storageKey = 'teb_milestones_' + metric.id;
+  const acknowledged = JSON.parse(localStorage.getItem(storageKey) || '[]');
+  for (const t of thresholds) {
+    if (pct >= t && !acknowledged.includes(t)) {
+      acknowledged.push(t);
+      localStorage.setItem(storageKey, JSON.stringify(acknowledged));
+      triggerCelebration();
+      toast.success('Milestone reached!', t + '% of ' + escHtml(metric.label));
+      break;
+    }
+  }
+}
+
+// ─── Streak-Aware Check-in Prompt (Feature Area 6) ───────────────────────────
+
+async function loadStreakCheckinPrompt() {
+  const prompt = document.getElementById('streak-checkin-prompt');
+  if (!prompt || !currentGoalId) return;
+  try {
+    const checkins = await api.get('/api/goals/' + currentGoalId + '/checkins?limit=1');
+    if (!Array.isArray(checkins) || checkins.length === 0) {
+      prompt.style.display = 'block';
+      prompt.innerHTML = '<span class="streak-prompt-text">No check-in today \u2014 how is it going? <a href="#" id="streak-prompt-link">\u2192</a></span>';
+    } else {
+      const last = new Date(checkins[0].created_at);
+      const hoursSince = (Date.now() - last.getTime()) / 3600000;
+      if (hoursSince > 24) {
+        prompt.style.display = 'block';
+        prompt.innerHTML = '<span class="streak-prompt-text">No check-in today \u2014 how is it going? <a href="#" id="streak-prompt-link">\u2192</a></span>';
+      } else { prompt.style.display = 'none'; return; }
+    }
+    const link = document.getElementById('streak-prompt-link');
+    if (link) link.addEventListener('click', (e) => { e.preventDefault(); const s = document.getElementById('checkin-section'); if (s) s.scrollIntoView({ behavior: 'smooth' }); });
+  } catch (_) { if (prompt) prompt.style.display = 'none'; }
+}
+
+// ─── Execution Step Inspector (Feature Area 5) ──────────────────────────────
+
+function renderExecutionStep(log) {
+  const statusColor = (log.status === 'success') ? 'var(--color-success)' : 'var(--color-error)';
+  const reqSummary = log.request_summary || '';
+  const resSummary = log.response_summary || '';
+  const methodMatch = reqSummary.match(/^(GET|POST|PUT|PATCH|DELETE)\s+(\S+)/i);
+  const method = methodMatch ? methodMatch[1] : '';
+  const url = methodMatch ? methodMatch[2] : '';
+  const statusMatch = resSummary.match(/^(\d{3})/);
+  const statusCode = statusMatch ? statusMatch[1] : '';
+  const responseBody = resSummary.substring(statusCode.length).trim();
+  const truncated = responseBody.length > 500 ? responseBody.substring(0, 500) : responseBody;
+  const needsMore = responseBody.length > 500;
+
+  return '<div class="exec-step"><div class="exec-step-header"><span class="exec-step-status" style="color:' + statusColor + '">' + (log.status === 'success' ? '✓' : '✕') + '</span><span class="exec-step-action">' + escHtml(log.action || '') + '</span>' + (method ? '<span class="exec-step-method">' + escHtml(method) + '</span>' : '') + (statusCode ? '<span class="exec-step-code">' + escHtml(statusCode) + '</span>' : '') + '<span class="exec-step-time">' + (log.created_at ? timeAgo(log.created_at) : '') + '</span></div><div class="exec-step-detail" style="display:none">' + (url ? '<div class="exec-detail-row"><strong>URL:</strong> ' + escHtml(url) + '</div>' : '') + (reqSummary ? '<details class="exec-detail-block"><summary>Request</summary><pre>' + escHtml(reqSummary) + '</pre></details>' : '') + '<div class="exec-detail-row"><strong>Response:</strong></div><pre class="exec-response-body">' + escHtml(truncated) + '</pre>' + (needsMore ? '<button class="btn-sm btn-secondary exec-show-more">Show more</button>' : '') + '</div></div>';
+}
+
+// ─── Simple Markdown (Feature Area 6) ────────────────────────────────────────
+
+function simpleMarkdown(text) {
+  if (!text) return '';
+  return escHtml(text)
+    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    .replace(/\*(.+?)\*/g, '<em>$1</em>')
+    .replace(/^- (.+)$/gm, '<li>$1</li>')
+    .replace(/\n\n/g, '</p><p>')
+    .replace(/^/, '<p>').replace(/$/, '</p>');
+}
+
+// ─── Unified Search (Feature Area 7) ────────────────────────────────────────
+
+const UnifiedSearch = {
+  _visible: false,
+  _selectedIdx: -1,
+  _results: [],
+
+  init() {
+    const input = document.getElementById('global-search-input');
+    const panel = document.getElementById('search-results-panel');
+    if (!input || !panel) return;
+
+    const doSearch = debounce(async (query) => {
+      if (!query || query.length < 2) { this.hide(); return; }
+      try {
+        const [goals, tasks] = await Promise.all([
+          api.get('/api/goals?q=' + encodeURIComponent(query)).catch(() => []),
+          api.get('/api/tasks?q=' + encodeURIComponent(query)).catch(() => []),
+        ]);
+        this._results = [];
+        (goals || []).slice(0, 5).forEach(g => this._results.push({ type: 'goal', data: g }));
+        (tasks || []).slice(0, 8).forEach(t => this._results.push({ type: 'task', data: t }));
+        this._renderResults(panel);
+      } catch (_) { this.hide(); }
+    }, 250);
+
+    input.addEventListener('input', () => doSearch(input.value.trim()));
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'ArrowDown') { e.preventDefault(); this._moveSelection(1); }
+      else if (e.key === 'ArrowUp') { e.preventDefault(); this._moveSelection(-1); }
+      else if (e.key === 'Enter') { e.preventDefault(); this._activateSelected(); }
+      else if (e.key === 'Escape') { this.hide(); input.blur(); }
+    });
+    input.addEventListener('blur', () => setTimeout(() => this.hide(), 200));
+  },
+
+  _renderResults(panel) {
+    if (!this._results.length) { this.hide(); return; }
+    this._visible = true;
+    this._selectedIdx = -1;
+    panel.style.display = 'block';
+    const goalR = this._results.filter(r => r.type === 'goal');
+    const taskR = this._results.filter(r => r.type === 'task');
+    let html = '';
+    if (goalR.length) {
+      html += '<div class="search-group-header">Goals</div>';
+      goalR.forEach(r => { const idx = this._results.indexOf(r); html += '<div class="search-result-item" data-idx="' + idx + '"><span class="search-result-icon">🎯</span><span class="search-result-title">' + escHtml(r.data.title) + '</span><span class="search-result-status status-' + r.data.status + '">' + escHtml(r.data.status) + '</span></div>'; });
+    }
+    if (taskR.length) {
+      html += '<div class="search-group-header">Tasks</div>';
+      taskR.forEach(r => { const idx = this._results.indexOf(r); html += '<div class="search-result-item" data-idx="' + idx + '"><span class="search-result-icon">📋</span><span class="search-result-title">' + escHtml(r.data.title) + '</span><span class="search-result-status status-' + r.data.status + '">' + escHtml(r.data.status) + '</span></div>'; });
+    }
+    panel.innerHTML = html;
+    panel.querySelectorAll('.search-result-item').forEach(item => {
+      item.addEventListener('mousedown', (e) => { e.preventDefault(); const idx = parseInt(item.dataset.idx, 10); if (!isNaN(idx)) { this._selectedIdx = idx; this._activateSelected(); } });
+    });
+  },
+
+  _moveSelection(delta) {
+    this._selectedIdx = Math.max(-1, Math.min(this._results.length - 1, this._selectedIdx + delta));
+    const panel = document.getElementById('search-results-panel');
+    if (!panel) return;
+    panel.querySelectorAll('.search-result-item').forEach(item => {
+      const idx = parseInt(item.dataset.idx, 10);
+      item.classList.toggle('selected', idx === this._selectedIdx);
+    });
+  },
+
+  _activateSelected() {
+    if (this._selectedIdx < 0 || this._selectedIdx >= this._results.length) return;
+    const r = this._results[this._selectedIdx];
+    this.hide();
+    if (r.type === 'goal') openGoal(r.data.id);
+    else if (r.type === 'task') Router.navigate('#/goal/' + r.data.goal_id);
+  },
+
+  hide() {
+    this._visible = false;
+    const panel = document.getElementById('search-results-panel');
+    if (panel) panel.style.display = 'none';
+  }
+};
+
+// ─── Task Filter Bar (Feature Area 7) ───────────────────────────────────────
+
+const TaskFilter = {
+  init() {
+    const bar = document.getElementById('task-filter-bar');
+    if (!bar) return;
+    bar.innerHTML = '<div class="filter-bar"><select id="filter-status" class="filter-select" title="Filter by status"><option value="">All statuses</option><option value="todo">To do</option><option value="in_progress">In progress</option><option value="done">Done</option><option value="failed">Failed</option></select><select id="filter-priority" class="filter-select" title="Filter by priority"><option value="">All priorities</option><option value="high">High</option><option value="normal">Normal</option><option value="low">Low</option></select><button id="btn-clear-filters" class="btn-secondary btn-sm">Clear</button></div>';
+    const statusSel = document.getElementById('filter-status');
+    const prioritySel = document.getElementById('filter-priority');
+    const clearBtn = document.getElementById('btn-clear-filters');
+    if (statusSel) statusSel.addEventListener('change', () => this.apply());
+    if (prioritySel) prioritySel.addEventListener('change', () => this.apply());
+    if (clearBtn) clearBtn.addEventListener('click', () => this.clear());
+  },
+
+  apply() {
+    const st = document.getElementById('filter-status');
+    const pr = document.getElementById('filter-priority');
+    const statusVal = st ? st.value : '';
+    const priorityVal = pr ? pr.value : '';
+    document.querySelectorAll('.task-card').forEach(card => {
+      const cardStatus = card.dataset.status || '';
+      const cardPriority = card.querySelector('.priority-dot') ? (card.querySelector('.priority-dot').title || '').replace('Priority: ', '') : 'normal';
+      const showS = !statusVal || cardStatus === statusVal;
+      const showP = !priorityVal || cardPriority === priorityVal;
+      card.style.display = (showS && showP) ? '' : 'none';
+    });
+  },
+
+  clear() {
+    const st = document.getElementById('filter-status');
+    const pr = document.getElementById('filter-priority');
+    if (st) st.value = '';
+    if (pr) pr.value = '';
+    document.querySelectorAll('.task-card').forEach(card => card.style.display = '');
+  }
+};
+
 // ─── Init ─────────────────────────────────────────────────────────────────────
 
 function showSettingsModal() {
@@ -2866,7 +3588,31 @@ function init() {
   CommandPalette.init();
   TaskDetailPanel.init();
   BatchOps.init();
+  UnifiedSearch.init();
   setupCharCounter('goal-desc', 'goal-desc-counter');
+
+  // Wire mood selector
+  document.querySelectorAll('.mood-option').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.mood-option').forEach(m => m.classList.remove('selected'));
+      btn.classList.add('selected');
+    });
+  });
+
+  // Wire execution step expand/collapse (delegated)
+  document.addEventListener('click', (e) => {
+    const header = e.target.closest('.exec-step-header');
+    if (header) {
+      const detail = header.nextElementSibling;
+      if (detail) detail.style.display = detail.style.display === 'none' ? 'block' : 'none';
+    }
+    const showMore = e.target.closest('.exec-show-more');
+    if (showMore) {
+      const pre = showMore.previousElementSibling;
+      if (pre) pre.style.maxHeight = 'none';
+      showMore.remove();
+    }
+  });
 
   // Dark mode toggle
   const themeBtn = document.getElementById('btn-theme-toggle');
@@ -2912,22 +3658,33 @@ async function submitCheckin() {
   const blockers = blockersEl ? blockersEl.value.trim() : '';
   if (!done && !blockers) return;
 
+  // Get selected mood
+  const moodEl = document.querySelector('.mood-option.selected');
+  const mood = moodEl ? moodEl.dataset.mood : 'neutral';
+
   const btn = document.getElementById('btn-checkin');
   if (btn) btn.disabled = true;
   try {
     const res = await api.post(`/api/goals/${currentGoalId}/checkin`, {
-      done_summary: done,
+      done_summary: done + (mood !== 'neutral' ? ' [mood:' + mood + ']' : ''),
       blockers: blockers,
     });
-    // Show coaching feedback
+    // Show coaching feedback as rendered markdown (crossfade transition)
     const fb = document.getElementById('checkin-feedback');
-    if (fb) { fb.textContent = res.coaching; fb.style.display = 'block'; }
+    if (fb) {
+      fb.innerHTML = simpleMarkdown(res.coaching || res.feedback || '');
+      fb.style.display = 'block';
+      fb.classList.add('fade-in');
+    }
     // Clear inputs
     if (doneEl) doneEl.value = '';
     if (blockersEl) blockersEl.value = '';
+    // Clear mood selection
+    document.querySelectorAll('.mood-option').forEach(m => m.classList.remove('selected'));
     // Refresh history and nudge
     loadCheckinHistory();
     loadNudge();
+    loadXpBar();
     toast.success('Check-in submitted', 'Keep up the momentum!');
   } catch (e) {
     showError('error-tasks', e.message);
@@ -2967,6 +3724,10 @@ async function loadNudge() {
     const banner = document.getElementById('nudge-banner');
     if (!banner) return;
     if (res.nudge) {
+      if (isNudgeAcknowledged(res.nudge.id)) {
+        banner.style.display = 'none';
+        return;
+      }
       const nudgeMsg = document.getElementById('nudge-message');
       if (nudgeMsg) nudgeMsg.textContent = res.nudge.message;
       banner.style.display = 'flex';
@@ -2984,11 +3745,13 @@ on('btn-nudge-ack', 'click', async () => {
   if (!banner) return;
   const nudgeId = banner.dataset.nudgeId;
   if (nudgeId) {
+    acknowledgeNudge(nudgeId);
     try {
       await api.post(`/api/nudges/${nudgeId}/acknowledge`, {});
     } catch (e) { /* ignore */ }
   }
-  banner.style.display = 'none';
+  banner.classList.add('nudge-slide-out');
+  setTimeout(() => { banner.style.display = 'none'; banner.classList.remove('nudge-slide-out'); }, 300);
 });
 
 // ─── Outcome Metrics ──────────────────────────────────────────────────────────
