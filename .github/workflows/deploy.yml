@@ -45,7 +45,8 @@ jobs:
             cd /opt/teb
 
             echo "==> Pulling latest code..."
-            git pull origin main
+            git fetch origin main
+            git reset --hard origin/main
 
             echo "==> Updating nginx config..."
             sudo cp nginx/teb.conf /etc/nginx/snippets/teb.conf
