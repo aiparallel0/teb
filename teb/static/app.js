@@ -5171,6 +5171,924 @@ const LazyViews = {
   }
 };
 
+// ─── Real-time SSE Client ──────────────────────────────────────────────────────
+
+const RealtimeClient = {
+  _eventSource: null,
+  _lastEventId: null,
+  _reconnectAttempts: 0,
+  _maxReconnectAttempts: 10,
+  _baseDelay: 1000,
+  _handlers: {},
+
+  /**
+   * Register a handler for a specific SSE event type.
+   * Multiple handlers per event type are supported.
+   */
+  on(eventType, handler) {
+    if (!this._handlers[eventType]) this._handlers[eventType] = [];
+    this._handlers[eventType].push(handler);
+    return this;
+  },
+
+  /**
+   * Remove a handler for a specific event type.
+   */
+  off(eventType, handler) {
+    if (!this._handlers[eventType]) return;
+    this._handlers[eventType] = this._handlers[eventType].filter(h => h !== handler);
+  },
+
+  _dispatch(eventType, data) {
+    const handlers = this._handlers[eventType] || [];
+    handlers.forEach(h => {
+      try { h(data); } catch (e) { console.error('SSE handler error:', e); }
+    });
+    // Also dispatch to wildcard handlers
+    const wildcardHandlers = this._handlers['*'] || [];
+    wildcardHandlers.forEach(h => {
+      try { h(eventType, data); } catch (e) { console.error('SSE wildcard handler error:', e); }
+    });
+  },
+
+  /**
+   * Connect to the SSE stream. Requires a valid auth token.
+   */
+  connect() {
+    if (this._eventSource) this.disconnect();
+
+    const token = localStorage.getItem('teb_token');
+    if (!token) return; // Not logged in
+
+    let url = `${BASE_PATH}/api/events/stream`;
+    if (this._lastEventId) {
+      url += `?Last-Event-ID=${encodeURIComponent(this._lastEventId)}`;
+    }
+
+    // EventSource doesn't support custom headers, so pass token as query param
+    url += (url.includes('?') ? '&' : '?') + `token=${encodeURIComponent(token)}`;
+
+    try {
+      this._eventSource = new EventSource(url);
+    } catch (e) {
+      console.warn('SSE: EventSource not supported, falling back to polling');
+      return;
+    }
+
+    this._eventSource.onopen = () => {
+      this._reconnectAttempts = 0;
+      console.log('SSE: connected');
+    };
+
+    this._eventSource.onerror = () => {
+      if (this._eventSource && this._eventSource.readyState === EventSource.CLOSED) {
+        console.warn('SSE: connection closed, attempting reconnect');
+        this._scheduleReconnect();
+      }
+    };
+
+    // Register SSE event listeners for known event types
+    const eventTypes = [
+      'task_completed', 'task_updated', 'task_created', 'task_deleted',
+      'task_started', 'task_progress', 'task_assigned',
+      'goal_created', 'goal_updated', 'goal_deleted',
+      'goal_milestone', 'orchestration_complete',
+      'execution_result', 'execution_escalated',
+      'spending_request', 'checkin_nudge', 'agent_handoff',
+      'report_generated', 'mention', 'new_message', 'goal_chat',
+      'shutdown',
+    ];
+
+    eventTypes.forEach(et => {
+      if (this._eventSource) {
+        this._eventSource.addEventListener(et, (e) => {
+          try {
+            if (e.lastEventId) this._lastEventId = e.lastEventId;
+            const data = JSON.parse(e.data);
+            this._dispatch(et, data);
+          } catch (err) {
+            console.warn('SSE: failed to parse event data:', err);
+          }
+        });
+      }
+    });
+  },
+
+  disconnect() {
+    if (this._eventSource) {
+      this._eventSource.close();
+      this._eventSource = null;
+    }
+  },
+
+  _scheduleReconnect() {
+    if (this._reconnectAttempts >= this._maxReconnectAttempts) {
+      console.warn('SSE: max reconnect attempts reached, falling back to polling');
+      startPeriodicRefresh();
+      return;
+    }
+    const delay = Math.min(
+      this._baseDelay * Math.pow(2, this._reconnectAttempts) + Math.random() * 1000,
+      30000
+    );
+    this._reconnectAttempts++;
+    setTimeout(() => this.connect(), delay);
+  },
+
+  /** Whether the SSE connection is currently open. */
+  get connected() {
+    return this._eventSource && this._eventSource.readyState === EventSource.OPEN;
+  }
+};
+
+// ─── SSE event handlers for live UI updates ─────────────────────────────────
+
+RealtimeClient.on('task_completed', (data) => {
+  if (!currentGoalId || data.goal_id !== currentGoalId) return;
+  // Update the task in our local state
+  const idx = currentTasks.findIndex(t => String(t.id) === String(data.task_id));
+  if (idx !== -1) {
+    currentTasks[idx].status = 'done';
+    renderTasks(currentTasks);
+    updateProgress(currentTasks);
+  }
+  toast.info('Task Completed', `"${escHtml(data.task_title || '')}" is done!`);
+});
+
+RealtimeClient.on('task_updated', (data) => {
+  if (!currentGoalId || data.goal_id !== currentGoalId) return;
+  const idx = currentTasks.findIndex(t => String(t.id) === String(data.task_id));
+  if (idx !== -1 && data.status) {
+    currentTasks[idx].status = data.status;
+    renderTasks(currentTasks);
+    updateProgress(currentTasks);
+  }
+});
+
+RealtimeClient.on('task_created', (data) => {
+  if (!currentGoalId || data.goal_id !== currentGoalId) return;
+  // Reload the full task list for this goal to get the new task
+  loadGoalById(currentGoalId);
+});
+
+RealtimeClient.on('task_deleted', (data) => {
+  if (!currentGoalId || data.goal_id !== currentGoalId) return;
+  currentTasks = currentTasks.filter(t => String(t.id) !== String(data.task_id));
+  renderTasks(currentTasks);
+  updateProgress(currentTasks);
+});
+
+RealtimeClient.on('goal_updated', (data) => {
+  if (!currentGoalId || data.goal_id !== currentGoalId) return;
+  loadGoalById(currentGoalId);
+});
+
+RealtimeClient.on('orchestration_complete', (data) => {
+  if (!currentGoalId || data.goal_id !== currentGoalId) return;
+  toast.success('Orchestration Complete',
+    `${data.tasks_succeeded || 0} succeeded, ${data.tasks_failed || 0} failed`);
+  loadGoalById(currentGoalId);
+});
+
+RealtimeClient.on('spending_request', (data) => {
+  toast.warning('Spending Approval Needed',
+    `$${(data.amount || 0).toFixed(2)} — ${escHtml(data.description || '')}`);
+});
+
+RealtimeClient.on('agent_handoff', (data) => {
+  if (!currentGoalId || data.goal_id !== currentGoalId) return;
+  toast.info('Agent Handoff',
+    `${escHtml(data.from_agent || '?')} → ${escHtml(data.to_agent || '?')}`);
+});
+
+RealtimeClient.on('execution_escalated', (data) => {
+  toast.warning('Execution Escalated',
+    `Task ${data.task_id}: ${escHtml(data.reason || 'needs review')}`);
+});
+
+RealtimeClient.on('shutdown', () => {
+  toast.warning('Server Shutting Down', 'Connection will be re-established when the server restarts.');
+  RealtimeClient._scheduleReconnect();
+});
+
+// Connect SSE when we have auth, disconnect on logout
+(function initSSE() {
+  const token = localStorage.getItem('teb_token');
+  if (token) {
+    RealtimeClient.connect();
+    // When SSE is active, stop polling (SSE replaces it)
+    stopPeriodicRefresh();
+  }
+})();
+
+
+// ─── Block Editor (recursive block-based content) ────────────────────────────
+
+const BlockEditor = {
+  _BLOCK_TYPES: [
+    { key: 'paragraph', label: 'Paragraph', icon: '¶' },
+    { key: 'heading', label: 'Heading', icon: 'H' },
+    { key: 'code', label: 'Code', icon: '⟨⟩' },
+    { key: 'quote', label: 'Quote', icon: '❝' },
+    { key: 'callout', label: 'Callout', icon: '💡' },
+    { key: 'checklist_item', label: 'Checklist', icon: '☑' },
+    { key: 'bullet_list', label: 'Bullet List', icon: '•' },
+    { key: 'numbered_list', label: 'Numbered List', icon: '1.' },
+    { key: 'divider', label: 'Divider', icon: '—' },
+    { key: 'image', label: 'Image', icon: '🖼' },
+  ],
+
+  /**
+   * Render the block editor into a container for a given entity.
+   * @param {string} containerId - DOM id of the editor container
+   * @param {string} entityType - 'tasks' or 'goals'
+   * @param {number} entityId - the entity's id
+   */
+  async render(containerId, entityType, entityId) {
+    const container = document.getElementById(containerId);
+    if (!container) return;
+
+    container.innerHTML = '<div class="block-editor-loading">Loading blocks…</div>';
+
+    try {
+      const blocks = await api.get(`/api/${entityType}/${entityId}/blocks?tree=true`);
+      container.innerHTML = '';
+
+      const editorEl = document.createElement('div');
+      editorEl.className = 'block-editor';
+      editorEl.dataset.entityType = entityType;
+      editorEl.dataset.entityId = entityId;
+
+      if (blocks.length === 0) {
+        // Show empty state with add button
+        const empty = document.createElement('div');
+        empty.className = 'block-editor-empty';
+        empty.innerHTML = `
+          <p class="block-editor-empty-text">No content blocks yet. Click + to add one.</p>
+        `;
+        editorEl.appendChild(empty);
+      } else {
+        blocks.forEach(block => {
+          editorEl.appendChild(this._renderBlock(block, entityType, entityId, 0));
+        });
+      }
+
+      // Add block button
+      const addBtn = document.createElement('button');
+      addBtn.className = 'block-add-btn';
+      addBtn.textContent = '+ Add block';
+      addBtn.addEventListener('click', () => this._showBlockTypeMenu(addBtn, entityType, entityId, null));
+      editorEl.appendChild(addBtn);
+
+      container.appendChild(editorEl);
+    } catch (e) {
+      container.innerHTML = `<div class="block-editor-error">Failed to load blocks: ${escHtml(e.message || '')}</div>`;
+    }
+  },
+
+  _renderBlock(block, entityType, entityId, depth) {
+    const el = document.createElement('div');
+    el.className = `block-item block-type-${escHtml(block.block_type)}`;
+    el.dataset.blockId = block.id;
+    el.style.marginLeft = (depth * 16) + 'px';
+
+    // Block content rendering by type
+    const contentEl = document.createElement('div');
+    contentEl.className = 'block-content';
+
+    switch (block.block_type) {
+      case 'heading': {
+        const level = (block.properties && block.properties.level) || 1;
+        const tag = level <= 3 ? `h${level + 1}` : 'h4';
+        contentEl.innerHTML = `<${tag} class="block-heading">${escHtml(block.content)}</${tag}>`;
+        break;
+      }
+      case 'code': {
+        const lang = (block.properties && block.properties.language) || '';
+        contentEl.innerHTML = `<pre class="block-code"><code data-lang="${escHtml(lang)}">${escHtml(block.content)}</code></pre>`;
+        break;
+      }
+      case 'quote':
+        contentEl.innerHTML = `<blockquote class="block-quote">${escHtml(block.content)}</blockquote>`;
+        break;
+      case 'callout': {
+        const color = (block.properties && block.properties.color) || 'blue';
+        contentEl.innerHTML = `<div class="block-callout block-callout-${escHtml(color)}"><span class="block-callout-icon">💡</span><span>${escHtml(block.content)}</span></div>`;
+        break;
+      }
+      case 'checklist_item': {
+        const checked = block.properties && block.properties.checked;
+        contentEl.innerHTML = `<label class="block-checklist"><input type="checkbox" ${checked ? 'checked' : ''} data-block-id="${block.id}" class="block-checkbox"><span class="${checked ? 'block-checked' : ''}">${escHtml(block.content)}</span></label>`;
+        break;
+      }
+      case 'bullet_list':
+        contentEl.innerHTML = `<div class="block-bullet">• ${escHtml(block.content)}</div>`;
+        break;
+      case 'numbered_list':
+        contentEl.innerHTML = `<div class="block-numbered">${block.order_index + 1}. ${escHtml(block.content)}</div>`;
+        break;
+      case 'divider':
+        contentEl.innerHTML = '<hr class="block-divider">';
+        break;
+      case 'image': {
+        const url = (block.properties && block.properties.url) || '';
+        const caption = (block.properties && block.properties.caption) || '';
+        if (url) {
+          contentEl.innerHTML = `<figure class="block-image"><img src="${escHtml(url)}" alt="${escHtml(caption)}" loading="lazy"><figcaption>${escHtml(caption)}</figcaption></figure>`;
+        } else {
+          contentEl.innerHTML = `<div class="block-image-placeholder">No image URL</div>`;
+        }
+        break;
+      }
+      default:
+        contentEl.innerHTML = `<p class="block-paragraph">${escHtml(block.content)}</p>`;
+    }
+
+    // Make text content inline-editable
+    if (block.block_type !== 'divider') {
+      const textEl = contentEl.querySelector('p, h2, h3, h4, blockquote > *, .block-bullet, .block-numbered, .block-callout > span:last-child, .block-checklist > span');
+      if (textEl) {
+        textEl.contentEditable = 'true';
+        textEl.addEventListener('blur', async () => {
+          const newContent = textEl.textContent || '';
+          if (newContent !== block.content) {
+            try {
+              await api.patch(`/api/blocks/${block.id}`, { content: newContent });
+              block.content = newContent;
+            } catch (e) {
+              toast.error('Error', 'Failed to save block: ' + (e.message || ''));
+            }
+          }
+        });
+      }
+    }
+
+    // Checkbox toggle for checklist items
+    if (block.block_type === 'checklist_item') {
+      const cb = contentEl.querySelector('.block-checkbox');
+      if (cb) {
+        cb.addEventListener('change', async () => {
+          try {
+            const props = block.properties || {};
+            props.checked = cb.checked;
+            await api.patch(`/api/blocks/${block.id}`, { properties: props });
+          } catch (e) {
+            toast.error('Error', 'Failed to update checkbox');
+          }
+        });
+      }
+    }
+
+    el.appendChild(contentEl);
+
+    // Block action bar (type selector, delete, add child)
+    const actions = document.createElement('div');
+    actions.className = 'block-actions';
+    actions.innerHTML = `
+      <button class="block-action-btn block-action-drag" title="Drag">⠿</button>
+      <button class="block-action-btn block-action-add" title="Add block below">+</button>
+      <button class="block-action-btn block-action-delete" title="Delete">×</button>
+    `;
+    const addChildBtn = actions.querySelector('.block-action-add');
+    if (addChildBtn) {
+      addChildBtn.addEventListener('click', () => {
+        this._showBlockTypeMenu(addChildBtn, entityType, entityId, block.id);
+      });
+    }
+    const deleteBtn = actions.querySelector('.block-action-delete');
+    if (deleteBtn) {
+      deleteBtn.addEventListener('click', async () => {
+        try {
+          await api.del(`/api/blocks/${block.id}`);
+          el.remove();
+        } catch (e) {
+          toast.error('Error', 'Failed to delete block');
+        }
+      });
+    }
+    el.insertBefore(actions, contentEl);
+
+    // Render children recursively
+    if (block.children && block.children.length > 0) {
+      const childrenEl = document.createElement('div');
+      childrenEl.className = 'block-children';
+      block.children.forEach(child => {
+        childrenEl.appendChild(this._renderBlock(child, entityType, entityId, depth + 1));
+      });
+      el.appendChild(childrenEl);
+    }
+
+    return el;
+  },
+
+  _showBlockTypeMenu(anchorEl, entityType, entityId, parentBlockId) {
+    // Remove any existing menus
+    document.querySelectorAll('.block-type-menu').forEach(m => m.remove());
+
+    const menu = document.createElement('div');
+    menu.className = 'block-type-menu';
+    this._BLOCK_TYPES.forEach(bt => {
+      const item = document.createElement('button');
+      item.className = 'block-type-menu-item';
+      item.innerHTML = `<span class="block-type-icon">${bt.icon}</span> ${escHtml(bt.label)}`;
+      item.addEventListener('click', async () => {
+        menu.remove();
+        try {
+          const created = await api.post(`/api/${entityType}/${entityId}/blocks`, {
+            block_type: bt.key,
+            content: bt.key === 'divider' ? '' : '',
+            parent_block_id: parentBlockId,
+            order_index: 0,
+          });
+          // Re-render the editor to reflect the new block
+          const editorEl = anchorEl.closest('.block-editor');
+          if (editorEl) {
+            const containerId = editorEl.parentElement ? editorEl.parentElement.id : null;
+            if (containerId) {
+              await this.render(containerId, entityType, entityId);
+            }
+          }
+        } catch (e) {
+          toast.error('Error', 'Failed to create block: ' + (e.message || ''));
+        }
+      });
+      menu.appendChild(item);
+    });
+
+    // Position menu
+    anchorEl.parentElement.appendChild(menu);
+
+    // Close on outside click
+    const closeMenu = (e) => {
+      if (!menu.contains(e.target) && e.target !== anchorEl) {
+        menu.remove();
+        document.removeEventListener('click', closeMenu);
+      }
+    };
+    setTimeout(() => document.addEventListener('click', closeMenu), 0);
+  },
+};
+
+
+// ─── Real-time SSE Client ──────────────────────────────────────────────────────
+
+const RealtimeClient = {
+  _eventSource: null,
+  _lastEventId: null,
+  _reconnectAttempts: 0,
+  _maxReconnectAttempts: 10,
+  _baseDelay: 1000,
+  _handlers: {},
+
+  /**
+   * Register a handler for a specific SSE event type.
+   * Multiple handlers per event type are supported.
+   */
+  on(eventType, handler) {
+    if (!this._handlers[eventType]) this._handlers[eventType] = [];
+    this._handlers[eventType].push(handler);
+    return this;
+  },
+
+  /**
+   * Remove a handler for a specific event type.
+   */
+  off(eventType, handler) {
+    if (!this._handlers[eventType]) return;
+    this._handlers[eventType] = this._handlers[eventType].filter(h => h !== handler);
+  },
+
+  _dispatch(eventType, data) {
+    const handlers = this._handlers[eventType] || [];
+    handlers.forEach(h => {
+      try { h(data); } catch (e) { console.error('SSE handler error:', e); }
+    });
+    // Also dispatch to wildcard handlers
+    const wildcardHandlers = this._handlers['*'] || [];
+    wildcardHandlers.forEach(h => {
+      try { h(eventType, data); } catch (e) { console.error('SSE wildcard handler error:', e); }
+    });
+  },
+
+  /**
+   * Connect to the SSE stream. Requires a valid auth token.
+   */
+  connect() {
+    if (this._eventSource) this.disconnect();
+
+    const token = localStorage.getItem('teb_token');
+    if (!token) return; // Not logged in
+
+    let url = `${BASE_PATH}/api/events/stream`;
+    if (this._lastEventId) {
+      url += `?Last-Event-ID=${encodeURIComponent(this._lastEventId)}`;
+    }
+
+    // EventSource doesn't support custom headers, so pass token as query param
+    url += (url.includes('?') ? '&' : '?') + `token=${encodeURIComponent(token)}`;
+
+    try {
+      this._eventSource = new EventSource(url);
+    } catch (e) {
+      console.warn('SSE: EventSource not supported, falling back to polling');
+      return;
+    }
+
+    this._eventSource.onopen = () => {
+      this._reconnectAttempts = 0;
+      console.log('SSE: connected');
+    };
+
+    this._eventSource.onerror = () => {
+      if (this._eventSource && this._eventSource.readyState === EventSource.CLOSED) {
+        console.warn('SSE: connection closed, attempting reconnect');
+        this._scheduleReconnect();
+      }
+    };
+
+    // Register SSE event listeners for known event types
+    const eventTypes = [
+      'task_completed', 'task_updated', 'task_created', 'task_deleted',
+      'task_started', 'task_progress', 'task_assigned',
+      'goal_created', 'goal_updated', 'goal_deleted',
+      'goal_milestone', 'orchestration_complete',
+      'execution_result', 'execution_escalated',
+      'spending_request', 'checkin_nudge', 'agent_handoff',
+      'report_generated', 'mention', 'new_message', 'goal_chat',
+      'shutdown',
+    ];
+
+    eventTypes.forEach(et => {
+      if (this._eventSource) {
+        this._eventSource.addEventListener(et, (e) => {
+          try {
+            if (e.lastEventId) this._lastEventId = e.lastEventId;
+            const data = JSON.parse(e.data);
+            this._dispatch(et, data);
+          } catch (err) {
+            console.warn('SSE: failed to parse event data:', err);
+          }
+        });
+      }
+    });
+  },
+
+  disconnect() {
+    if (this._eventSource) {
+      this._eventSource.close();
+      this._eventSource = null;
+    }
+  },
+
+  _scheduleReconnect() {
+    if (this._reconnectAttempts >= this._maxReconnectAttempts) {
+      console.warn('SSE: max reconnect attempts reached, falling back to polling');
+      startPeriodicRefresh();
+      return;
+    }
+    const delay = Math.min(
+      this._baseDelay * Math.pow(2, this._reconnectAttempts) + Math.random() * 1000,
+      30000
+    );
+    this._reconnectAttempts++;
+    setTimeout(() => this.connect(), delay);
+  },
+
+  /** Whether the SSE connection is currently open. */
+  get connected() {
+    return this._eventSource && this._eventSource.readyState === EventSource.OPEN;
+  }
+};
+
+// ─── SSE event handlers for live UI updates ─────────────────────────────────
+
+RealtimeClient.on('task_completed', (data) => {
+  if (!currentGoalId || data.goal_id !== currentGoalId) return;
+  // Update the task in our local state
+  const idx = currentTasks.findIndex(t => String(t.id) === String(data.task_id));
+  if (idx !== -1) {
+    currentTasks[idx].status = 'done';
+    renderTasks(currentTasks);
+    updateProgress(currentTasks);
+  }
+  toast.info('Task Completed', `"${escHtml(data.task_title || '')}" is done!`);
+});
+
+RealtimeClient.on('task_updated', (data) => {
+  if (!currentGoalId || data.goal_id !== currentGoalId) return;
+  const idx = currentTasks.findIndex(t => String(t.id) === String(data.task_id));
+  if (idx !== -1 && data.status) {
+    currentTasks[idx].status = data.status;
+    renderTasks(currentTasks);
+    updateProgress(currentTasks);
+  }
+});
+
+RealtimeClient.on('task_created', (data) => {
+  if (!currentGoalId || data.goal_id !== currentGoalId) return;
+  // Reload the full task list for this goal to get the new task
+  loadGoalById(currentGoalId);
+});
+
+RealtimeClient.on('task_deleted', (data) => {
+  if (!currentGoalId || data.goal_id !== currentGoalId) return;
+  currentTasks = currentTasks.filter(t => String(t.id) !== String(data.task_id));
+  renderTasks(currentTasks);
+  updateProgress(currentTasks);
+});
+
+RealtimeClient.on('goal_updated', (data) => {
+  if (!currentGoalId || data.goal_id !== currentGoalId) return;
+  loadGoalById(currentGoalId);
+});
+
+RealtimeClient.on('orchestration_complete', (data) => {
+  if (!currentGoalId || data.goal_id !== currentGoalId) return;
+  toast.success('Orchestration Complete',
+    `${data.tasks_succeeded || 0} succeeded, ${data.tasks_failed || 0} failed`);
+  loadGoalById(currentGoalId);
+});
+
+RealtimeClient.on('spending_request', (data) => {
+  toast.warning('Spending Approval Needed',
+    `$${(data.amount || 0).toFixed(2)} — ${escHtml(data.description || '')}`);
+});
+
+RealtimeClient.on('agent_handoff', (data) => {
+  if (!currentGoalId || data.goal_id !== currentGoalId) return;
+  toast.info('Agent Handoff',
+    `${escHtml(data.from_agent || '?')} → ${escHtml(data.to_agent || '?')}`);
+});
+
+RealtimeClient.on('execution_escalated', (data) => {
+  toast.warning('Execution Escalated',
+    `Task ${data.task_id}: ${escHtml(data.reason || 'needs review')}`);
+});
+
+RealtimeClient.on('shutdown', () => {
+  toast.warning('Server Shutting Down', 'Connection will be re-established when the server restarts.');
+  RealtimeClient._scheduleReconnect();
+});
+
+// Connect SSE when we have auth, disconnect on logout
+(function initSSE() {
+  const token = localStorage.getItem('teb_token');
+  if (token) {
+    RealtimeClient.connect();
+    // When SSE is active, stop polling (SSE replaces it)
+    stopPeriodicRefresh();
+  }
+})();
+
+
+// ─── Block Editor (recursive block-based content) ────────────────────────────
+
+const BlockEditor = {
+  _BLOCK_TYPES: [
+    { key: 'paragraph', label: 'Paragraph', icon: '¶' },
+    { key: 'heading', label: 'Heading', icon: 'H' },
+    { key: 'code', label: 'Code', icon: '⟨⟩' },
+    { key: 'quote', label: 'Quote', icon: '❝' },
+    { key: 'callout', label: 'Callout', icon: '💡' },
+    { key: 'checklist_item', label: 'Checklist', icon: '☑' },
+    { key: 'bullet_list', label: 'Bullet List', icon: '•' },
+    { key: 'numbered_list', label: 'Numbered List', icon: '1.' },
+    { key: 'divider', label: 'Divider', icon: '—' },
+    { key: 'image', label: 'Image', icon: '🖼' },
+  ],
+
+  /**
+   * Render the block editor into a container for a given entity.
+   * @param {string} containerId - DOM id of the editor container
+   * @param {string} entityType - 'tasks' or 'goals'
+   * @param {number} entityId - the entity's id
+   */
+  async render(containerId, entityType, entityId) {
+    const container = document.getElementById(containerId);
+    if (!container) return;
+
+    container.innerHTML = '<div class="block-editor-loading">Loading blocks…</div>';
+
+    try {
+      const blocks = await api.get(`/api/${entityType}/${entityId}/blocks?tree=true`);
+      container.innerHTML = '';
+
+      const editorEl = document.createElement('div');
+      editorEl.className = 'block-editor';
+      editorEl.dataset.entityType = entityType;
+      editorEl.dataset.entityId = entityId;
+
+      if (blocks.length === 0) {
+        // Show empty state with add button
+        const empty = document.createElement('div');
+        empty.className = 'block-editor-empty';
+        empty.innerHTML = `
+          <p class="block-editor-empty-text">No content blocks yet. Click + to add one.</p>
+        `;
+        editorEl.appendChild(empty);
+      } else {
+        blocks.forEach(block => {
+          editorEl.appendChild(this._renderBlock(block, entityType, entityId, 0));
+        });
+      }
+
+      // Add block button
+      const addBtn = document.createElement('button');
+      addBtn.className = 'block-add-btn';
+      addBtn.textContent = '+ Add block';
+      addBtn.addEventListener('click', () => this._showBlockTypeMenu(addBtn, entityType, entityId, null));
+      editorEl.appendChild(addBtn);
+
+      container.appendChild(editorEl);
+    } catch (e) {
+      container.innerHTML = `<div class="block-editor-error">Failed to load blocks: ${escHtml(e.message || '')}</div>`;
+    }
+  },
+
+  _renderBlock(block, entityType, entityId, depth) {
+    const el = document.createElement('div');
+    el.className = `block-item block-type-${escHtml(block.block_type)}`;
+    el.dataset.blockId = block.id;
+    el.style.marginLeft = (depth * 16) + 'px';
+
+    // Block content rendering by type
+    const contentEl = document.createElement('div');
+    contentEl.className = 'block-content';
+
+    switch (block.block_type) {
+      case 'heading': {
+        const level = (block.properties && block.properties.level) || 1;
+        const tag = level <= 3 ? `h${level + 1}` : 'h4';
+        contentEl.innerHTML = `<${tag} class="block-heading">${escHtml(block.content)}</${tag}>`;
+        break;
+      }
+      case 'code': {
+        const lang = (block.properties && block.properties.language) || '';
+        contentEl.innerHTML = `<pre class="block-code"><code data-lang="${escHtml(lang)}">${escHtml(block.content)}</code></pre>`;
+        break;
+      }
+      case 'quote':
+        contentEl.innerHTML = `<blockquote class="block-quote">${escHtml(block.content)}</blockquote>`;
+        break;
+      case 'callout': {
+        const color = (block.properties && block.properties.color) || 'blue';
+        contentEl.innerHTML = `<div class="block-callout block-callout-${escHtml(color)}"><span class="block-callout-icon">💡</span><span>${escHtml(block.content)}</span></div>`;
+        break;
+      }
+      case 'checklist_item': {
+        const checked = block.properties && block.properties.checked;
+        contentEl.innerHTML = `<label class="block-checklist"><input type="checkbox" ${checked ? 'checked' : ''} data-block-id="${block.id}" class="block-checkbox"><span class="${checked ? 'block-checked' : ''}">${escHtml(block.content)}</span></label>`;
+        break;
+      }
+      case 'bullet_list':
+        contentEl.innerHTML = `<div class="block-bullet">• ${escHtml(block.content)}</div>`;
+        break;
+      case 'numbered_list':
+        contentEl.innerHTML = `<div class="block-numbered">${block.order_index + 1}. ${escHtml(block.content)}</div>`;
+        break;
+      case 'divider':
+        contentEl.innerHTML = '<hr class="block-divider">';
+        break;
+      case 'image': {
+        const url = (block.properties && block.properties.url) || '';
+        const caption = (block.properties && block.properties.caption) || '';
+        if (url) {
+          contentEl.innerHTML = `<figure class="block-image"><img src="${escHtml(url)}" alt="${escHtml(caption)}" loading="lazy"><figcaption>${escHtml(caption)}</figcaption></figure>`;
+        } else {
+          contentEl.innerHTML = `<div class="block-image-placeholder">No image URL</div>`;
+        }
+        break;
+      }
+      default:
+        contentEl.innerHTML = `<p class="block-paragraph">${escHtml(block.content)}</p>`;
+    }
+
+    // Make text content inline-editable
+    if (block.block_type !== 'divider') {
+      const textEl = contentEl.querySelector('p, h2, h3, h4, blockquote > *, .block-bullet, .block-numbered, .block-callout > span:last-child, .block-checklist > span');
+      if (textEl) {
+        textEl.contentEditable = 'true';
+        textEl.addEventListener('blur', async () => {
+          const newContent = textEl.textContent || '';
+          if (newContent !== block.content) {
+            try {
+              await api.patch(`/api/blocks/${block.id}`, { content: newContent });
+              block.content = newContent;
+            } catch (e) {
+              toast.error('Error', 'Failed to save block: ' + (e.message || ''));
+            }
+          }
+        });
+      }
+    }
+
+    // Checkbox toggle for checklist items
+    if (block.block_type === 'checklist_item') {
+      const cb = contentEl.querySelector('.block-checkbox');
+      if (cb) {
+        cb.addEventListener('change', async () => {
+          try {
+            const props = block.properties || {};
+            props.checked = cb.checked;
+            await api.patch(`/api/blocks/${block.id}`, { properties: props });
+          } catch (e) {
+            toast.error('Error', 'Failed to update checkbox');
+          }
+        });
+      }
+    }
+
+    el.appendChild(contentEl);
+
+    // Block action bar (type selector, delete, add child)
+    const actions = document.createElement('div');
+    actions.className = 'block-actions';
+    actions.innerHTML = `
+      <button class="block-action-btn block-action-drag" title="Drag">⠿</button>
+      <button class="block-action-btn block-action-add" title="Add block below">+</button>
+      <button class="block-action-btn block-action-delete" title="Delete">×</button>
+    `;
+    const addChildBtn = actions.querySelector('.block-action-add');
+    if (addChildBtn) {
+      addChildBtn.addEventListener('click', () => {
+        this._showBlockTypeMenu(addChildBtn, entityType, entityId, block.id);
+      });
+    }
+    const deleteBtn = actions.querySelector('.block-action-delete');
+    if (deleteBtn) {
+      deleteBtn.addEventListener('click', async () => {
+        try {
+          await api.del(`/api/blocks/${block.id}`);
+          el.remove();
+        } catch (e) {
+          toast.error('Error', 'Failed to delete block');
+        }
+      });
+    }
+    el.insertBefore(actions, contentEl);
+
+    // Render children recursively
+    if (block.children && block.children.length > 0) {
+      const childrenEl = document.createElement('div');
+      childrenEl.className = 'block-children';
+      block.children.forEach(child => {
+        childrenEl.appendChild(this._renderBlock(child, entityType, entityId, depth + 1));
+      });
+      el.appendChild(childrenEl);
+    }
+
+    return el;
+  },
+
+  _showBlockTypeMenu(anchorEl, entityType, entityId, parentBlockId) {
+    // Remove any existing menus
+    document.querySelectorAll('.block-type-menu').forEach(m => m.remove());
+
+    const menu = document.createElement('div');
+    menu.className = 'block-type-menu';
+    this._BLOCK_TYPES.forEach(bt => {
+      const item = document.createElement('button');
+      item.className = 'block-type-menu-item';
+      item.innerHTML = `<span class="block-type-icon">${bt.icon}</span> ${escHtml(bt.label)}`;
+      item.addEventListener('click', async () => {
+        menu.remove();
+        try {
+          const created = await api.post(`/api/${entityType}/${entityId}/blocks`, {
+            block_type: bt.key,
+            content: bt.key === 'divider' ? '' : '',
+            parent_block_id: parentBlockId,
+            order_index: 0,
+          });
+          // Re-render the editor to reflect the new block
+          const editorEl = anchorEl.closest('.block-editor');
+          if (editorEl) {
+            const containerId = editorEl.parentElement ? editorEl.parentElement.id : null;
+            if (containerId) {
+              await this.render(containerId, entityType, entityId);
+            }
+          }
+        } catch (e) {
+          toast.error('Error', 'Failed to create block: ' + (e.message || ''));
+        }
+      });
+      menu.appendChild(item);
+    });
+
+    // Position menu
+    anchorEl.parentElement.appendChild(menu);
+
+    // Close on outside click
+    const closeMenu = (e) => {
+      if (!menu.contains(e.target) && e.target !== anchorEl) {
+        menu.remove();
+        document.removeEventListener('click', closeMenu);
+      }
+    };
+    setTimeout(() => document.addEventListener('click', closeMenu), 0);
+  },
+};
+
+
 // ─── Service Worker Registration + Offline Queue ─────────────────────────────
 
 (function initServiceWorker() {

@@ -643,7 +643,9 @@ def _error_response(
 # ─── Auth helper ──────────────────────────────────────────────────────────────
 
 def _get_user_id(request: Request) -> Optional[int]:
-    """Extract user_id from the request's Authorization header (Bearer token).
+    """Extract user_id from the request's Authorization header (Bearer token)
+    or from a ``token`` query parameter (needed for EventSource/SSE which
+    cannot set custom headers).
 
     Returns None if no valid token is present (allows unauthenticated access
     to legacy endpoints).
@@ -652,6 +654,10 @@ def _get_user_id(request: Request) -> Optional[int]:
     if header.startswith("Bearer "):
         token = header[7:]
         return auth.decode_token(token)
+    # Fallback: token query parameter (used by EventSource for SSE)
+    token_param = request.query_params.get("token")
+    if token_param:
+        return auth.decode_token(token_param)
     return None
 
 
@@ -7527,6 +7533,118 @@ async def update_challenge_progress(challenge_id: int, request: Request):
     if not updated:
         raise HTTPException(status_code=404, detail="Challenge not found")
     return updated.to_dict()
+
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Content Blocks — Recursive block-based content model
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+@app.get("/api/{entity_type}/{entity_id}/blocks", tags=["content-blocks"])
+async def list_blocks(entity_type: str, entity_id: int, request: Request, tree: bool = Query(default=False)):
+    """List content blocks for an entity.
+
+    Use ?tree=true to get a nested tree structure instead of a flat list.
+    entity_type must be 'tasks' or 'goals'.
+    """
+    _check_api_rate_limit(request)
+    uid = _require_user(request)
+    # Map plural route params to singular entity_type
+    et = {"tasks": "task", "goals": "goal"}.get(entity_type)
+    if not et:
+        raise HTTPException(status_code=400, detail="entity_type must be 'tasks' or 'goals'")
+    if tree:
+        return storage.get_content_block_tree(et, entity_id)
+    blocks = storage.list_content_blocks(et, entity_id)
+    return [b.to_dict() for b in blocks]
+
+
+@app.post("/api/{entity_type}/{entity_id}/blocks", status_code=201, tags=["content-blocks"])
+async def create_block(entity_type: str, entity_id: int, request: Request):
+    """Create a new content block for an entity."""
+    import json as _json
+    _check_api_rate_limit(request)
+    uid = _require_user(request)
+    et = {"tasks": "task", "goals": "goal"}.get(entity_type)
+    if not et:
+        raise HTTPException(status_code=400, detail="entity_type must be 'tasks' or 'goals'")
+    body = await request.json()
+    from teb.models import ContentBlock  # noqa: E402
+    block = ContentBlock(
+        entity_type=et,
+        entity_id=entity_id,
+        block_type=body.get("block_type", "paragraph"),
+        content=body.get("content", ""),
+        properties_json=_json.dumps(body.get("properties", {})),
+        parent_block_id=body.get("parent_block_id"),
+        order_index=body.get("order_index", 0),
+    )
+    created = storage.create_content_block(block)
+    return created.to_dict()
+
+
+@app.get("/api/blocks/{block_id}", tags=["content-blocks"])
+async def get_block(block_id: int, request: Request):
+    """Get a single content block by id."""
+    _check_api_rate_limit(request)
+    uid = _require_user(request)
+    block = storage.get_content_block(block_id)
+    if not block:
+        raise HTTPException(status_code=404, detail="Block not found")
+    return block.to_dict()
+
+
+@app.patch("/api/blocks/{block_id}", tags=["content-blocks"])
+async def update_block(block_id: int, request: Request):
+    """Update a content block's fields."""
+    import json as _json
+    _check_api_rate_limit(request)
+    uid = _require_user(request)
+    body = await request.json()
+    kwargs = {}
+    if "block_type" in body:
+        kwargs["block_type"] = body["block_type"]
+    if "content" in body:
+        kwargs["content"] = body["content"]
+    if "properties" in body:
+        kwargs["properties_json"] = _json.dumps(body["properties"])
+    if "parent_block_id" in body:
+        kwargs["parent_block_id"] = body["parent_block_id"]
+    if "order_index" in body:
+        kwargs["order_index"] = body["order_index"]
+    updated = storage.update_content_block(block_id, **kwargs)
+    if not updated:
+        raise HTTPException(status_code=404, detail="Block not found")
+    return updated.to_dict()
+
+
+@app.delete("/api/blocks/{block_id}", status_code=204, tags=["content-blocks"])
+async def delete_block(block_id: int, request: Request):
+    """Delete a content block and its children."""
+    _check_api_rate_limit(request)
+    uid = _require_user(request)
+    block = storage.get_content_block(block_id)
+    if not block:
+        raise HTTPException(status_code=404, detail="Block not found")
+    storage.delete_content_block(block_id)
+
+
+@app.post("/api/{entity_type}/{entity_id}/blocks/reorder", tags=["content-blocks"])
+async def reorder_blocks(entity_type: str, entity_id: int, request: Request):
+    """Reorder content blocks by providing an ordered list of block IDs."""
+    _check_api_rate_limit(request)
+    uid = _require_user(request)
+    et = {"tasks": "task", "goals": "goal"}.get(entity_type)
+    if not et:
+        raise HTTPException(status_code=400, detail="entity_type must be 'tasks' or 'goals'")
+    body = await request.json()
+    block_ids = body.get("block_ids", [])
+    if not isinstance(block_ids, list):
+        raise HTTPException(status_code=400, detail="block_ids must be a list of integers")
+    storage.reorder_content_blocks(et, entity_id, block_ids)
+    return {"status": "ok"}
+
 
 
 if config.BASE_PATH:

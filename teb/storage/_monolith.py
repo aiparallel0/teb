@@ -38,6 +38,7 @@ from teb.models import (
     BrowserAction,
     CheckIn,
     CommentReaction,
+    ContentBlock,
     CustomField,
     CustomFieldDefinition,
     DashboardLayout,
@@ -6061,4 +6062,138 @@ def _row_to_team_challenge(row: sqlite3.Row) -> TeamChallenge:
         start_date=row["start_date"],
         end_date=row["end_date"],
         created_at=datetime.fromisoformat(row["created_at"]) if row["created_at"] else None,
+    )
+
+
+# ─── Content Blocks (recursive block-based content model) ────────────────────
+
+
+@_with_retry
+def create_content_block(block: ContentBlock) -> ContentBlock:
+    """Insert a new content block and return it with its assigned id."""
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        cur = con.execute(
+            """INSERT INTO content_blocks
+               (entity_type, entity_id, block_type, content, properties_json,
+                parent_block_id, order_index, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (block.entity_type, block.entity_id, block.block_type, block.content,
+             block.properties_json, block.parent_block_id, block.order_index, now, now),
+        )
+        block.id = cur.lastrowid
+        block.created_at = datetime.fromisoformat(now)
+        block.updated_at = datetime.fromisoformat(now)
+    return block
+
+
+def list_content_blocks(entity_type: str, entity_id: int, parent_block_id: Optional[int] = None) -> List[ContentBlock]:
+    """List content blocks for an entity, optionally filtered by parent.
+
+    When parent_block_id is None and no parent filter is intended, returns ALL
+    blocks for the entity.  Pass parent_block_id=0 to get only root-level blocks
+    (those with parent_block_id IS NULL).
+    """
+    with _conn() as con:
+        if parent_block_id == 0:
+            # Root-level blocks only
+            rows = con.execute(
+                """SELECT * FROM content_blocks
+                   WHERE entity_type = ? AND entity_id = ? AND parent_block_id IS NULL
+                   ORDER BY order_index""",
+                (entity_type, entity_id),
+            ).fetchall()
+        elif parent_block_id is not None:
+            rows = con.execute(
+                """SELECT * FROM content_blocks
+                   WHERE entity_type = ? AND entity_id = ? AND parent_block_id = ?
+                   ORDER BY order_index""",
+                (entity_type, entity_id, parent_block_id),
+            ).fetchall()
+        else:
+            rows = con.execute(
+                """SELECT * FROM content_blocks
+                   WHERE entity_type = ? AND entity_id = ?
+                   ORDER BY order_index""",
+                (entity_type, entity_id),
+            ).fetchall()
+    return [_row_to_content_block(r) for r in rows]
+
+
+def get_content_block(block_id: int) -> Optional[ContentBlock]:
+    """Get a single content block by id."""
+    with _conn() as con:
+        row = con.execute("SELECT * FROM content_blocks WHERE id = ?", (block_id,)).fetchone()
+    return _row_to_content_block(row) if row else None
+
+
+@_with_retry
+def update_content_block(block_id: int, **kwargs) -> Optional[ContentBlock]:
+    """Update a content block's fields.  Allowed fields: block_type, content,
+    properties_json, parent_block_id, order_index."""
+    allowed = {"block_type", "content", "properties_json", "parent_block_id", "order_index"}
+    updates = {k: v for k, v in kwargs.items() if k in allowed}
+    if not updates:
+        return get_content_block(block_id)
+    updates["updated_at"] = datetime.now(timezone.utc).isoformat()
+    set_clause = ", ".join(f"{k} = ?" for k in updates)
+    values = list(updates.values()) + [block_id]
+    with _conn() as con:
+        con.execute(f"UPDATE content_blocks SET {set_clause} WHERE id = ?", values)
+    return get_content_block(block_id)
+
+
+@_with_retry
+def delete_content_block(block_id: int) -> None:
+    """Delete a content block and its children (via CASCADE)."""
+    with _conn() as con:
+        con.execute("DELETE FROM content_blocks WHERE id = ?", (block_id,))
+
+
+@_with_retry
+def reorder_content_blocks(entity_type: str, entity_id: int, block_ids: List[int]) -> None:
+    """Reorder blocks by setting order_index according to the provided id list."""
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        for idx, bid in enumerate(block_ids):
+            con.execute(
+                "UPDATE content_blocks SET order_index = ?, updated_at = ? WHERE id = ? AND entity_type = ? AND entity_id = ?",
+                (idx, now, bid, entity_type, entity_id),
+            )
+
+
+def get_content_block_tree(entity_type: str, entity_id: int) -> List[dict]:
+    """Return the full block tree for an entity as nested dicts.
+
+    Each dict has a 'children' key containing its child blocks (recursively).
+    """
+    all_blocks = list_content_blocks(entity_type, entity_id)
+    by_parent: dict[Optional[int], list[ContentBlock]] = {}
+    for b in all_blocks:
+        by_parent.setdefault(b.parent_block_id, []).append(b)
+
+    def _build_tree(parent_id: Optional[int]) -> List[dict]:
+        children = by_parent.get(parent_id, [])
+        result = []
+        for block in sorted(children, key=lambda b: b.order_index):
+            d = block.to_dict()
+            d["children"] = _build_tree(block.id)
+            result.append(d)
+        return result
+
+    return _build_tree(None)
+
+
+def _row_to_content_block(row: sqlite3.Row) -> ContentBlock:
+    return ContentBlock(
+        id=row["id"],
+        entity_type=row["entity_type"],
+        entity_id=row["entity_id"],
+        block_type=row["block_type"],
+        content=row["content"],
+        properties_json=row["properties_json"],
+        parent_block_id=row["parent_block_id"],
+        order_index=row["order_index"],
+        created_at=datetime.fromisoformat(row["created_at"]) if row["created_at"] else None,
+        updated_at=datetime.fromisoformat(row["updated_at"]) if row["updated_at"] else None,
     )
