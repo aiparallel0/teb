@@ -5267,22 +5267,37 @@ def list_org_members(org_id: int) -> list[dict]:
 def get_usage_analytics(org_id: Optional[int] = None, since: Optional[str] = None) -> dict:
     """Aggregate usage analytics across the platform."""
     with _conn() as con:
-        since_clause = f"AND created_at >= '{since}'" if since else ""
+        # Use parameterized queries for the since filter to prevent SQL injection
+        params_base: list = []
+        since_clause = ""
+        if since:
+            since_clause = "AND created_at >= ?"
+            params_base = [since]
 
         active_users = con.execute(
-            f"SELECT COUNT(DISTINCT user_id) as cnt FROM goals WHERE user_id IS NOT NULL {since_clause}"
+            f"SELECT COUNT(DISTINCT user_id) as cnt FROM goals WHERE user_id IS NOT NULL {since_clause}",
+            params_base,
         ).fetchone()["cnt"]
 
         goals_created = con.execute(
-            f"SELECT COUNT(*) as cnt FROM goals WHERE 1=1 {since_clause}"
+            f"SELECT COUNT(*) as cnt FROM goals WHERE 1=1 {since_clause}",
+            params_base,
         ).fetchone()["cnt"]
 
+        tasks_params: list = []
+        tasks_since = ""
+        if since:
+            tasks_since = "AND updated_at >= ?"
+            tasks_params = [since]
+
         tasks_completed = con.execute(
-            f"SELECT COUNT(*) as cnt FROM tasks WHERE status = 'done' {('AND updated_at >= ' + repr(since)) if since else ''}"
+            f"SELECT COUNT(*) as cnt FROM tasks WHERE status = 'done' {tasks_since}",
+            tasks_params,
         ).fetchone()["cnt"]
 
         api_calls = con.execute(
-            f"SELECT COUNT(*) as cnt FROM api_usage_log WHERE 1=1 {since_clause}"
+            f"SELECT COUNT(*) as cnt FROM api_usage_log WHERE 1=1 {since_clause}",
+            params_base,
         ).fetchone()["cnt"]
 
     return {

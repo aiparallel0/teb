@@ -42,15 +42,8 @@ def set_db_path(path: str) -> None:
         cb()
 
 
-_BUSY_TIMEOUT_MS = 5000  # Wait up to 5 seconds on lock contention
-_MAX_RETRIES = 3         # Retry on SQLITE_BUSY up to 3 times
-
-# Units that indicate monetary (revenue/earnings) outcome metrics
-_REVENUE_UNITS = {'$', 'usd', 'dollar', 'dollars', 'revenue', 'income', 'earnings'}
-
 
 @contextmanager
-
 def _conn() -> Generator[sqlite3.Connection, None, None]:
     con = sqlite3.connect(_db_path(), timeout=_BUSY_TIMEOUT_MS / 1000)
     con.row_factory = sqlite3.Row
