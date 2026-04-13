@@ -5,6 +5,7 @@ A lightweight plugin API for execution capabilities — plugins can register:
 - What task types they handle
 - What credentials they need
 - An execute() function
+- Lifecycle hooks: before_execute, after_execute, on_error
 
 Plugins are discovered from the `plugins/` directory or registered via API.
 """
@@ -52,10 +53,31 @@ class PluginResult:
         }
 
 
+@dataclass
+class PluginLifecycle:
+    """Lifecycle hooks for a plugin.
+
+    All hooks are optional.  A plugin module may define any of:
+    - ``before_execute(task_context, credentials) -> Optional[dict]``
+      Called before ``execute()``.  May mutate *task_context*.
+      Return ``None`` to continue or a *PluginResult*-like dict to short-circuit.
+    - ``after_execute(task_context, credentials, result) -> Optional[PluginResult]``
+      Called after ``execute()`` succeeds.  May enrich/transform the result.
+    - ``on_error(task_context, credentials, error) -> Optional[PluginResult]``
+      Called when ``execute()`` raises.  May return a fallback result.
+    """
+    before_execute: Optional[Callable] = None
+    after_execute: Optional[Callable] = None
+    on_error: Optional[Callable] = None
+
+
 # ─── Plugin Registry ─────────────────────────────────────────────────────────
 
 # In-memory registry of loaded plugin executors
 _PLUGIN_EXECUTORS: Dict[str, Callable] = {}
+
+# In-memory registry of plugin lifecycle hooks
+_PLUGIN_LIFECYCLE: Dict[str, PluginLifecycle] = {}
 
 
 def register_executor(plugin_name: str, executor_fn: Callable) -> None:
@@ -127,7 +149,7 @@ def discover_plugins(plugins_dir: Optional[str] = None) -> List[PluginManifest]:
 
 
 def load_plugin(plugin: PluginManifest) -> bool:
-    """Load a plugin's executor from its module_path.
+    """Load a plugin's executor and lifecycle hooks from its module_path.
 
     For safety, the module_path must be an existing file. It is validated
     to prevent loading modules from arbitrary locations.
@@ -148,6 +170,13 @@ def load_plugin(plugin: PluginManifest) -> bool:
         spec.loader.exec_module(module)
         if hasattr(module, "execute"):
             register_executor(plugin.name, module.execute)
+            # Load lifecycle hooks if present
+            lifecycle = PluginLifecycle(
+                before_execute=getattr(module, "before_execute", None),
+                after_execute=getattr(module, "after_execute", None),
+                on_error=getattr(module, "on_error", None),
+            )
+            _PLUGIN_LIFECYCLE[plugin.name] = lifecycle
             return True
         logger.warning("Plugin %s has no execute() function", plugin.name)
         return False
@@ -173,7 +202,14 @@ def sync_plugins_from_directory(plugins_dir: Optional[str] = None) -> List[Plugi
 
 def execute_plugin(plugin_name: str, task_context: Dict[str, Any],
                    credentials: Dict[str, str]) -> PluginResult:
-    """Execute a plugin for a given task context."""
+    """Execute a plugin for a given task context, with lifecycle hooks.
+
+    Lifecycle order:
+    1. ``before_execute(task_context, credentials)`` — may short-circuit
+    2. ``execute(task_context, credentials)`` — main execution
+    3. ``after_execute(task_context, credentials, result)`` — may transform result
+    On error: ``on_error(task_context, credentials, error)`` — may provide fallback
+    """
     executor_fn = get_executor(plugin_name)
     if not executor_fn:
         return PluginResult(success=False, error=f"Plugin '{plugin_name}' not loaded")
@@ -182,19 +218,68 @@ def execute_plugin(plugin_name: str, task_context: Dict[str, Any],
     if plugin and not plugin.enabled:
         return PluginResult(success=False, error=f"Plugin '{plugin_name}' is disabled")
 
+    lifecycle = _PLUGIN_LIFECYCLE.get(plugin_name, PluginLifecycle())
+
     try:
+        # ── before_execute hook ──
+        if lifecycle.before_execute:
+            try:
+                pre_result = lifecycle.before_execute(task_context, credentials)
+                if pre_result is not None:
+                    # Short-circuit: hook returned a result
+                    if isinstance(pre_result, PluginResult):
+                        return pre_result
+                    if isinstance(pre_result, dict):
+                        return PluginResult(
+                            success=pre_result.get("success", True),
+                            output=pre_result.get("output", ""),
+                            error=pre_result.get("error", ""),
+                            metadata=pre_result.get("metadata", {}),
+                        )
+            except Exception as hook_err:
+                logger.warning("Plugin %s before_execute hook failed: %s", plugin_name, hook_err)
+
+        # ── main execution ──
         result = executor_fn(task_context, credentials)
         if isinstance(result, PluginResult):
-            return result
-        if isinstance(result, dict):
-            return PluginResult(
+            plugin_result = result
+        elif isinstance(result, dict):
+            plugin_result = PluginResult(
                 success=result.get("success", True),
                 output=result.get("output", ""),
                 error=result.get("error", ""),
                 metadata=result.get("metadata", {}),
             )
-        return PluginResult(success=True, output=str(result))
+        else:
+            plugin_result = PluginResult(success=True, output=str(result))
+
+        # ── after_execute hook ──
+        if lifecycle.after_execute:
+            try:
+                post_result = lifecycle.after_execute(task_context, credentials, plugin_result)
+                if isinstance(post_result, PluginResult):
+                    plugin_result = post_result
+            except Exception as hook_err:
+                logger.warning("Plugin %s after_execute hook failed: %s", plugin_name, hook_err)
+
+        return plugin_result
+
     except Exception as e:
+        # ── on_error hook ──
+        if lifecycle.on_error:
+            try:
+                error_result = lifecycle.on_error(task_context, credentials, e)
+                if isinstance(error_result, PluginResult):
+                    return error_result
+                if isinstance(error_result, dict):
+                    return PluginResult(
+                        success=error_result.get("success", False),
+                        output=error_result.get("output", ""),
+                        error=error_result.get("error", str(e)),
+                        metadata=error_result.get("metadata", {}),
+                    )
+            except Exception as hook_err:
+                logger.warning("Plugin %s on_error hook failed: %s", plugin_name, hook_err)
         return PluginResult(success=False, error=str(e))
 
 

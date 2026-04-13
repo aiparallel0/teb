@@ -946,6 +946,7 @@ def _run_migrations(con: sqlite3.Connection) -> None:
             field_name      TEXT    NOT NULL,
             field_value     TEXT    NOT NULL DEFAULT '',
             field_type      TEXT    NOT NULL DEFAULT 'text',
+            config_json     TEXT    NOT NULL DEFAULT '{}',
             created_at      TEXT    NOT NULL
         )
     """)
@@ -1274,6 +1275,9 @@ def _run_migrations(con: sqlite3.Connection) -> None:
     _safe_add_column(con, "goals", "version", "INTEGER NOT NULL DEFAULT 1")
     _safe_add_column(con, "tasks", "version", "INTEGER NOT NULL DEFAULT 1")
     _safe_add_column(con, "tasks", "assigned_to", "INTEGER DEFAULT NULL")
+
+    # ─── Custom Fields: add config_json for relation/rollup/formula types ──
+    _safe_add_column(con, "custom_fields", "config_json", "TEXT NOT NULL DEFAULT '{}'")
 
     # ─── Content Blocks table (recursive block model) ───────────────────
     con.execute("""

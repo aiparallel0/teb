@@ -3357,9 +3357,9 @@ def create_custom_field(cf: CustomField) -> CustomField:
     now = datetime.now(timezone.utc).isoformat()
     with _conn() as con:
         cur = con.execute(
-            """INSERT INTO custom_fields (task_id, field_name, field_value, field_type, created_at)
-               VALUES (?, ?, ?, ?, ?)""",
-            (cf.task_id, cf.field_name, cf.field_value, cf.field_type, now),
+            """INSERT INTO custom_fields (task_id, field_name, field_value, field_type, config_json, created_at)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (cf.task_id, cf.field_name, cf.field_value, cf.field_type, cf.config_json, now),
         )
         cf.id = cur.lastrowid
         cf.created_at = datetime.fromisoformat(now)
@@ -3382,10 +3382,131 @@ def delete_custom_field(field_id: int) -> None:
         con.execute("DELETE FROM custom_fields WHERE id = ?", (field_id,))
 
 
+def get_custom_field(field_id: int) -> Optional[CustomField]:
+    """Get a single custom field by ID."""
+    with _conn() as con:
+        row = con.execute("SELECT * FROM custom_fields WHERE id = ?", (field_id,)).fetchone()
+    return _row_to_custom_field(row) if row else None
+
+
+def resolve_custom_field_value(cf: CustomField) -> str:
+    """Resolve the computed value for relation/rollup/formula custom fields.
+
+    For basic types (text, number, date, url) returns field_value as-is.
+    For relation: returns the title of the linked task.
+    For rollup: aggregates a numeric field across related tasks.
+    For formula: computes a built-in formula.
+    """
+    import json as _json
+
+    if cf.field_type in ("text", "number", "date", "url"):
+        return cf.field_value
+
+    config = _json.loads(cf.config_json) if cf.config_json else {}
+
+    if cf.field_type == "relation":
+        # field_value holds the related task ID
+        try:
+            related_task = get_task(int(cf.field_value))
+            return related_task.title if related_task else f"[Task #{cf.field_value} not found]"
+        except (ValueError, TypeError):
+            return "[Invalid relation]"
+
+    if cf.field_type == "rollup":
+        # Aggregate numeric fields from tasks related via a relation field
+        relation_field = config.get("relation_field", "")
+        target_field = config.get("target_field", "field_value")
+        aggregation = config.get("aggregation", "count")
+
+        # Find all relation custom fields on this task's siblings
+        related_ids: list[int] = []
+        fields = list_custom_fields(cf.task_id)
+        for f in fields:
+            if f.field_name == relation_field and f.field_type == "relation":
+                try:
+                    related_ids.append(int(f.field_value))
+                except (ValueError, TypeError):
+                    pass
+
+        # Collect target values from related tasks
+        values: list[float] = []
+        for rid in related_ids:
+            r_fields = list_custom_fields(rid)
+            for rf in r_fields:
+                if rf.field_name == target_field:
+                    try:
+                        values.append(float(rf.field_value))
+                    except (ValueError, TypeError):
+                        pass
+
+        if aggregation == "count":
+            return str(len(related_ids))
+        elif aggregation == "sum":
+            return str(sum(values))
+        elif aggregation == "avg":
+            return str(sum(values) / len(values)) if values else "0"
+        elif aggregation == "min":
+            return str(min(values)) if values else "0"
+        elif aggregation == "max":
+            return str(max(values)) if values else "0"
+        return str(len(related_ids))
+
+    if cf.field_type == "formula":
+        formula_type = config.get("formula_type", "")
+
+        if formula_type == "days_until_due":
+            task = get_task(cf.task_id)
+            if task and task.due_date:
+                try:
+                    due = datetime.fromisoformat(task.due_date)
+                    now = datetime.now(timezone.utc)
+                    delta = (due - now).days
+                    return str(delta)
+                except (ValueError, TypeError):
+                    return "[Invalid date]"
+            return "[No due date]"
+
+        if formula_type == "field_diff":
+            # Difference between two numeric custom fields
+            field_a = config.get("field_a", "")
+            field_b = config.get("field_b", "")
+            fields = list_custom_fields(cf.task_id)
+            val_a = val_b = 0.0
+            for f in fields:
+                if f.field_name == field_a:
+                    try:
+                        val_a = float(f.field_value)
+                    except (ValueError, TypeError):
+                        pass
+                if f.field_name == field_b:
+                    try:
+                        val_b = float(f.field_value)
+                    except (ValueError, TypeError):
+                        pass
+            return str(val_a - val_b)
+
+        if formula_type == "concat":
+            # Concatenate field values
+            field_names = config.get("fields", [])
+            fields = list_custom_fields(cf.task_id)
+            parts = []
+            field_map = {f.field_name: f.field_value for f in fields}
+            separator = config.get("separator", " ")
+            for name in field_names:
+                parts.append(field_map.get(name, ""))
+            return separator.join(parts)
+
+        return "[Unknown formula]"
+
+    return cf.field_value
+
+
 def _row_to_custom_field(row: sqlite3.Row) -> CustomField:
+    config_json = row["config_json"] if "config_json" in row.keys() else "{}"
     return CustomField(
         id=row["id"], task_id=row["task_id"], field_name=row["field_name"],
         field_value=row["field_value"], field_type=row["field_type"],
+        config_json=config_json,
         created_at=datetime.fromisoformat(row["created_at"]),
     )
 

@@ -1017,23 +1017,37 @@ class GoalCollaborator:
 
 @dataclass
 class CustomField:
-    """User-defined key-value metadata on a task."""
+    """User-defined metadata on a task.
+
+    Supports basic types (text, number, date, url) and relational types:
+    - **relation**: links to another task by ID.  ``field_value`` is the target task ID.
+    - **rollup**: aggregates a numeric field across related tasks.
+      ``field_value`` stores the relation field name; ``config_json``
+      stores ``{"aggregation": "sum|count|avg|min|max", "target_field": "..."}``
+    - **formula**: computed from other fields on the same task.
+      ``field_value`` stores the expression string (e.g. ``"days_until_due"``).
+      ``config_json`` stores ``{"formula_type": "days_until_due|field_diff|concat", ...}``
+    """
     task_id: int
     field_name: str
     field_value: str = ""
-    field_type: str = "text"           # text | number | date | url
+    field_type: str = "text"           # text | number | date | url | relation | rollup | formula
+    config_json: str = "{}"            # JSON config for relation/rollup/formula types
     id: Optional[int] = None
     created_at: Optional[datetime] = None
 
     def to_dict(self) -> dict:
-        return {
+        import json as _json
+        base = {
             "id": self.id,
             "task_id": self.task_id,
             "field_name": self.field_name,
             "field_value": self.field_value,
             "field_type": self.field_type,
+            "config": _json.loads(self.config_json) if self.config_json else {},
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }
+        return base
 
 
 # ─── Goal Progress Snapshots (WP-14) ────────────────────────────────────────

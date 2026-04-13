@@ -3311,8 +3311,10 @@ const UnifiedSearch = {
 };
 
 // ─── Task Filter Bar (Feature Area 7) ───────────────────────────────────────
+// Legacy DOM-based filter bar for task-card visibility toggling.
+// The data-driven TaskFilter engine (below) handles SavedView / cross-goal filtering.
 
-const TaskFilter = {
+const TaskFilterBar = {
   _filters: { status: [], priority: [], goalId: null },
 
   init() {
@@ -3338,12 +3340,12 @@ const TaskFilter = {
     const statusSel = document.getElementById('filter-status');
     const prioritySel = document.getElementById('filter-priority');
     const clearBtn = document.getElementById('btn-clear-filters');
-    if (statusSel) statusSel.addEventListener('change', () => this.apply());
-    if (prioritySel) prioritySel.addEventListener('change', () => this.apply());
+    if (statusSel) statusSel.addEventListener('change', () => this.applyDOM());
+    if (prioritySel) prioritySel.addEventListener('change', () => this.applyDOM());
     if (clearBtn) clearBtn.addEventListener('click', () => this.clear());
   },
 
-  apply() {
+  applyDOM() {
     const statusSel = document.getElementById('filter-status');
     const prioritySel = document.getElementById('filter-priority');
     const statuses = statusSel ? Array.from(statusSel.selectedOptions).map(o => o.value).filter(Boolean) : [];
@@ -3453,7 +3455,7 @@ function init() {
   TaskDetailPanel.init();
   BatchOps.init();
   UnifiedSearch.init();
-  TaskFilter.init();
+  TaskFilterBar.init();
   setupCharCounter('goal-desc', 'goal-desc-counter');
 
   // Wire mood selector
