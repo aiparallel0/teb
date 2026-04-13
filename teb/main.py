@@ -5,18 +5,20 @@ import json
 import logging
 import logging.config
 import os
+import re
 import sys
 import time
+import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import FastAPI, Form, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 
 from teb import agents, auth, browser, config, decomposer, deployer, executor, intelligence, integrations, messaging, provisioning, scheduler, storage, transcribe
 from teb.models import (
@@ -32,6 +34,27 @@ from teb.models import (
 )
 
 # ─── Logging ──────────────────────────────────────────────────────────────────
+
+class _JsonFormatter(logging.Formatter):
+    """Structured JSON log formatter for production-grade observability."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        log_entry: Dict[str, Any] = {
+            "timestamp": datetime.fromtimestamp(record.created, tz=timezone.utc).isoformat(),
+            "level": record.levelname,
+            "logger": record.name,
+            "message": record.getMessage(),
+        }
+        if record.exc_info and record.exc_info[0] is not None:
+            log_entry["exception"] = self.formatException(record.exc_info)
+        # Include request_id if available via extra
+        if hasattr(record, "request_id"):
+            log_entry["request_id"] = record.request_id
+        return json.dumps(log_entry, default=str)
+
+
+_LOG_FORMAT = os.getenv("TEB_LOG_FORMAT", "text")  # "json" or "text"
+
 logging.config.dictConfig({
     "version": 1,
     "disable_existing_loggers": False,
@@ -51,6 +74,13 @@ logging.config.dictConfig({
         "handlers": ["console"],
     },
 })
+
+# Apply JSON formatter when configured
+if _LOG_FORMAT == "json":
+    _json_fmt = _JsonFormatter()
+    for handler in logging.root.handlers:
+        handler.setFormatter(_json_fmt)
+
 logger = logging.getLogger(__name__)
 
 
@@ -224,10 +254,41 @@ async def _autonomous_execution_loop() -> None:
 async def lifespan(app: FastAPI):
     global _auto_exec_task, _APP_START_TIME
     _APP_START_TIME = time.monotonic()
+
+    # ── Configuration validation at startup ───────────────────────────────
+    _validate_startup_config()
+
     storage.init_db()
     integrations.seed_integrations()
     storage.reset_all_daily_spending()
     _rate_buckets.clear()
+
+    # Log configuration summary (mask secrets)
+    _log_startup_config()
+
+    # Start autonomous execution loop
+    _auto_exec_task = asyncio.create_task(_autonomous_execution_loop())
+    logger.info("teb started — version 2.0.0, PID %d", os.getpid())
+    yield
+    # ── Graceful shutdown ─────────────────────────────────────────────────
+    logger.info("Shutting down teb…")
+    if _auto_exec_task:
+        _auto_exec_task.cancel()
+        try:
+            await _auto_exec_task
+        except asyncio.CancelledError:
+            pass
+    # Drain SSE event bus
+    try:
+        from teb import events as _events
+        _events.event_bus.shutdown()
+    except Exception:
+        pass
+    logger.info("Shutdown complete.")
+
+
+def _validate_startup_config() -> None:
+    """Check critical configuration at startup and log warnings."""
     if config.JWT_SECRET == "change-me-in-production-not-safe":
         logger.warning(
             "TEB_JWT_SECRET is set to the default insecure value. "
@@ -238,16 +299,33 @@ async def lifespan(app: FastAPI):
             "TEB_SECRET_KEY is not set — API credentials will be stored UNENCRYPTED. "
             "Generate one with: python -c \"from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())\""
         )
-    # Start autonomous execution loop
-    _auto_exec_task = asyncio.create_task(_autonomous_execution_loop())
-    yield
-    # Shutdown: cancel loop
-    if _auto_exec_task:
-        _auto_exec_task.cancel()
-        try:
-            await _auto_exec_task
-        except asyncio.CancelledError:
-            pass
+    # Warn about wildcard CORS in non-development environments
+    if config.CORS_ORIGINS == ["*"] and os.getenv("TEB_ENV", "development") != "development":
+        logger.warning(
+            "TEB_CORS_ORIGINS='*' in non-development environment. "
+            "Set specific origins for production security."
+        )
+
+
+def _log_startup_config() -> None:
+    """Log a configuration summary at startup, masking sensitive values."""
+    def _mask(val: Optional[str]) -> str:
+        if not val:
+            return "(not set)"
+        if len(val) <= 8:
+            return "****"
+        return val[:4] + "****" + val[-4:]
+
+    logger.info(
+        "Configuration: ai_provider=%s, db=%s, cors_origins=%s, "
+        "autonomous_exec=%s, log_level=%s, base_path=%s",
+        config.get_ai_provider() or "none",
+        config.DATABASE_URL.split("///")[-1] if "///" in config.DATABASE_URL else config.DATABASE_URL,
+        config.CORS_ORIGINS[:3],
+        config.AUTONOMOUS_EXECUTION_ENABLED,
+        config.LOG_LEVEL,
+        config.BASE_PATH or "/",
+    )
 
 
 tags_metadata = [
@@ -280,6 +358,15 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# ─── Professional Middleware Stack ────────────────────────────────────────────
+# Middleware executes in reverse order of registration (last added = outermost).
+# Order: RequestId → SecurityHeaders → RequestLogging → (CORS is already added)
+from teb.middleware import RequestIdMiddleware, RequestLoggingMiddleware, SecurityHeadersMiddleware  # noqa: E402
+
+app.add_middleware(RequestLoggingMiddleware)
+app.add_middleware(SecurityHeadersMiddleware)
+app.add_middleware(RequestIdMiddleware)
+
 # Static files
 _STATIC_DIR = Path(__file__).parent / "static"
 _TEMPLATES_DIR = Path(__file__).parent / "templates"
@@ -288,63 +375,80 @@ app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
 
 
 # ─── Request / Response schemas ───────────────────────────────────────────────
+# All request models include field-level validation: length limits, format
+# checks, and constrained values.  Pydantic v2 enforces these automatically
+# and returns structured 422 errors with field-level detail.
+
+_MAX_TITLE_LEN = 500
+_MAX_DESCRIPTION_LEN = 10000
+_MAX_TAG_LEN = 1000
+
 
 class GoalCreate(BaseModel):
-    title: str
-    description: str = ""
-    tags: Optional[str] = None  # comma-separated tags
+    title: str = Field(..., min_length=1, max_length=_MAX_TITLE_LEN, description="Goal title")
+    description: str = Field("", max_length=_MAX_DESCRIPTION_LEN, description="Goal description")
+    tags: Optional[str] = Field(None, max_length=_MAX_TAG_LEN, description="Comma-separated tags")
 
 
 class TaskPatch(BaseModel):
     status: Optional[str] = None
-    notes: Optional[str] = None   # stored in description for simplicity
-    title: Optional[str] = None
-    order_index: Optional[int] = None
-    due_date: Optional[str] = None
+    notes: Optional[str] = Field(None, max_length=_MAX_DESCRIPTION_LEN)
+    title: Optional[str] = Field(None, max_length=_MAX_TITLE_LEN)
+    order_index: Optional[int] = Field(None, ge=0)
+    due_date: Optional[str] = Field(None, max_length=30)
     depends_on: Optional[list] = None
-    tags: Optional[str] = None
+    tags: Optional[str] = Field(None, max_length=_MAX_TAG_LEN)
+
+    @field_validator("status")
+    @classmethod
+    def validate_status(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None:
+            valid = {"todo", "in_progress", "done", "skipped", "executing", "failed"}
+            if v not in valid:
+                raise ValueError(f"status must be one of: {', '.join(sorted(valid))}")
+        return v
 
 
 class TaskCreate(BaseModel):
     goal_id: int
-    title: str
-    description: str = ""
-    estimated_minutes: int = 30
+    title: str = Field(..., min_length=1, max_length=_MAX_TITLE_LEN, description="Task title")
+    description: str = Field("", max_length=_MAX_DESCRIPTION_LEN)
+    estimated_minutes: int = Field(30, ge=1, le=10080, description="Estimated minutes (1 min to 7 days)")
     parent_id: Optional[int] = None
-    due_date: Optional[str] = None
+    due_date: Optional[str] = Field(None, max_length=30)
     depends_on: Optional[list] = None
-    tags: Optional[str] = None
+    tags: Optional[str] = Field(None, max_length=_MAX_TAG_LEN)
 
 
 class ClarifyAnswer(BaseModel):
-    key: str
-    answer: str
+    key: str = Field(..., min_length=1, max_length=200)
+    answer: str = Field(..., min_length=1, max_length=5000)
 
 
 class CredentialCreate(BaseModel):
-    name: str
-    base_url: str
-    auth_header: str = "Authorization"
-    auth_value: str = ""
-    description: str = ""
+    name: str = Field(..., min_length=1, max_length=200)
+    base_url: str = Field(..., min_length=1, max_length=2000)
+    auth_header: str = Field("Authorization", max_length=200)
+    auth_value: str = Field("", max_length=5000)
+    description: str = Field("", max_length=1000)
 
 
 class CheckInCreate(BaseModel):
-    done_summary: str = ""
-    blockers: str = ""
+    done_summary: str = Field("", max_length=5000)
+    blockers: str = Field("", max_length=5000)
 
 
 class OutcomeCreate(BaseModel):
-    label: str
-    target_value: float = 0.0
-    unit: str = ""
+    label: str = Field(..., min_length=1, max_length=200)
+    target_value: float = Field(0.0, ge=0)
+    unit: str = Field("", max_length=50)
 
 
 class OutcomeUpdate(BaseModel):
     current_value: Optional[float] = None
-    label: Optional[str] = None
-    target_value: Optional[float] = None
-    unit: Optional[str] = None
+    label: Optional[str] = Field(None, max_length=200)
+    target_value: Optional[float] = Field(None, ge=0)
+    unit: Optional[str] = Field(None, max_length=50)
 
 
 class SuggestionAction(BaseModel):
@@ -353,42 +457,57 @@ class SuggestionAction(BaseModel):
 
 class BudgetCreate(BaseModel):
     goal_id: int
-    daily_limit: float = 50.0
-    total_limit: float = 500.0
-    category: str = "general"
+    daily_limit: float = Field(50.0, ge=0, le=1000000)
+    total_limit: float = Field(500.0, ge=0, le=10000000)
+    category: str = Field("general", max_length=100)
     require_approval: bool = True
     autopilot_enabled: bool = False
-    autopilot_threshold: float = 50.0
+    autopilot_threshold: float = Field(50.0, ge=0, le=1000000)
 
 
 class BudgetUpdate(BaseModel):
-    daily_limit: Optional[float] = None
-    total_limit: Optional[float] = None
+    daily_limit: Optional[float] = Field(None, ge=0, le=1000000)
+    total_limit: Optional[float] = Field(None, ge=0, le=10000000)
     require_approval: Optional[bool] = None
     autopilot_enabled: Optional[bool] = None
-    autopilot_threshold: Optional[float] = None
+    autopilot_threshold: Optional[float] = Field(None, ge=0, le=1000000)
 
 
 class SpendingRequestCreate(BaseModel):
     task_id: int
-    amount: float
-    description: str = ""
-    service: str = ""
-    currency: str = "USD"
+    amount: float = Field(..., ge=0, le=1000000)
+    description: str = Field("", max_length=1000)
+    service: str = Field("", max_length=200)
+    currency: str = Field("USD", max_length=10)
 
 
 class SpendingAction(BaseModel):
-    action: str          # approve | deny
-    reason: str = ""
+    action: str = Field(..., description="approve or deny")
+    reason: str = Field("", max_length=1000)
+
+    @field_validator("action")
+    @classmethod
+    def validate_action(cls, v: str) -> str:
+        if v not in ("approve", "deny"):
+            raise ValueError("action must be 'approve' or 'deny'")
+        return v
 
 
 class MessagingConfigCreate(BaseModel):
-    channel: str         # telegram | webhook | slack | discord | whatsapp
-    config: dict = {}    # channel-specific config
+    channel: str = Field(..., max_length=50, description="Channel type")
+    config: dict = {}
     notify_nudges: bool = True
     notify_tasks: bool = True
     notify_spending: bool = True
     notify_checkins: bool = False
+
+    @field_validator("channel")
+    @classmethod
+    def validate_channel(cls, v: str) -> str:
+        valid = {"telegram", "webhook", "slack", "discord", "whatsapp"}
+        if v not in valid:
+            raise ValueError(f"channel must be one of: {', '.join(sorted(valid))}")
+        return v
 
 
 class MessagingConfigUpdate(BaseModel):
@@ -406,13 +525,21 @@ class DripClarifyAnswer(BaseModel):
 
 
 class AuthRegister(BaseModel):
-    email: str
-    password: str
+    email: str = Field(..., min_length=3, max_length=254, description="Email address")
+    password: str = Field(..., min_length=6, max_length=128, description="Password (min 6 characters)")
+
+    @field_validator("email")
+    @classmethod
+    def validate_email(cls, v: str) -> str:
+        # Robust email format check
+        if not re.match(r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$", v.strip()):
+            raise ValueError("Invalid email address format")
+        return v.strip().lower()
 
 
 class AuthLogin(BaseModel):
-    email: str
-    password: str
+    email: str = Field(..., min_length=3, max_length=254)
+    password: str = Field(..., min_length=1, max_length=128)
 
 
 class AuthRefresh(BaseModel):
@@ -432,6 +559,62 @@ class AdminUserUpdate(BaseModel):
     role: Optional[str] = None           # "user" | "admin"
     locked_until: Optional[str] = None   # ISO datetime string, or "null"/"" to unlock
     email_verified: Optional[bool] = None
+
+
+# ─── Pagination helper ────────────────────────────────────────────────────────
+
+_DEFAULT_PAGE_SIZE = 50
+_MAX_PAGE_SIZE = 100
+
+
+def _paginate(
+    items: list,
+    page: int = 1,
+    per_page: int = _DEFAULT_PAGE_SIZE,
+) -> Dict[str, Any]:
+    """Apply pagination to a list and return a standardized paginated response.
+
+    Returns:
+        {"data": [...], "pagination": {"page": N, "per_page": N, "total": N, "pages": N}}
+    """
+    page = max(1, page)
+    per_page = max(1, min(per_page, _MAX_PAGE_SIZE))
+    total = len(items)
+    pages = max(1, (total + per_page - 1) // per_page)
+    start = (page - 1) * per_page
+    end = start + per_page
+    return {
+        "data": items[start:end],
+        "pagination": {
+            "page": page,
+            "per_page": per_page,
+            "total": total,
+            "pages": pages,
+        },
+    }
+
+
+# ─── Structured error response helper ────────────────────────────────────────
+
+def _error_response(
+    status_code: int,
+    code: str,
+    message: str,
+    details: Optional[list] = None,
+    request_id: Optional[str] = None,
+) -> JSONResponse:
+    """Return a standardized error response."""
+    body: Dict[str, Any] = {
+        "error": {
+            "code": code,
+            "message": message,
+        }
+    }
+    if details:
+        body["error"]["details"] = details
+    if request_id:
+        body["error"]["request_id"] = request_id
+    return JSONResponse(status_code=status_code, content=body)
 
 
 # ─── Auth helper ──────────────────────────────────────────────────────────────
@@ -488,15 +671,32 @@ def _get_task_for_user(task_id: int, user_id: int) -> Task:
     return task
 
 
-# ─── Health check ─────────────────────────────────────────────────────────────
+# ─── Health check & Observability ─────────────────────────────────────────────
 
 _APP_START_TIME: float = time.monotonic()  # Updated in lifespan startup
 
+# Simple in-memory metrics counters (no external dependency required)
+_metrics: Dict[str, Any] = {
+    "requests_total": 0,
+    "requests_by_status": {},  # status_code -> count
+    "errors_total": 0,
+}
 
-@app.get("/health")
+
+def _increment_request_metrics(status_code: int) -> None:
+    """Track request metrics (called from middleware or manually)."""
+    _metrics["requests_total"] += 1
+    key = str(status_code)
+    _metrics["requests_by_status"][key] = _metrics["requests_by_status"].get(key, 0) + 1
+    if status_code >= 500:
+        _metrics["errors_total"] += 1
+
+
+@app.get("/health", tags=["health"])
 async def health_check():
-    """Health check — returns DB status, uptime, version, and component health."""
+    """Comprehensive health check — database, AI, payments, uptime, and version."""
     import platform
+    import shutil
 
     components: dict = {}
 
@@ -504,7 +704,6 @@ async def health_check():
     try:
         with storage._conn() as con:
             con.execute("SELECT 1")
-            # Check table count as a deeper validation
             row = con.execute(
                 "SELECT COUNT(*) AS cnt FROM sqlite_master WHERE type='table'"
             ).fetchone()
@@ -530,6 +729,19 @@ async def health_check():
         "providers": providers,
     }
 
+    # Disk space
+    try:
+        disk = shutil.disk_usage("/")
+        disk_free_mb = round(disk.free / (1024 * 1024), 1)
+        disk_pct = round((disk.used / disk.total) * 100, 1)
+        components["disk"] = {
+            "status": "ok" if disk_pct < 90 else "warning",
+            "free_mb": disk_free_mb,
+            "used_percent": disk_pct,
+        }
+    except Exception:
+        components["disk"] = {"status": "unknown"}
+
     # Overall status
     status = "healthy" if db_ok else "degraded"
     code = 200 if db_ok else 503
@@ -539,12 +751,60 @@ async def health_check():
         status_code=code,
         content={
             "status": status,
-            "version": "1.0.0",
+            "version": "2.0.0",
             "uptime_seconds": uptime_seconds,
             "python_version": platform.python_version(),
             "components": components,
         },
     )
+
+
+@app.get("/api/health/ready", tags=["health"])
+async def readiness_probe():
+    """Readiness probe for container orchestration (Kubernetes, ECS, etc.).
+
+    Returns 200 if the database is reachable and the app can serve traffic.
+    Returns 503 if the app is not ready.
+    """
+    try:
+        with storage._conn() as con:
+            con.execute("SELECT 1")
+        return JSONResponse(
+            status_code=200,
+            content={"ready": True},
+        )
+    except Exception:
+        logger.warning("Readiness probe failed", exc_info=True)
+        return JSONResponse(
+            status_code=503,
+            content={"ready": False, "detail": "Database connectivity check failed"},
+        )
+
+
+@app.get("/api/health/live", tags=["health"])
+async def liveness_probe():
+    """Liveness probe — always returns 200 if the process is running."""
+    return {"alive": True}
+
+
+@app.get("/api/metrics", tags=["health"])
+async def get_metrics():
+    """Basic application metrics (request counts, uptime, error rate).
+
+    Returns JSON metrics suitable for monitoring dashboards.
+    For Prometheus-format metrics, use a dedicated exporter.
+    """
+    uptime_seconds = round(time.monotonic() - _APP_START_TIME, 1)
+    total = max(_metrics["requests_total"], 1)
+    error_rate = round(_metrics["errors_total"] / total * 100, 2)
+
+    return {
+        "uptime_seconds": uptime_seconds,
+        "requests_total": _metrics["requests_total"],
+        "requests_by_status": _metrics["requests_by_status"],
+        "errors_total": _metrics["errors_total"],
+        "error_rate_percent": error_rate,
+    }
 
 
 # ─── Auth ─────────────────────────────────────────────────────────────────────
@@ -635,10 +895,24 @@ async def create_goal(body: GoalCreate, request: Request):
     return goal.to_dict()
 
 
-@app.get("/api/goals")
-async def list_goals(request: Request):
+@app.get("/api/goals", tags=["goals"])
+async def list_goals(
+    request: Request,
+    page: Optional[int] = Query(default=None, ge=1, description="Page number (enables pagination)"),
+    per_page: Optional[int] = Query(default=None, ge=1, le=100, description="Items per page"),
+):
+    """List goals for the authenticated user.
+
+    When `page` or `per_page` is provided, returns a paginated response:
+    `{"data": [...], "pagination": {"page": N, "per_page": N, "total": N, "pages": N}}`
+
+    Otherwise returns a plain list for backward compatibility.
+    """
     user_id = _get_user_id(request)
-    return [g.to_dict() for g in storage.list_goals(user_id=user_id)]
+    all_goals = [g.to_dict() for g in storage.list_goals(user_id=user_id)]
+    if page is not None or per_page is not None:
+        return _paginate(all_goals, page=page or 1, per_page=per_page or _DEFAULT_PAGE_SIZE)
+    return all_goals
 
 
 @app.get("/api/goals/{goal_id}")
@@ -821,16 +1095,26 @@ async def submit_clarify(goal_id: int, body: ClarifyAnswer, request: Request):
 
 # ─── Tasks ────────────────────────────────────────────────────────────────────
 
-@app.get("/api/tasks")
+@app.get("/api/tasks", tags=["tasks"])
 async def list_tasks(
     request: Request,
     goal_id: Optional[int] = Query(default=None),
     status: Optional[str] = Query(default=None),
+    page: Optional[int] = Query(default=None, ge=1, description="Page number (enables pagination)"),
+    per_page: Optional[int] = Query(default=None, ge=1, le=100, description="Items per page"),
 ):
+    """List tasks with optional filtering by goal and status.
+
+    When `page` or `per_page` is provided, returns a paginated response.
+    Otherwise returns a plain list for backward compatibility.
+    """
     uid = _require_user(request)
     if goal_id is not None:
         _get_goal_for_user(goal_id, uid)  # ownership check
-    return [t.to_dict() for t in storage.list_tasks(goal_id=goal_id, status=status)]
+    all_tasks = [t.to_dict() for t in storage.list_tasks(goal_id=goal_id, status=status)]
+    if page is not None or per_page is not None:
+        return _paginate(all_tasks, page=page or 1, per_page=per_page or _DEFAULT_PAGE_SIZE)
+    return all_tasks
 
 
 @app.post("/api/tasks", status_code=201)

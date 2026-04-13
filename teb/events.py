@@ -131,6 +131,17 @@ class EventBus:
             if not self._subscribers[user_id]:
                 del self._subscribers[user_id]
 
+    def shutdown(self) -> None:
+        """Gracefully shut down the event bus, draining all subscriber queues."""
+        for user_id, queues in list(self._subscribers.items()):
+            for queue in queues:
+                try:
+                    queue.put_nowait(SSEEvent(event_type="shutdown", data={"reason": "server_shutdown"}))
+                except asyncio.QueueFull:
+                    pass
+        self._subscribers.clear()
+        logger.info("EventBus shut down — all subscribers drained")
+
     def get_backlog_since(self, last_event_id: Optional[str]) -> List[SSEEvent]:
         """Get all events after a given event ID (for reconnection)."""
         if not last_event_id:
