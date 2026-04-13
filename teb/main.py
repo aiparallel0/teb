@@ -525,7 +525,7 @@ class DripClarifyAnswer(BaseModel):
 
 class AuthRegister(BaseModel):
     email: str = Field(..., min_length=3, max_length=254, description="Email address")
-    password: str = Field(..., min_length=8, max_length=128, description="Password (min 8 characters)")
+    password: str = Field(..., min_length=6, max_length=128, description="Password (min 6 characters)")
 
     @field_validator("email")
     @classmethod
@@ -897,13 +897,21 @@ async def create_goal(body: GoalCreate, request: Request):
 @app.get("/api/goals", tags=["goals"])
 async def list_goals(
     request: Request,
-    page: int = Query(default=1, ge=1, description="Page number"),
-    per_page: int = Query(default=50, ge=1, le=100, description="Items per page"),
+    page: Optional[int] = Query(default=None, ge=1, description="Page number (enables pagination)"),
+    per_page: Optional[int] = Query(default=None, ge=1, le=100, description="Items per page"),
 ):
-    """List goals for the authenticated user with pagination."""
+    """List goals for the authenticated user.
+
+    When `page` or `per_page` is provided, returns a paginated response:
+    `{"data": [...], "pagination": {"page": N, "per_page": N, "total": N, "pages": N}}`
+
+    Otherwise returns a plain list for backward compatibility.
+    """
     user_id = _get_user_id(request)
     all_goals = [g.to_dict() for g in storage.list_goals(user_id=user_id)]
-    return _paginate(all_goals, page=page, per_page=per_page)
+    if page is not None or per_page is not None:
+        return _paginate(all_goals, page=page or 1, per_page=per_page or _DEFAULT_PAGE_SIZE)
+    return all_goals
 
 
 @app.get("/api/goals/{goal_id}")
@@ -1086,20 +1094,26 @@ async def submit_clarify(goal_id: int, body: ClarifyAnswer, request: Request):
 
 # ─── Tasks ────────────────────────────────────────────────────────────────────
 
-@app.get("/api/tasks")
+@app.get("/api/tasks", tags=["tasks"])
 async def list_tasks(
     request: Request,
     goal_id: Optional[int] = Query(default=None),
     status: Optional[str] = Query(default=None),
-    page: int = Query(default=1, ge=1, description="Page number"),
-    per_page: int = Query(default=50, ge=1, le=100, description="Items per page"),
+    page: Optional[int] = Query(default=None, ge=1, description="Page number (enables pagination)"),
+    per_page: Optional[int] = Query(default=None, ge=1, le=100, description="Items per page"),
 ):
-    """List tasks with optional filtering by goal and status, with pagination."""
+    """List tasks with optional filtering by goal and status.
+
+    When `page` or `per_page` is provided, returns a paginated response.
+    Otherwise returns a plain list for backward compatibility.
+    """
     uid = _require_user(request)
     if goal_id is not None:
         _get_goal_for_user(goal_id, uid)  # ownership check
     all_tasks = [t.to_dict() for t in storage.list_tasks(goal_id=goal_id, status=status)]
-    return _paginate(all_tasks, page=page, per_page=per_page)
+    if page is not None or per_page is not None:
+        return _paginate(all_tasks, page=page or 1, per_page=per_page or _DEFAULT_PAGE_SIZE)
+    return all_tasks
 
 
 @app.post("/api/tasks", status_code=201)

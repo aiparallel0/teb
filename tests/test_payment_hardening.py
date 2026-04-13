@@ -616,7 +616,7 @@ class TestEnhancedHealthCheck:
         assert r.status_code == 200
         data = r.json()
         assert "version" in data
-        assert data["version"] == "1.0.0"
+        assert data["version"] == "2.0.0"
 
     def test_health_returns_uptime(self):
         """Health check should include uptime."""
