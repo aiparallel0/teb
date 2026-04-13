@@ -132,7 +132,12 @@ const TableView = {
           });
           td.appendChild(cb);
         } else if (col.key === 'title') {
-          td.textContent = task.title || '';
+          const priority = task.priority || 'normal';
+          const dot = document.createElement('span');
+          dot.className = `priority-dot priority-dot--${priority}`;
+          dot.title = `Priority: ${priority}`;
+          td.appendChild(dot);
+          td.appendChild(document.createTextNode(' ' + (task.title || '')));
           td.className = 'table-cell-title';
           td.style.cursor = 'pointer';
           td.addEventListener('click', () => { if (onTaskClick) onTaskClick(task); });

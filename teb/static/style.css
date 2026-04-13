@@ -4708,3 +4708,68 @@ body.sidebar-collapsed .sidebar-user-info { display: none; }
   .goal-stat-card { padding: var(--space-sm); }
   .goal-stat-value { font-size: var(--text-xl); }
 }
+
+/* ── Error state ───────────────────────────────── */
+.error-state { display: flex; flex-direction: column; align-items: center; gap: 1rem; padding: 3rem 1.5rem; text-align: center; }
+.error-state__icon { font-size: 2.5rem; }
+.error-state__message { color: var(--color-danger, #e53e3e); font-size: 0.9rem; max-width: 320px; }
+
+/* ── Priority dots ─────────────────────────────── */
+.priority-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.priority-dot--high { background: var(--color-danger, #e53e3e); }
+.priority-dot--normal { background: var(--color-muted, #aaa); }
+.priority-dot--low { background: var(--color-info, #4a9eff); }
+
+/* ── Onboarding tour ───────────────────────────── */
+.tour-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.55); z-index: 9000; pointer-events: all; }
+.tour-card { position: fixed; z-index: 9001; background: var(--color-surface, var(--surface, #fff)); border-radius: var(--radius-lg, 12px); padding: 1.5rem; max-width: 360px; box-shadow: 0 8px 32px rgba(0,0,0,0.18); }
+.tour-nav { display: flex; align-items: center; justify-content: space-between; margin-top: 1.25rem; gap: 0.5rem; }
+.tour-step-counter { font-size: 0.8rem; color: var(--color-muted, var(--muted, #888)); }
+.tour-spotlight { position: fixed; z-index: 8999; border: 2px solid var(--color-primary, var(--accent, #4a9eff)); border-radius: var(--radius-md, 8px); pointer-events: none; box-shadow: 0 0 0 9999px rgba(0,0,0,0.45); transition: all 0.2s ease; }
+
+/* ── Mobile sidebar ────────────────────────────── */
+@media (max-width: 768px) {
+  .sidebar { transform: translateX(-100%); position: fixed; left: 0; top: 0; height: 100vh; z-index: 8000; transition: transform 0.25s ease; }
+  .sidebar--open { transform: translateX(0); }
+  .main-content { margin-left: 0 !important; width: 100% !important; }
+  .hamburger-btn { display: flex !important; }
+  .sidebar-overlay { display: block; position: fixed; inset: 0; background: rgba(0,0,0,0.4); z-index: 7999; }
+}
+@media (min-width: 769px) {
+  .hamburger-btn { display: none; }
+  .sidebar-overlay { display: none; }
+}
+@media (max-width: 480px) {
+  .kanban-board { flex-direction: column !important; }
+  .kanban-col { min-width: unset !important; width: 100% !important; }
+}
+
+/* ── XP bar container ──────────────────────────── */
+.xp-bar-container { padding: 0.75rem 1rem; border-top: 1px solid var(--color-border, var(--border-subtle, #eee)); }
+.xp-bar-container .xp-bar-label { font-size: 0.75rem; color: var(--color-muted, var(--muted, #888)); margin-bottom: 4px; display: flex; justify-content: space-between; }
+.xp-bar-container .xp-bar-track { height: 6px; background: var(--color-surface-2, var(--bg-alt, #f0f0f0)); border-radius: 3px; overflow: hidden; }
+.xp-bar-container .xp-bar-fill { height: 100%; background: var(--color-primary, var(--accent, #4a9eff)); border-radius: 3px; transition: width 0.6s ease-out; }
+
+/* ── Autopilot status ──────────────────────────── */
+.autopilot-badge { display: inline-flex; align-items: center; gap: 6px; font-size: 0.8rem; cursor: pointer; padding: 4px 8px; border-radius: var(--radius-sm, 4px); }
+.autopilot-dot { width: 8px; height: 8px; border-radius: 50%; }
+.autopilot-dot--running { background: #22c55e; animation: pulse-dot 1.5s infinite; }
+.autopilot-dot--idle { background: #aaa; }
+.autopilot-dot--error { background: var(--color-danger, #e53e3e); }
+@keyframes pulse-dot { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
+
+/* ── Agent roster ──────────────────────────────── */
+.agent-card { border-radius: var(--radius-md, 8px); padding: 0.75rem 1rem; border: 1px solid var(--color-border, var(--border-subtle, #eee)); display: flex; align-items: center; gap: 0.75rem; cursor: pointer; transition: border-color 0.15s; }
+.agent-card:hover { border-color: var(--color-primary, var(--accent, #4a9eff)); }
+.agent-badge { width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 1.1rem; font-weight: 700; color: #fff; flex-shrink: 0; }
+.agent-badge--coordinator { background: #6366f1; }
+.agent-badge--marketing { background: #ec4899; }
+.agent-badge--web_dev { background: #14b8a6; }
+.agent-badge--outreach { background: #f97316; }
+.agent-badge--research { background: #eab308; }
+.agent-badge--finance { background: #22c55e; }
+.agent-status { font-size: 0.72rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.03em; }
+.agent-status--running { color: #22c55e; }
+.agent-status--idle { color: var(--color-muted, var(--muted, #888)); }
+.agent-status--done { color: var(--color-primary, var(--accent, #4a9eff)); }
+.agent-status--error { color: var(--color-danger, #e53e3e); }
