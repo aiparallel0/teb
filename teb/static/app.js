@@ -2389,6 +2389,7 @@ async function loadXpBar() {
 // ─── Autopilot status badge ──────────────────────────────────────────────────
 
 let _autopilotPollInterval = null;
+const AUTOPILOT_POLL_INTERVAL_MS = 30000;
 
 async function loadAutopilotBadge() {
   const badge = document.getElementById('autopilot-badge');
@@ -2410,7 +2411,7 @@ async function loadAutopilotBadge() {
 function startAutopilotPolling() {
   if (_autopilotPollInterval) return;
   loadAutopilotBadge();
-  _autopilotPollInterval = setInterval(loadAutopilotBadge, 30000);
+  _autopilotPollInterval = setInterval(loadAutopilotBadge, AUTOPILOT_POLL_INTERVAL_MS);
 }
 
 function stopAutopilotPolling() {
