@@ -4773,3 +4773,557 @@ body.sidebar-collapsed .sidebar-user-info { display: none; }
 .agent-status--idle { color: var(--color-muted, var(--muted, #888)); }
 .agent-status--done { color: var(--color-primary, var(--accent, #4a9eff)); }
 .agent-status--error { color: var(--color-danger, #e53e3e); }
+
+/* ═══════════════════════════════════════════════════════════════════
+   Frontend Audit & Competitor-Informed UI Enhancements
+   ═══════════════════════════════════════════════════════════════════ */
+
+/* ─── Feature Area 1: Goal Creation Quick-Capture ──────────────────── */
+
+.goal-title-editable {
+  cursor: text;
+  outline: none;
+  border-radius: var(--radius-sm);
+  transition: background 200ms;
+}
+.goal-title-editable:hover {
+  background: var(--surface-secondary, rgba(0,0,0,0.04));
+}
+.goal-title-editable:focus {
+  background: var(--surface-secondary, rgba(0,0,0,0.06));
+  box-shadow: 0 0 0 2px var(--color-primary, #3b82f6);
+}
+
+.clarify-header-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-md, 1rem);
+}
+.clarify-step-indicator {
+  font-size: var(--text-sm, 0.875rem);
+  color: var(--text-secondary, #64748b);
+  font-weight: 600;
+  background: var(--surface-secondary, #f1f5f9);
+  padding: 0.25rem 0.75rem;
+  border-radius: var(--radius-full, 9999px);
+  white-space: nowrap;
+}
+
+/* ─── Feature Area 2: Task Completion Micro-interaction ────────────── */
+
+.task-title-strikethrough {
+  text-decoration: line-through;
+  transition: text-decoration 300ms ease;
+}
+.task-completing {
+  opacity: 0.65;
+  transition: opacity 400ms ease;
+}
+.task-done-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--color-success, #22c55e);
+  color: white;
+  font-size: 0.75rem;
+  font-weight: 700;
+  animation: taskDonePop 300ms ease;
+  margin-left: auto;
+}
+@keyframes taskDonePop {
+  0% { transform: scale(0); opacity: 0; }
+  60% { transform: scale(1.3); }
+  100% { transform: scale(1); opacity: 1; }
+}
+
+/* ─── Feature Area 3: Agent Roster ─────────────────────────────────── */
+
+.agent-roster {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: var(--space-sm, 0.5rem);
+  margin-bottom: var(--space-md, 1rem);
+}
+.agent-roster-card {
+  background: var(--surface, #fff);
+  padding: 0.75rem;
+  border-radius: var(--radius-md, 0.5rem);
+  cursor: pointer;
+  transition: box-shadow 200ms, transform 100ms;
+}
+.agent-roster-card:hover {
+  box-shadow: var(--shadow-md, 0 4px 12px rgba(0,0,0,0.1));
+  transform: translateY(-1px);
+}
+.agent-roster-name {
+  font-weight: 600;
+  font-size: var(--text-sm, 0.875rem);
+  text-transform: capitalize;
+  margin-bottom: 2px;
+}
+.agent-roster-role {
+  font-size: var(--text-xs, 0.75rem);
+  color: var(--text-secondary, #64748b);
+  margin-bottom: 4px;
+}
+.agent-roster-status {
+  font-size: var(--text-xs, 0.75rem);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.agent-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+}
+.agent-status-idle .agent-status-dot { background: #94a3b8; }
+.agent-status-running .agent-status-dot { background: #f59e0b; animation: pulse 1.5s infinite; }
+.agent-status-done .agent-status-dot { background: #22c55e; }
+
+.agent-section-title {
+  font-size: var(--text-sm, 0.875rem);
+  font-weight: 600;
+  margin: var(--space-md, 1rem) 0 var(--space-sm, 0.5rem);
+  color: var(--text-primary);
+}
+
+.agent-empty-delegation {
+  padding: var(--space-md, 1rem);
+  text-align: center;
+}
+
+.agent-msg-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 4px;
+  flex-wrap: wrap;
+}
+.agent-msg-time {
+  font-size: var(--text-xs, 0.75rem);
+  color: var(--text-secondary, #64748b);
+  margin-left: auto;
+}
+
+/* Agent detail drawer */
+.agent-drawer {
+  position: fixed;
+  top: 0;
+  right: -400px;
+  width: 380px;
+  height: 100vh;
+  background: var(--surface, #fff);
+  box-shadow: -4px 0 20px rgba(0,0,0,0.15);
+  z-index: 1000;
+  overflow-y: auto;
+  transition: right 250ms ease;
+}
+.agent-drawer.open {
+  right: 0;
+}
+.agent-drawer-header {
+  padding: 1.25rem;
+  position: relative;
+}
+.agent-drawer-header h3 {
+  margin: 0;
+  text-transform: capitalize;
+}
+.agent-drawer-role {
+  font-size: var(--text-sm, 0.875rem);
+  color: var(--text-secondary, #64748b);
+  margin: 4px 0 0;
+}
+.agent-drawer-close {
+  position: absolute;
+  top: 1rem;
+  right: 1rem;
+  background: none;
+  border: none;
+  font-size: 1.25rem;
+  cursor: pointer;
+  color: var(--text-secondary);
+}
+.agent-drawer-body {
+  padding: 0 1.25rem 1.25rem;
+}
+.agent-drawer-body h4 {
+  font-size: var(--text-sm, 0.875rem);
+  margin: 1rem 0 0.5rem;
+}
+.agent-drawer-item {
+  padding: 0.5rem;
+  border-left: 2px solid var(--border, #e2e8f0);
+  margin-bottom: 0.5rem;
+  font-size: var(--text-sm, 0.875rem);
+}
+.agent-drawer-text {
+  margin: 4px 0 0;
+  font-size: var(--text-xs, 0.75rem);
+  color: var(--text-secondary);
+}
+
+/* ─── Feature Area 4: Goal Progress Summary Bar ───────────────────── */
+
+.goal-progress-summary {
+  margin: var(--space-sm, 0.5rem) 0;
+}
+.goal-progress-summary-bar {
+  height: 6px;
+  background: var(--surface-secondary, #e2e8f0);
+  border-radius: 3px;
+  overflow: hidden;
+}
+.goal-progress-summary-fill {
+  height: 100%;
+  background: var(--color-primary, #3b82f6);
+  border-radius: 3px;
+  transition: width 400ms ease;
+}
+.goal-progress-summary-label {
+  font-size: var(--text-xs, 0.75rem);
+  color: var(--text-secondary, #64748b);
+  margin-top: 4px;
+  display: block;
+}
+
+/* ─── Feature Area 4: ROI Summary Inline Card ─────────────────────── */
+
+.roi-summary-inline {
+  margin: var(--space-sm, 0.5rem) 0;
+}
+.roi-inline-card {
+  display: flex;
+  gap: var(--space-md, 1rem);
+  padding: 0.75rem 1rem;
+  background: var(--surface, #fff);
+  border: 1px solid var(--border, #e2e8f0);
+  border-radius: var(--radius-md, 0.5rem);
+  flex-wrap: wrap;
+}
+.roi-inline-item {
+  display: flex;
+  flex-direction: column;
+  min-width: 80px;
+}
+.roi-inline-label {
+  font-size: var(--text-xs, 0.75rem);
+  color: var(--text-secondary, #64748b);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.roi-inline-value {
+  font-size: var(--text-lg, 1.125rem);
+  font-weight: 700;
+}
+.roi-spent { color: var(--color-warning, #f59e0b); }
+.roi-earned { color: var(--color-success, #22c55e); }
+.roi-positive { color: var(--color-success, #22c55e); }
+.roi-negative { color: var(--color-error, #ef4444); }
+
+/* ─── Feature Area 4: Outcome Metric Progress Ring (SVG) ──────────── */
+/* Already has ring CSS from prior PR — these are enhancements */
+
+.metric-ring-label-inside {
+  font-size: 10px;
+  fill: var(--text-primary, #1e293b);
+  text-anchor: middle;
+  dominant-baseline: central;
+  font-weight: 600;
+}
+.metric-ring-circle-bg { stroke: var(--surface-secondary, #e2e8f0); }
+.metric-ring-circle-green { stroke: #22c55e; }
+.metric-ring-circle-yellow { stroke: #f59e0b; }
+.metric-ring-circle-red { stroke: #ef4444; }
+
+/* ─── Feature Area 5: Execution Step Inspector ─────────────────────── */
+
+.exec-step {
+  border: 1px solid var(--border, #e2e8f0);
+  border-radius: var(--radius-sm, 0.25rem);
+  margin-bottom: 0.5rem;
+  overflow: hidden;
+}
+.exec-step-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  cursor: pointer;
+  font-size: var(--text-sm, 0.875rem);
+  background: var(--surface, #fff);
+  transition: background 150ms;
+}
+.exec-step-header:hover {
+  background: var(--surface-secondary, #f8fafc);
+}
+.exec-step-status {
+  font-weight: 700;
+  flex-shrink: 0;
+}
+.exec-step-action {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.exec-step-method {
+  font-family: var(--font-mono, monospace);
+  font-size: var(--text-xs, 0.75rem);
+  background: var(--surface-secondary, #f1f5f9);
+  padding: 1px 6px;
+  border-radius: var(--radius-sm, 0.25rem);
+  font-weight: 600;
+}
+.exec-step-code {
+  font-family: var(--font-mono, monospace);
+  font-size: var(--text-xs, 0.75rem);
+  font-weight: 700;
+}
+.exec-step-time {
+  font-size: var(--text-xs, 0.75rem);
+  color: var(--text-secondary, #64748b);
+  white-space: nowrap;
+}
+.exec-step-detail {
+  padding: 0.75rem;
+  border-top: 1px solid var(--border, #e2e8f0);
+  background: var(--surface-secondary, #f8fafc);
+  font-size: var(--text-sm, 0.875rem);
+}
+.exec-detail-row {
+  margin-bottom: 0.5rem;
+}
+.exec-detail-block summary {
+  cursor: pointer;
+  font-weight: 600;
+  margin-bottom: 0.25rem;
+}
+.exec-response-body {
+  max-height: 200px;
+  overflow: auto;
+  font-size: var(--text-xs, 0.75rem);
+  font-family: var(--font-mono, monospace);
+  background: var(--surface, #fff);
+  padding: 0.5rem;
+  border-radius: var(--radius-sm, 0.25rem);
+  border: 1px solid var(--border, #e2e8f0);
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+/* ─── Feature Area 6: Mood Selector ────────────────────────────────── */
+
+.mood-selector {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0.5rem 0;
+  flex-wrap: wrap;
+}
+.mood-label {
+  font-size: var(--text-sm, 0.875rem);
+  color: var(--text-secondary, #64748b);
+}
+.mood-option {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  background: var(--surface-secondary, #f1f5f9);
+  cursor: pointer;
+  font-size: 1.2rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: border-color 200ms, transform 100ms;
+  padding: 0;
+}
+.mood-option:hover {
+  transform: scale(1.15);
+}
+.mood-option.selected {
+  border-color: var(--color-primary, #3b82f6);
+  background: var(--color-primary-light, #eff6ff);
+}
+
+/* Coaching feedback fade in */
+.fade-in {
+  animation: fadeIn 300ms ease;
+}
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* ─── Feature Area 6: Nudge Banner Slide Out ───────────────────────── */
+
+.nudge-slide-out {
+  animation: slideOut 300ms ease forwards;
+}
+@keyframes slideOut {
+  to { transform: translateX(100%); opacity: 0; }
+}
+
+/* ─── Feature Area 6: Streak Check-in Prompt ───────────────────────── */
+
+.streak-checkin-prompt {
+  padding: 0.5rem 1rem;
+  background: var(--color-warning-bg, #fffbeb);
+  border: 1px solid var(--color-warning, #f59e0b);
+  border-radius: var(--radius-md, 0.5rem);
+  font-size: var(--text-sm, 0.875rem);
+  margin-bottom: var(--space-sm, 0.5rem);
+}
+.streak-prompt-text {
+  color: var(--text-primary);
+}
+.streak-prompt-text a {
+  color: var(--color-primary, #3b82f6);
+  text-decoration: none;
+  font-weight: 600;
+}
+
+/* ─── Feature Area 7: Unified Search ───────────────────────────────── */
+
+.header-search-wrap {
+  position: relative;
+  flex: 0 1 320px;
+  max-width: 320px;
+}
+.global-search-input {
+  width: 100%;
+  padding: 0.4rem 0.75rem;
+  border-radius: var(--radius-full, 9999px);
+  border: 1px solid var(--border, #e2e8f0);
+  background: var(--surface-secondary, #f1f5f9);
+  font-size: var(--text-sm, 0.875rem);
+  outline: none;
+  transition: border-color 200ms, box-shadow 200ms;
+}
+.global-search-input:focus {
+  border-color: var(--color-primary, #3b82f6);
+  box-shadow: 0 0 0 3px var(--color-primary-light, rgba(59,130,246,0.15));
+  background: var(--surface, #fff);
+}
+.search-results-panel {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  background: var(--surface, #fff);
+  border: 1px solid var(--border, #e2e8f0);
+  border-radius: var(--radius-md, 0.5rem);
+  box-shadow: var(--shadow-lg, 0 8px 24px rgba(0,0,0,0.12));
+  max-height: 400px;
+  overflow-y: auto;
+  z-index: 999;
+}
+.search-group-header {
+  padding: 0.5rem 0.75rem 0.25rem;
+  font-size: var(--text-xs, 0.75rem);
+  font-weight: 700;
+  color: var(--text-secondary, #64748b);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.search-result-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  cursor: pointer;
+  font-size: var(--text-sm, 0.875rem);
+  transition: background 100ms;
+}
+.search-result-item:hover,
+.search-result-item.selected {
+  background: var(--surface-secondary, #f1f5f9);
+}
+.search-result-icon {
+  flex-shrink: 0;
+}
+.search-result-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.search-result-status {
+  font-size: var(--text-xs, 0.75rem);
+  padding: 1px 6px;
+  border-radius: var(--radius-sm, 0.25rem);
+  background: var(--surface-secondary, #f1f5f9);
+}
+
+/* ─── Feature Area 7: Task Filter Bar ──────────────────────────────── */
+
+.task-filter-bar {
+  margin-bottom: var(--space-sm, 0.5rem);
+}
+.filter-bar {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+.filter-select {
+  padding: 0.3rem 0.5rem;
+  border-radius: var(--radius-sm, 0.25rem);
+  border: 1px solid var(--border, #e2e8f0);
+  font-size: var(--text-sm, 0.875rem);
+  background: var(--surface, #fff);
+  min-width: 120px;
+}
+
+/* ─── Milestone Confetti ───────────────────────────────────────────── */
+
+.milestone-confetti {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  pointer-events: none;
+  z-index: 10000;
+  overflow: hidden;
+}
+
+/* ─── Kanban column count badge ────────────────────────────────────── */
+
+.kanban-col-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--surface-secondary, #f1f5f9);
+  font-size: var(--text-xs, 0.75rem);
+  font-weight: 600;
+  color: var(--text-secondary, #64748b);
+  margin-left: 6px;
+}
+
+/* ─── Responsive: hide search on very small screens ────────────────── */
+
+@media (max-width: 480px) {
+  .header-search-wrap {
+    display: none;
+  }
+  .agent-roster {
+    grid-template-columns: 1fr;
+  }
+  .roi-inline-card {
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+}

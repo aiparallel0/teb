@@ -127,6 +127,10 @@
     <!-- Header bar -->
     <header id="header-bar" class="header-bar">
       <button id="btn-mobile-menu" class="header-menu-btn" aria-label="Open menu">☰</button>
+      <div class="header-search-wrap">
+        <input id="global-search-input" type="text" class="global-search-input" placeholder="Search goals & tasks…" autocomplete="off" />
+        <div id="search-results-panel" class="search-results-panel" style="display:none"></div>
+      </div>
       <nav id="breadcrumbs" class="breadcrumbs" aria-label="Breadcrumb">
         <a href="#/home" class="breadcrumb-link">Home</a>
       </nav>
@@ -208,10 +212,13 @@
         <label for="goal-title" style="font-family:var(--font-display);font-size:var(--text-lg);font-weight:var(--font-weight-medium)">What do you want to achieve?</label>
         <p style="font-size:var(--text-sm);color:var(--text-secondary);margin-bottom:var(--space-sm)">Describe your goal and let AI break it down into actionable tasks.</p>
         <input id="goal-title" type="text" placeholder="Launch a SaaS product, master Rust, run a sub-3h marathon…" autocomplete="off" />
-        <label for="goal-desc" class="mt">Context &amp; constraints <span style="font-weight:400;color:var(--muted)">(optional)</span></label>
-        <textarea id="goal-desc" rows="3" placeholder="Timeline, resources, prior attempts, constraints…" maxlength="2000"></textarea>
-        <div id="goal-desc-counter" class="char-counter"></div>
-        <button id="btn-create-goal" class="btn-primary">Decompose →</button>
+        <button id="btn-expand-desc" class="btn-secondary btn-sm mt" type="button">+ Add details</button>
+        <div id="goal-desc-panel" style="display:none">
+          <label for="goal-desc" class="mt">Context &amp; constraints <span style="font-weight:400;color:var(--muted)">(optional)</span></label>
+          <textarea id="goal-desc" rows="3" placeholder="Timeline, resources, prior attempts, constraints…" maxlength="2000"></textarea>
+          <div id="goal-desc-counter" class="char-counter"></div>
+        </div>
+        <button id="btn-create-goal" class="btn-primary mt">Decompose →</button>
         <div class="error" id="error-landing" role="alert"></div>
       </div>
       <div id="goal-list-section" class="mt">
@@ -224,7 +231,10 @@
     <section id="screen-clarify" class="screen" role="main">
       <div class="card">
         <a class="back-link" id="back-from-clarify">← Back</a>
-        <h2 id="clarify-heading">Calibration</h2>
+        <div class="clarify-header-row">
+          <h2 id="clarify-heading">Calibration</h2>
+          <span class="clarify-step-indicator" id="clarify-step-indicator"></span>
+        </div>
         <p class="sub" id="clarify-goal-title"></p>
         <div class="question-block">
           <label id="clarify-question-text"></label>
@@ -264,6 +274,15 @@
         <div id="status-chart"></div>
         <div id="stall-banner" class="stall-banner" style="display:none"></div>
       </div>
+
+      <!-- Goal progress summary bar -->
+      <div id="goal-progress-summary" class="goal-progress-summary" style="display:none"></div>
+
+      <!-- ROI summary inline card -->
+      <div id="roi-summary-inline" class="roi-summary-inline"></div>
+
+      <!-- Streak check-in prompt -->
+      <div id="streak-checkin-prompt" class="streak-checkin-prompt" style="display:none"></div>
 
       <!-- Quick-add task bar (always visible at top of task list) -->
       <div class="quick-add-bar">
@@ -358,6 +377,7 @@
           <button class="btn-secondary btn-sm" id="btn-focus-start">Start working →</button>
         </div>
 
+        <div id="task-filter-bar" class="task-filter-bar"></div>
         <div id="task-list" class="task-list"></div>
         <div class="task-list-actions mt">
           <button id="btn-add-task" class="btn-secondary">+ Add a task</button>
@@ -394,6 +414,14 @@
           <textarea id="checkin-done" rows="2" placeholder="Completed first module, sent 3 proposals…"></textarea>
           <label for="checkin-blockers">Obstacles <span style="font-weight:400;color:var(--muted)">(optional)</span></label>
           <textarea id="checkin-blockers" rows="2" placeholder="Blocked on setup, no time today…"></textarea>
+          <div class="mood-selector">
+            <span class="mood-label">How are you feeling?</span>
+            <button type="button" class="mood-option" data-mood="frustrated" title="Frustrated">😔</button>
+            <button type="button" class="mood-option" data-mood="struggling" title="Struggling">😕</button>
+            <button type="button" class="mood-option selected" data-mood="neutral" title="Neutral">😐</button>
+            <button type="button" class="mood-option" data-mood="good" title="Good">🙂</button>
+            <button type="button" class="mood-option" data-mood="great" title="Great">😄</button>
+          </div>
           <button id="btn-checkin" class="btn-primary btn-sm">Log entry</button>
         </div>
         <div id="checkin-feedback" class="checkin-feedback" style="display:none"></div>
