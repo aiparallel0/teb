@@ -4565,12 +4565,21 @@ const ViewSwitcher = {
     container.prepend(toolbar);
   },
 
-  loadView(viewType) {
+  loadView(viewType, filteredTasks) {
     const viewContainer = document.getElementById('view-render-area');
     if (!viewContainer) return;
     viewContainer.innerHTML = '';
 
-    const tasks = currentTasks || [];
+    // Render filter bar in the all-tasks-section
+    FilterBar.render('all-tasks-section');
+
+    // Use filtered tasks if provided, otherwise apply active filters to currentTasks
+    const tasks = filteredTasks || TaskFilter.apply(
+      currentTasks || [],
+      SavedViews._activeFilters,
+      SavedViews._activeSort,
+      SavedViews._activeGroupBy
+    );
 
     switch (viewType) {
       case 'list':
@@ -4648,6 +4657,11 @@ const ViewSwitcher = {
 // ─── Saved Views (Phase 3, Item 3) ──────────────────────────────────────────
 
 const SavedViews = {
+  _activeFilters: {},
+  _activeSort: {},
+  _activeGroupBy: '',
+  _activeViewId: null,
+
   async populateDropdown(selectEl) {
     try {
       const views = await api.get('/api/views');
@@ -4667,9 +4681,9 @@ const SavedViews = {
       await api.post('/api/views', {
         name,
         view_type: _currentViewType,
-        filters: {},
-        sort: {},
-        group_by: '',
+        filters: this._activeFilters,
+        sort: this._activeSort,
+        group_by: this._activeGroupBy,
       });
       toast.success('View Saved', `"${name}" has been saved.`);
     } catch (e) {
@@ -4680,10 +4694,40 @@ const SavedViews = {
   async loadView(viewId) {
     try {
       const view = await api.get(`/api/views/${viewId}`);
+      this._activeViewId = view.id;
+      this._activeFilters = view.filters || {};
+      this._activeSort = view.sort || {};
+      this._activeGroupBy = view.group_by || '';
       _currentViewType = view.view_type || 'list';
       localStorage.setItem('teb_view_type', _currentViewType);
+
+      // Apply filters and sort to current tasks, then render
+      const filtered = TaskFilter.apply(currentTasks, this._activeFilters, this._activeSort, this._activeGroupBy);
       ViewSwitcher.render('all-tasks-section');
-      ViewSwitcher.loadView(_currentViewType);
+      ViewSwitcher.loadView(_currentViewType, filtered);
+    } catch (e) {
+      toast.error('Error', e.message);
+    }
+  },
+
+  async loadCrossGoalView(viewId) {
+    try {
+      const result = await api.get(`/api/views/${viewId}/tasks`);
+      const view = result.view;
+      this._activeViewId = view.id;
+      this._activeFilters = view.filters || {};
+      this._activeSort = view.sort || {};
+      this._activeGroupBy = view.group_by || '';
+      _currentViewType = view.view_type || 'list';
+      localStorage.setItem('teb_view_type', _currentViewType);
+
+      const tasks = result.tasks || [];
+      ViewSwitcher.render('all-tasks-section');
+      ViewSwitcher.loadView(_currentViewType, tasks);
+
+      if (result.grouped) {
+        toast.info('Grouped View', `Showing ${result.total} tasks grouped by ${view.group_by}`);
+      }
     } catch (e) {
       toast.error('Error', e.message);
     }
@@ -4692,9 +4736,233 @@ const SavedViews = {
   async deleteView(viewId) {
     try {
       await api.del(`/api/views/${viewId}`);
+      if (this._activeViewId === viewId) {
+        this._activeViewId = null;
+        this._activeFilters = {};
+        this._activeSort = {};
+        this._activeGroupBy = '';
+      }
       toast.success('View Deleted', 'Saved view removed.');
     } catch (e) {
       toast.error('Error', e.message);
+    }
+  },
+
+  clearFilters() {
+    this._activeFilters = {};
+    this._activeSort = {};
+    this._activeGroupBy = '';
+    this._activeViewId = null;
+    renderTasks(currentTasks);
+  }
+};
+
+
+// ─── Task Filter/Sort Engine ────────────────────────────────────────────────
+
+const TaskFilter = {
+  /**
+   * Apply filters, sorting, and grouping to a task array.
+   * @param {Array} tasks - array of task objects
+   * @param {Object} filters - {status, priority, assigned_to, tags, due_before, due_after}
+   * @param {Object} sort - {field, direction}
+   * @param {string} groupBy - field to group by (optional)
+   * @returns {Array} filtered and sorted tasks
+   */
+  apply(tasks, filters, sort, groupBy) {
+    let result = [...tasks];
+
+    // Apply filters
+    if (filters) {
+      if (filters.status) {
+        result = result.filter(t => t.status === filters.status);
+      }
+      if (filters.priority) {
+        result = result.filter(t => t.priority === filters.priority);
+      }
+      if (filters.assigned_to !== undefined && filters.assigned_to !== null) {
+        result = result.filter(t => t.assigned_to === filters.assigned_to);
+      }
+      if (filters.tags) {
+        const filterTags = filters.tags.split(',').map(t => t.trim().toLowerCase());
+        result = result.filter(t => {
+          const taskTags = (t.tags || []).map(tag => tag.toLowerCase());
+          return filterTags.some(ft => taskTags.includes(ft));
+        });
+      }
+      if (filters.due_before) {
+        result = result.filter(t => t.due_date && t.due_date <= filters.due_before);
+      }
+      if (filters.due_after) {
+        result = result.filter(t => t.due_date && t.due_date >= filters.due_after);
+      }
+    }
+
+    // Apply sorting
+    if (sort && sort.field) {
+      const dir = (sort.direction || 'asc').toLowerCase() === 'desc' ? -1 : 1;
+      const priorityOrder = { high: 0, normal: 1, low: 2 };
+      const statusOrder = { todo: 0, in_progress: 1, executing: 2, done: 3, failed: 4, skipped: 5 };
+
+      result.sort((a, b) => {
+        let va = a[sort.field];
+        let vb = b[sort.field];
+
+        // Special handling for priority and status ordering
+        if (sort.field === 'priority') {
+          va = priorityOrder[va] !== undefined ? priorityOrder[va] : 1;
+          vb = priorityOrder[vb] !== undefined ? priorityOrder[vb] : 1;
+        } else if (sort.field === 'status') {
+          va = statusOrder[va] !== undefined ? statusOrder[va] : 99;
+          vb = statusOrder[vb] !== undefined ? statusOrder[vb] : 99;
+        }
+
+        if (va == null && vb == null) return 0;
+        if (va == null) return 1;
+        if (vb == null) return -1;
+        if (va < vb) return -1 * dir;
+        if (va > vb) return 1 * dir;
+        return 0;
+      });
+    }
+
+    return result;
+  },
+
+  /**
+   * Group tasks by a field.
+   * @returns {Object} mapping of group key -> task array
+   */
+  groupBy(tasks, field) {
+    if (!field) return { 'All Tasks': tasks };
+    const groups = {};
+    tasks.forEach(t => {
+      let key = t[field];
+      if (Array.isArray(key)) {
+        key = key.length ? key.join(', ') : 'None';
+      } else if (key === null || key === undefined || key === '') {
+        key = 'None';
+      } else {
+        key = String(key);
+      }
+      if (!groups[key]) groups[key] = [];
+      groups[key].push(t);
+    });
+    return groups;
+  }
+};
+
+
+// ─── Filter Bar UI ──────────────────────────────────────────────────────────
+
+const FilterBar = {
+  _containerId: null,
+
+  render(containerId) {
+    this._containerId = containerId;
+    const container = document.getElementById(containerId);
+    if (!container) return;
+
+    let bar = container.querySelector('.filter-bar');
+    if (bar) bar.remove();
+
+    bar = document.createElement('div');
+    bar.className = 'filter-bar';
+    bar.innerHTML = `
+      <select class="filter-select filter-status" title="Filter by status">
+        <option value="">All Statuses</option>
+        <option value="todo">To Do</option>
+        <option value="in_progress">In Progress</option>
+        <option value="executing">Executing</option>
+        <option value="done">Done</option>
+        <option value="failed">Failed</option>
+        <option value="skipped">Skipped</option>
+      </select>
+      <select class="filter-select filter-priority" title="Filter by priority">
+        <option value="">All Priorities</option>
+        <option value="high">High</option>
+        <option value="normal">Normal</option>
+        <option value="low">Low</option>
+      </select>
+      <select class="filter-select filter-sort" title="Sort by">
+        <option value="">Default Order</option>
+        <option value="due_date:asc">Due Date ↑</option>
+        <option value="due_date:desc">Due Date ↓</option>
+        <option value="priority:asc">Priority ↑</option>
+        <option value="priority:desc">Priority ↓</option>
+        <option value="status:asc">Status ↑</option>
+        <option value="status:desc">Status ↓</option>
+        <option value="title:asc">Title A–Z</option>
+        <option value="title:desc">Title Z–A</option>
+        <option value="created_at:desc">Newest First</option>
+        <option value="created_at:asc">Oldest First</option>
+      </select>
+      <select class="filter-select filter-group" title="Group by">
+        <option value="">No Grouping</option>
+        <option value="status">Status</option>
+        <option value="priority">Priority</option>
+        <option value="assigned_to">Assignee</option>
+      </select>
+      <button class="filter-clear-btn" title="Clear filters">✕</button>
+    `;
+
+    // Restore active filters to dropdowns
+    const statusSel = bar.querySelector('.filter-status');
+    const prioritySel = bar.querySelector('.filter-priority');
+    const sortSel = bar.querySelector('.filter-sort');
+    const groupSel = bar.querySelector('.filter-group');
+
+    if (statusSel && SavedViews._activeFilters.status) statusSel.value = SavedViews._activeFilters.status;
+    if (prioritySel && SavedViews._activeFilters.priority) prioritySel.value = SavedViews._activeFilters.priority;
+    if (sortSel && SavedViews._activeSort.field) {
+      sortSel.value = SavedViews._activeSort.field + ':' + (SavedViews._activeSort.direction || 'asc');
+    }
+    if (groupSel && SavedViews._activeGroupBy) groupSel.value = SavedViews._activeGroupBy;
+
+    // Event listeners
+    const applyFilters = () => {
+      const filters = {};
+      if (statusSel && statusSel.value) filters.status = statusSel.value;
+      if (prioritySel && prioritySel.value) filters.priority = prioritySel.value;
+      SavedViews._activeFilters = filters;
+
+      const sortVal = sortSel ? sortSel.value : '';
+      if (sortVal) {
+        const [field, direction] = sortVal.split(':');
+        SavedViews._activeSort = { field, direction: direction || 'asc' };
+      } else {
+        SavedViews._activeSort = {};
+      }
+
+      SavedViews._activeGroupBy = groupSel ? groupSel.value : '';
+
+      // Re-render with filters
+      const filtered = TaskFilter.apply(currentTasks, SavedViews._activeFilters, SavedViews._activeSort, SavedViews._activeGroupBy);
+      renderTasks(filtered);
+    };
+
+    if (statusSel) statusSel.addEventListener('change', applyFilters);
+    if (prioritySel) prioritySel.addEventListener('change', applyFilters);
+    if (sortSel) sortSel.addEventListener('change', applyFilters);
+    if (groupSel) groupSel.addEventListener('change', applyFilters);
+
+    const clearBtn = bar.querySelector('.filter-clear-btn');
+    if (clearBtn) {
+      clearBtn.addEventListener('click', () => {
+        if (statusSel) statusSel.value = '';
+        if (prioritySel) prioritySel.value = '';
+        if (sortSel) sortSel.value = '';
+        if (groupSel) groupSel.value = '';
+        SavedViews.clearFilters();
+      });
+    }
+
+    // Insert bar at top of container, before view-switcher-toolbar
+    const toolbar = container.querySelector('.view-switcher-toolbar');
+    if (toolbar) {
+      toolbar.parentElement.insertBefore(bar, toolbar.nextSibling);
+    } else {
+      container.insertBefore(bar, container.firstChild);
     }
   }
 };

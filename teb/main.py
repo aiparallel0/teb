@@ -5760,6 +5760,90 @@ async def delete_view_endpoint(view_id: int, request: Request):
     return {"deleted": True}
 
 
+@app.get("/api/users/me/tasks", tags=["cross-goal"])
+async def list_user_tasks_endpoint(
+    request: Request,
+    status: Optional[str] = Query(default=None),
+    priority: Optional[str] = Query(default=None),
+    assigned_to: Optional[int] = Query(default=None),
+    tags: Optional[str] = Query(default=None),
+    due_before: Optional[str] = Query(default=None),
+    due_after: Optional[str] = Query(default=None),
+    sort_field: str = Query(default="order_index"),
+    sort_dir: str = Query(default="asc"),
+    limit: int = Query(default=200, ge=1, le=1000),
+):
+    """List all tasks across all goals for the current user.
+
+    Supports filtering by status, priority, assigned_to, tags, and due date range.
+    Supports sorting by any allowed field.
+    Enables cross-goal portfolio views.
+    """
+    _check_api_rate_limit(request)
+    uid = _require_user(request)
+    tasks = storage.list_user_tasks(
+        user_id=uid,
+        status=status,
+        priority=priority,
+        assigned_to=assigned_to,
+        tags=tags,
+        due_before=due_before,
+        due_after=due_after,
+        sort_field=sort_field,
+        sort_dir=sort_dir,
+        limit=limit,
+    )
+    return [t.to_dict() for t in tasks]
+
+
+@app.get("/api/views/{view_id}/tasks", tags=["cross-goal"])
+async def get_view_tasks(view_id: int, request: Request):
+    """Apply a saved view's filters and sort to the user's tasks, returning filtered results.
+
+    Works cross-goal — returns tasks from ALL the user's goals matching the view's config.
+    """
+    _check_api_rate_limit(request)
+    uid = _require_user(request)
+    view = storage.get_saved_view(view_id)
+    if not view:
+        raise HTTPException(status_code=404, detail="View not found")
+    if view.user_id != uid:
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    filters = json.loads(view.filters_json) if view.filters_json else {}
+    sort_config = json.loads(view.sort_json) if view.sort_json else {}
+
+    tasks = storage.list_user_tasks(
+        user_id=uid,
+        status=filters.get("status"),
+        priority=filters.get("priority"),
+        assigned_to=filters.get("assigned_to"),
+        tags=filters.get("tags"),
+        due_before=filters.get("due_before"),
+        due_after=filters.get("due_after"),
+        sort_field=sort_config.get("field", "order_index"),
+        sort_dir=sort_config.get("direction", "asc"),
+    )
+
+    result = [t.to_dict() for t in tasks]
+
+    # Apply group_by on the server side for convenience
+    if view.group_by:
+        grouped: dict = {}
+        for t in result:
+            key = t.get(view.group_by, "Other")
+            if isinstance(key, list):
+                key = ", ".join(str(k) for k in key) if key else "None"
+            elif key is None:
+                key = "None"
+            else:
+                key = str(key)
+            grouped.setdefault(key, []).append(t)
+        return {"view": view.to_dict(), "grouped": grouped, "total": len(result)}
+
+    return {"view": view.to_dict(), "tasks": result, "total": len(result)}
+
+
 # ─── Phase 3: Dashboard Layouts ──────────────────────────────────────────────
 
 @app.post("/api/dashboards", status_code=201)

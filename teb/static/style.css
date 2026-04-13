@@ -5840,3 +5840,50 @@ body.sidebar-collapsed .sidebar-user-info { display: none; }
   justify-content: center;
   font-weight: 600;
 }
+
+/* ─── Filter Bar ───────────────────────────────────────────────────────────── */
+
+.filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-xs, 0.25rem);
+  padding: var(--space-xs, 0.25rem) var(--space-sm, 0.5rem);
+  background: var(--surface-alt, #f9fafb);
+  border: 1px solid var(--border, #e5e7eb);
+  border-radius: var(--radius-sm, 4px);
+  margin-bottom: var(--space-sm, 0.5rem);
+  align-items: center;
+}
+
+.filter-select {
+  padding: 4px 8px;
+  border: 1px solid var(--border, #d1d5db);
+  border-radius: var(--radius-sm, 4px);
+  background: var(--surface, #fff);
+  font-size: var(--text-xs, 0.75rem);
+  color: var(--foreground, #111827);
+  cursor: pointer;
+  min-width: 100px;
+}
+
+.filter-select:focus {
+  outline: none;
+  box-shadow: 0 0 0 2px var(--primary, #3b82f6);
+}
+
+.filter-clear-btn {
+  background: none;
+  border: 1px solid var(--border, #d1d5db);
+  border-radius: var(--radius-sm, 4px);
+  cursor: pointer;
+  padding: 4px 8px;
+  font-size: var(--text-xs, 0.75rem);
+  color: var(--muted, #6b7280);
+  transition: all 0.15s;
+}
+
+.filter-clear-btn:hover {
+  background: var(--danger-bg, #fef2f2);
+  border-color: var(--danger, #ef4444);
+  color: var(--danger, #ef4444);
+}

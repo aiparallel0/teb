@@ -6197,3 +6197,67 @@ def _row_to_content_block(row: sqlite3.Row) -> ContentBlock:
         created_at=datetime.fromisoformat(row["created_at"]) if row["created_at"] else None,
         updated_at=datetime.fromisoformat(row["updated_at"]) if row["updated_at"] else None,
     )
+
+
+# ─── Cross-goal task queries (for portfolio views) ──────────────────────────
+
+
+def list_user_tasks(
+    user_id: int,
+    status: Optional[str] = None,
+    priority: Optional[str] = None,
+    assigned_to: Optional[int] = None,
+    tags: Optional[str] = None,
+    due_before: Optional[str] = None,
+    due_after: Optional[str] = None,
+    sort_field: str = "order_index",
+    sort_dir: str = "asc",
+    limit: int = 200,
+) -> List[Task]:
+    """List tasks across ALL goals owned by a user, with optional filters.
+
+    This enables cross-goal portfolio views (e.g. 'all tasks due this week').
+    """
+    allowed_sort = {"order_index", "due_date", "priority", "status", "created_at", "updated_at", "title"}
+    if sort_field not in allowed_sort:
+        sort_field = "order_index"
+    if sort_dir.lower() not in ("asc", "desc"):
+        sort_dir = "asc"
+
+    query = """
+        SELECT t.* FROM tasks t
+        JOIN goals g ON t.goal_id = g.id
+        WHERE g.user_id = ?
+    """
+    params: list = [user_id]
+
+    if status:
+        query += " AND t.status = ?"
+        params.append(status)
+    if priority:
+        query += " AND t.priority = ?"
+        params.append(priority)
+    if assigned_to is not None:
+        query += " AND t.assigned_to = ?"
+        params.append(assigned_to)
+    if tags:
+        # Match any tag in the comma-separated tags field
+        for tag in tags.split(","):
+            tag = tag.strip()
+            if tag:
+                query += " AND t.tags LIKE ?"
+                params.append(f"%{tag}%")
+    if due_before:
+        query += " AND t.due_date != '' AND t.due_date <= ?"
+        params.append(due_before)
+    if due_after:
+        query += " AND t.due_date != '' AND t.due_date >= ?"
+        params.append(due_after)
+
+    query += f" ORDER BY t.{sort_field} {sort_dir}"
+    query += " LIMIT ?"
+    params.append(limit)
+
+    with _conn() as con:
+        rows = con.execute(query, params).fetchall()
+    return [_row_to_task(r) for r in rows]
