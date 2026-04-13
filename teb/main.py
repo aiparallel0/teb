@@ -37,6 +37,7 @@ from teb.models import (
 from teb.routers.health import router as health_router, set_start_time as _set_health_start_time, increment_request_metrics
 from teb.routers.auth import router as auth_router, set_rate_limiter as _set_auth_rate_limiter
 from teb.routers.settings import router as settings_router
+from teb.routers.notifications import router as notifications_router, set_rate_limiter as _set_notif_rate_limiter
 
 # ─── Logging ──────────────────────────────────────────────────────────────────
 
@@ -405,9 +406,11 @@ _TEMPLATES_DIR = Path(__file__).parent / "templates"
 app.include_router(health_router)
 app.include_router(auth_router)
 app.include_router(settings_router)
+app.include_router(notifications_router)
 
 # Wire up shared state for routers
 _set_auth_rate_limiter(_check_rate_limit)
+_set_notif_rate_limiter(_check_api_rate_limit)
 
 app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
 
@@ -5096,44 +5099,7 @@ async def join_workspace_endpoint(request: Request):
     return member.to_dict()
 
 
-# ─── Phase 2: Notification endpoints ─────────────────────────────────────────
-
-@app.get("/api/notifications")
-async def list_notifications_endpoint(request: Request,
-                                      unread_only: bool = Query(False),
-                                      limit: int = Query(50)):
-    """List notifications for the current user."""
-    uid = _require_user(request)
-    _check_api_rate_limit(request)
-    return [n.to_dict() for n in storage.list_user_notifications(uid, unread_only=unread_only, limit=limit)]
-
-
-@app.post("/api/notifications/{notif_id}/read")
-async def mark_notification_read_endpoint(notif_id: int, request: Request):
-    """Mark a single notification as read."""
-    uid = _require_user(request)
-    _check_api_rate_limit(request)
-    ok = storage.mark_notification_read(notif_id, uid)
-    if not ok:
-        raise HTTPException(status_code=404, detail="Notification not found")
-    return {"read": True}
-
-
-@app.post("/api/notifications/read-all")
-async def mark_all_notifications_read_endpoint(request: Request):
-    """Mark all notifications as read."""
-    uid = _require_user(request)
-    _check_api_rate_limit(request)
-    count = storage.mark_all_notifications_read(uid)
-    return {"marked": count}
-
-
-@app.get("/api/notifications/count")
-async def count_notifications_endpoint(request: Request):
-    """Get unread notification count."""
-    uid = _require_user(request)
-    _check_api_rate_limit(request)
-    return {"unread": storage.count_unread_notifications(uid)}
+# Notification routes moved to teb/routers/notifications.py
 
 
 # ─── Phase 2: Activity Feed endpoint ─────────────────────────────────────────

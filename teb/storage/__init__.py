@@ -27,3 +27,9 @@ from teb.storage.base import (  # noqa: F401
 # Re-export all domain functions from the monolith
 # These will be gradually migrated to their own submodules
 from teb.storage._monolith import *  # noqa: F401,F403
+
+# Also export private-prefixed functions that are referenced externally
+# (tests, templates endpoint, etc.)
+from teb.storage._monolith import (  # noqa: F401,E402
+    _detect_goal_type,
+)
