@@ -398,6 +398,7 @@ class TaskPatch(BaseModel):
     due_date: Optional[str] = Field(None, max_length=30)
     depends_on: Optional[list] = None
     tags: Optional[str] = Field(None, max_length=_MAX_TAG_LEN)
+    priority: Optional[str] = None
 
     @field_validator("status")
     @classmethod
@@ -1188,6 +1189,12 @@ async def update_task(task_id: int, body: TaskPatch, request: Request):
     if body.tags is not None:
         task.tags = body.tags
 
+    if body.priority is not None:
+        valid_priorities = {"high", "normal", "low"}
+        if body.priority not in valid_priorities:
+            raise HTTPException(status_code=422, detail=f"priority must be one of {valid_priorities}")
+        task.priority = body.priority
+
     # Update the goal's status if all tasks are done
     try:
         task = storage.update_task(task)
@@ -1710,6 +1717,7 @@ async def get_agent_activity(goal_id: int, request: Request):
         "agents_involved": sorted(agent_types),
         "handoffs": [h.to_dict() for h in handoffs],
         "messages": [m.to_dict() for m in messages],
+        "activity": [a.to_dict() for a in storage.get_agent_activity(goal_id)],
         "task_agent_map": task_agent_map,
         "total_tasks_created": len(tasks),
         "tasks_by_agent": {

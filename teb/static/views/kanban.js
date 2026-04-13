@@ -151,8 +151,10 @@ const KanbanView = {
 
             const tags = (task.tags || []).map(t => `<span class="tag">${escHtml(t)}</span>`).join('');
             const dueDate = task.due_date ? `<span class="due-date">\uD83D\uDCC5 ${escHtml(task.due_date)}</span>` : '';
+            const priority = task.priority || 'normal';
+            const dotHtml = `<span class="priority-dot priority-dot--${escHtml(priority)}" title="Priority: ${escHtml(priority)}"></span>`;
             card.innerHTML = `
-              <div class="kanban-card-title">${escHtml(task.title)}</div>
+              <div class="kanban-card-title">${dotHtml} ${escHtml(task.title)}</div>
               <div class="kanban-card-meta">
                 <span class="est-time">\u{23F1} ${task.estimated_minutes || 0}m</span>
                 ${dueDate}

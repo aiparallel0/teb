@@ -16,6 +16,151 @@ function on(id, event, fn) {
   if (el) el.addEventListener(event, fn);
 }
 
+// ─── Global helpers: empty state, error state, skeleton ───────────────────────
+
+function renderEmpty(container, { icon = '📭', title = 'Nothing here yet', subtitle = '', action = null } = {}) {
+  if (!container) return;
+  const actionHtml = action
+    ? `<div class="empty-state__action"><button class="btn btn-primary" id="_empty_action">${escHtml(action.label)}</button></div>`
+    : '';
+  container.innerHTML = `
+    <div class="empty-state">
+      <div class="empty-state__icon">${escHtml(icon)}</div>
+      <p class="empty-state__title">${escHtml(title)}</p>
+      ${subtitle ? `<p class="empty-state__subtitle">${escHtml(subtitle)}</p>` : ''}
+      ${actionHtml}
+    </div>`;
+  if (action) {
+    const btn = container.querySelector('#_empty_action');
+    if (btn) btn.addEventListener('click', action.onClick);
+  }
+}
+
+function renderError(container, message, onRetry) {
+  if (!container) return;
+  container.innerHTML = `
+    <div class="error-state">
+      <div class="error-state__icon">⚠️</div>
+      <p class="error-state__message">${escHtml(message || 'Something went wrong.')}</p>
+      ${onRetry ? '<button class="btn btn-secondary" id="_retry_btn">Retry</button>' : ''}
+    </div>`;
+  if (onRetry) {
+    const btn = container.querySelector('#_retry_btn');
+    if (btn) btn.addEventListener('click', onRetry);
+  }
+}
+
+function renderSkeleton(container, rows = 3) {
+  if (!container) return;
+  container.innerHTML = Array.from({ length: rows })
+    .map(() => '<div class="skeleton skeleton-row"></div>')
+    .join('');
+}
+
+// ─── Onboarding Tour ──────────────────────────────────────────────────────────
+
+class OnboardingTour {
+  constructor() {
+    this.steps = [
+      { target: null, title: 'Welcome to teb! 🎯', body: 'teb bridges human intention and real-world outcomes. Let\'s show you around.' },
+      { target: 'goal-title', title: 'Create a Goal', body: 'Type what you want to achieve — teb will break it into actionable tasks.' },
+      { target: 'btn-create-goal', title: 'Decompose It', body: 'Hit this button to auto-decompose your goal into tasks.' },
+      { target: 'sidebar', title: 'Switch Views', body: 'Use the sidebar to navigate between Kanban, Calendar, Timeline, and more.' },
+      { target: 'sidebar-goals-list', title: 'Your Goals', body: 'All your goals appear here. Click one to dive in.' },
+    ];
+    this.current = 0;
+    this.overlay = null;
+    this.card = null;
+    this.spotlight = null;
+  }
+
+  init() {
+    if (localStorage.getItem('teb_onboarded')) return;
+    this._createOverlay();
+    this._showStep(0);
+  }
+
+  _createOverlay() {
+    this.overlay = document.createElement('div');
+    this.overlay.className = 'tour-overlay';
+    this.overlay.addEventListener('click', (e) => { if (e.target === this.overlay) this.finish(); });
+    document.body.appendChild(this.overlay);
+
+    this.card = document.createElement('div');
+    this.card.className = 'tour-card';
+    document.body.appendChild(this.card);
+
+    this.spotlight = document.createElement('div');
+    this.spotlight.className = 'tour-spotlight';
+    document.body.appendChild(this.spotlight);
+  }
+
+  _showStep(idx) {
+    if (idx < 0 || idx >= this.steps.length) { this.finish(); return; }
+    this.current = idx;
+    const step = this.steps[idx];
+    const isLast = idx === this.steps.length - 1;
+
+    // Position spotlight
+    if (step.target) {
+      const el = document.getElementById(step.target);
+      if (el) {
+        const rect = el.getBoundingClientRect();
+        this.spotlight.style.display = 'block';
+        this.spotlight.style.left = (rect.left - 6) + 'px';
+        this.spotlight.style.top = (rect.top - 6) + 'px';
+        this.spotlight.style.width = (rect.width + 12) + 'px';
+        this.spotlight.style.height = (rect.height + 12) + 'px';
+      } else {
+        this.spotlight.style.display = 'none';
+      }
+    } else {
+      this.spotlight.style.display = 'none';
+    }
+
+    // Position card
+    this.card.innerHTML = `
+      <p style="font-weight:600;margin:0 0 0.5rem">${escHtml(step.title)}</p>
+      <p style="margin:0;font-size:0.9rem">${escHtml(step.body)}</p>
+      <div class="tour-nav">
+        <span class="tour-step-counter">${idx + 1} / ${this.steps.length}</span>
+        <div style="display:flex;gap:0.5rem">
+          <button class="btn btn-secondary btn-sm" id="_tour_skip">Skip</button>
+          <button class="btn btn-primary btn-sm" id="_tour_next">${isLast ? 'Done' : 'Next'}</button>
+        </div>
+      </div>`;
+
+    // Position card near spotlight or center
+    if (step.target) {
+      const el = document.getElementById(step.target);
+      if (el) {
+        const rect = el.getBoundingClientRect();
+        this.card.style.top = (rect.bottom + 16) + 'px';
+        this.card.style.left = Math.max(16, Math.min(rect.left, window.innerWidth - 380)) + 'px';
+      }
+    } else {
+      this.card.style.top = '50%';
+      this.card.style.left = '50%';
+      this.card.style.transform = 'translate(-50%, -50%)';
+    }
+
+    const skipBtn = this.card.querySelector('#_tour_skip');
+    const nextBtn = this.card.querySelector('#_tour_next');
+    if (skipBtn) skipBtn.addEventListener('click', () => this.finish());
+    if (nextBtn) nextBtn.addEventListener('click', () => {
+      if (isLast) this.finish();
+      else this._showStep(idx + 1);
+    });
+  }
+
+  finish() {
+    localStorage.setItem('teb_onboarded', '1');
+    if (this.overlay && this.overlay.parentNode) this.overlay.parentNode.removeChild(this.overlay);
+    if (this.card && this.card.parentNode) this.card.parentNode.removeChild(this.card);
+    if (this.spotlight && this.spotlight.parentNode) this.spotlight.parentNode.removeChild(this.spotlight);
+  }
+}
+
 // ─── Base path (injected by server; falls back to "" for standalone) ──────────
 const BASE_PATH = (window.__BASE_PATH__ || '').replace(/\/$/, '');
 
@@ -365,20 +510,54 @@ function initSidebar() {
   });
 
   document.getElementById('btn-mobile-menu')?.addEventListener('click', () => {
-    document.getElementById('sidebar')?.classList.toggle('mobile-open');
+    const sidebar = document.getElementById('sidebar');
+    if (!sidebar) return;
+    sidebar.classList.toggle('mobile-open');
+    sidebar.classList.toggle('sidebar--open');
+    // Create/remove overlay for mobile
+    let overlay = document.querySelector('.sidebar-overlay');
+    if (sidebar.classList.contains('sidebar--open')) {
+      if (!overlay) {
+        overlay = document.createElement('div');
+        overlay.className = 'sidebar-overlay';
+        overlay.addEventListener('click', () => {
+          sidebar.classList.remove('mobile-open', 'sidebar--open');
+          if (overlay && overlay.parentNode) overlay.parentNode.removeChild(overlay);
+        });
+        document.body.appendChild(overlay);
+      }
+    } else {
+      if (overlay && overlay.parentNode) overlay.parentNode.removeChild(overlay);
+    }
   });
 
   // Close sidebar on mobile when clicking a link
   document.querySelectorAll('.sidebar-link, .sidebar-goal-link').forEach(el => {
     el.addEventListener('click', () => {
-      document.getElementById('sidebar')?.classList.remove('mobile-open');
+      const sidebar = document.getElementById('sidebar');
+      if (sidebar) { sidebar.classList.remove('mobile-open', 'sidebar--open'); }
+      const overlay = document.querySelector('.sidebar-overlay');
+      if (overlay && overlay.parentNode) overlay.parentNode.removeChild(overlay);
     });
   });
 
   // Admin button in sidebar
   document.getElementById('btn-sidebar-admin')?.addEventListener('click', () => {
     Router.navigate('#/admin');
-    document.getElementById('sidebar')?.classList.remove('mobile-open');
+    const sidebar = document.getElementById('sidebar');
+    if (sidebar) { sidebar.classList.remove('mobile-open', 'sidebar--open'); }
+    const overlay = document.querySelector('.sidebar-overlay');
+    if (overlay && overlay.parentNode) overlay.parentNode.removeChild(overlay);
+  });
+
+  // Escape key closes mobile sidebar
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      const sidebar = document.getElementById('sidebar');
+      if (sidebar) { sidebar.classList.remove('mobile-open', 'sidebar--open'); }
+      const overlay = document.querySelector('.sidebar-overlay');
+      if (overlay && overlay.parentNode) overlay.parentNode.removeChild(overlay);
+    }
   });
 }
 
@@ -1011,6 +1190,9 @@ on('btn-auth-submit', 'click', async () => {
     updateHeaderUser();
     Router.navigate('#/home');
     toast.success('Welcome!', authMode === 'register' ? 'Account created successfully.' : 'Signed in.');
+    try { new OnboardingTour().init(); } catch (_) { /* non-critical */ }
+    loadXpBar();
+    startAutopilotPolling();
   } catch (e) {
     showError('error-auth', e.message);
   } finally {
@@ -1048,6 +1230,7 @@ on('btn-logout', 'click', () => {
   localStorage.removeItem('teb_email');
   updateUserBar();
   updateHeaderUser();
+  stopAutopilotPolling();
   Router.navigate('#/auth');
   toast.info('Signed out', 'You have been logged out.');
 });
@@ -1263,6 +1446,42 @@ async function triggerDecompose(goalId) {
   }
 }
 
+// ─── Streak badge ─────────────────────────────────────────────────────────────
+
+async function renderStreakBadge(goalId, container) {
+  if (!container) return;
+  // Remove any existing streak badge
+  const existing = container.querySelector('.streak-badge-auto');
+  if (existing) existing.remove();
+  try {
+    const checkins = await api.get(`/api/goals/${goalId}/checkins`);
+    if (!Array.isArray(checkins) || checkins.length === 0) return;
+
+    const sorted = checkins.slice().sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+    let streak = 0;
+    let cursor = new Date();
+    cursor.setHours(0, 0, 0, 0);
+
+    for (const c of sorted) {
+      const d = new Date(c.created_at);
+      d.setHours(0, 0, 0, 0);
+      const diff = Math.round((cursor - d) / 86400000);
+      if (diff <= 1) { streak++; cursor = d; }
+      else break;
+    }
+
+    if (streak === 0) return;
+    const lastCheckin = new Date(sorted[0].created_at);
+    const hoursSince = (Date.now() - lastCheckin.getTime()) / 3600000;
+    const atRisk = hoursSince > 24;
+    const badge = document.createElement('span');
+    badge.className = 'streak-badge streak-badge-auto';
+    badge.title = atRisk ? 'No check-in in 24h — streak at risk' : `${streak}-day streak`;
+    badge.textContent = atRisk ? `⚠️ ${streak}d streak at risk` : `🔥 ${streak} day streak`;
+    container.appendChild(badge);
+  } catch (_) { /* non-critical */ }
+}
+
 // ─── Tasks screen ─────────────────────────────────────────────────────────────
 
 async function showTasksScreen(goal, freshDecompose) {
@@ -1270,6 +1489,8 @@ async function showTasksScreen(goal, freshDecompose) {
   currentGoalTitle = goal.title;
   const goalTitleEl = document.getElementById('tasks-goal-title');
   if (goalTitleEl) goalTitleEl.textContent = goal.title;
+  // Render streak badge next to goal title
+  if (goalTitleEl) renderStreakBadge(goal.id, goalTitleEl.parentElement || goalTitleEl);
   currentTasks = goal.tasks || [];
   renderTasks(currentTasks);
   updateProgress(currentTasks);
@@ -1487,6 +1708,7 @@ on('btn-drip-done', 'click', async () => {
     showCelebration('✅');
     await refreshGoalView();
     loadDrip();
+    loadXpBar();
   } catch (e) {
     showError('error-tasks', e.message);
   }
@@ -1571,12 +1793,16 @@ function buildTaskCard(task, subtasks, byParent, depth) {
   // Due date display
   const dueHtml = task.due_date ? `<span class="due-date" title="Due ${task.due_date}">📅 ${task.due_date}</span>` : '';
 
+  // Priority dot
+  const priority = task.priority || 'normal';
+  const dotHtml = `<span class="priority-dot priority-dot--${escHtml(priority)}" title="Priority: ${escHtml(priority)}"></span>`;
+
   card.innerHTML = `
     <div class="task-header">
       <input type="checkbox" class="task-select-checkbox" data-id="${task.id}" title="Select for batch" aria-label="Select task" />
       <div class="task-checkbox ${cbClass}" data-id="${task.id}" title="Mark done"></div>
       <div class="task-info">
-        <div class="task-title task-title-editable" contenteditable="true" data-task-id="${task.id}" spellcheck="false">${escHtml(task.title)}</div>
+        <div class="task-title task-title-editable" contenteditable="true" data-task-id="${task.id}" spellcheck="false">${dotHtml} ${escHtml(task.title)}</div>
         <div class="task-meta">
           <span class="task-time-pill">⏱ ${task.estimated_minutes}m</span>
           ${dueHtml}
@@ -2135,6 +2361,70 @@ async function autoSuggestOutcomes(goalId) {
 
 // ─── Agent activity (load on page view, not just after orchestrate) ───────────
 
+// ─── XP bar in sidebar footer ─────────────────────────────────────────────────
+
+async function loadXpBar() {
+  const container = document.getElementById('xp-bar-container');
+  if (!container) return;
+  try {
+    const data = await api.get('/api/users/me/xp');
+    const xp = data.total_xp || 0;
+    const level = data.level || 1;
+    const pct = Math.min(100, Math.round(((xp % 100) / 100) * 100));
+    container.innerHTML = `
+      <div class="xp-bar-label">
+        <span>Level ${escHtml(String(level))}</span>
+        <span>${escHtml(String(xp % 100))} / 100 XP</span>
+      </div>
+      <div class="xp-bar-track">
+        <div class="xp-bar-fill" id="xp-bar-fill" style="width: 0%"></div>
+      </div>`;
+    requestAnimationFrame(() => {
+      const fill = document.getElementById('xp-bar-fill');
+      if (fill) fill.style.width = pct + '%';
+    });
+  } catch (_) { /* non-critical, fail silently */ }
+}
+
+// ─── Autopilot status badge ──────────────────────────────────────────────────
+
+let _autopilotPollInterval = null;
+const AUTOPILOT_POLL_INTERVAL_MS = 30000;
+
+async function loadAutopilotBadge() {
+  const badge = document.getElementById('autopilot-badge');
+  if (!badge) return;
+  try {
+    const data = await api.get('/api/auto-execute/status');
+    const running = data.running === true;
+    const dotClass = running ? 'autopilot-dot--running' : 'autopilot-dot--idle';
+    const label = running ? 'Autopilot ON' : 'Autopilot OFF';
+    badge.innerHTML = `<span class="autopilot-dot ${escHtml(dotClass)}"></span><span>${escHtml(label)}</span>`;
+    badge.title = running
+      ? `Tasks queued: ${data.queued || 0} · Executed today: ${data.executed_today || 0}`
+      : 'Autopilot is idle';
+  } catch (_) {
+    if (badge) badge.innerHTML = '';
+  }
+}
+
+function startAutopilotPolling() {
+  if (_autopilotPollInterval) return;
+  loadAutopilotBadge();
+  _autopilotPollInterval = setInterval(loadAutopilotBadge, AUTOPILOT_POLL_INTERVAL_MS);
+}
+
+function stopAutopilotPolling() {
+  if (_autopilotPollInterval) {
+    clearInterval(_autopilotPollInterval);
+    _autopilotPollInterval = null;
+  }
+  const badge = document.getElementById('autopilot-badge');
+  if (badge) badge.innerHTML = '';
+}
+
+// ─── Agent activity ──────────────────────────────────────────────────────────
+
 async function loadAgentActivity() {
   if (!currentGoalId) return;
   const panel = document.getElementById('agent-activity-panel');
@@ -2582,6 +2872,13 @@ function init() {
   const themeBtn = document.getElementById('btn-theme-toggle');
   if (themeBtn) themeBtn.addEventListener('click', toggleTheme);
 
+  // Tour trigger button
+  const tourBtn = document.getElementById('tour-trigger-btn');
+  if (tourBtn) tourBtn.addEventListener('click', () => {
+    localStorage.removeItem('teb_onboarded');
+    try { new OnboardingTour().init(); } catch (_) { /* non-critical */ }
+  });
+
   // Header auth button
   document.getElementById('btn-header-auth')?.addEventListener('click', () => Router.navigate('#/auth'));
 
@@ -2594,6 +2891,8 @@ function init() {
       const sidebarAdmin = document.getElementById('btn-sidebar-admin');
       if (sidebarAdmin) sidebarAdmin.style.display = me && me.role === 'admin' ? '' : 'none';
     }).catch(() => {});
+    loadXpBar();
+    startAutopilotPolling();
   }
 
   // Initialize router (handles initial route)

@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Python 3.12](https://img.shields.io/badge/Python-3.12-3776AB.svg)](https://python.org)
-[![Tests: 601 passing](https://img.shields.io/badge/Tests-601_passing-brightgreen.svg)](#running-tests)
+[![CI](https://github.com/aiparallel0/teb/actions/workflows/ci.yml/badge.svg)](https://github.com/aiparallel0/teb/actions/workflows/ci.yml)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.115-009688.svg)](https://fastapi.tiangolo.com)
 
 > *Humans are will without infinite execution; AI is infinite execution without will — teb sits at that seam, taking your raw intentions and dissolving everything beneath them into solved problems. You stop managing tasks and start governing outcomes.*

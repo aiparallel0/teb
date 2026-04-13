@@ -325,9 +325,32 @@ def run_agent(
     if spec is None:
         return AgentOutput(tasks=[], delegations=[], summary=f"Unknown agent type: {agent_type}")
 
-    if config.has_ai():
-        return _run_agent_ai(spec, goal, instruction, context)
-    return _run_agent_template(spec, goal, instruction)
+    activity_id = None
+    if goal.id is not None:
+        try:
+            activity_id = storage.store_agent_activity(goal.id, agent_type, "started")
+        except Exception:
+            pass  # non-critical — don't block agent execution
+
+    try:
+        if config.has_ai():
+            result = _run_agent_ai(spec, goal, instruction, context)
+        else:
+            result = _run_agent_template(spec, goal, instruction)
+
+        if activity_id is not None:
+            try:
+                storage.update_agent_activity_status(activity_id, "done", result.summary or "")
+            except Exception:
+                pass
+        return result
+    except Exception as e:
+        if activity_id is not None:
+            try:
+                storage.update_agent_activity_status(activity_id, "error", str(e))
+            except Exception:
+                pass
+        raise
 
 
 def _run_agent_ai(
