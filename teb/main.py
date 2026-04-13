@@ -6974,6 +6974,30 @@ async def import_csv(request: Request):
     return {"goal": goal.to_dict(), "tasks_imported": len(tasks)}
 
 
+@app.post("/api/import/langchain", status_code=201, tags=["import"])
+async def import_langchain_workflow(request: Request):
+    """Import a LangChain agent/chain workflow export."""
+    uid = _require_user(request)
+    _check_api_rate_limit(request)
+    body = await request.json()
+    data = body.get("data", body)
+    from teb import importers
+    goal, tasks = importers.import_from_langchain(uid, data)
+    return {"goal": goal.to_dict(), "tasks": [t.to_dict() for t in tasks]}
+
+
+@app.post("/api/import/crewai", status_code=201, tags=["import"])
+async def import_crewai_crew(request: Request):
+    """Import a CrewAI crew export."""
+    uid = _require_user(request)
+    _check_api_rate_limit(request)
+    body = await request.json()
+    data = body.get("data", body)
+    from teb import importers
+    goal, tasks = importers.import_from_crewai(uid, data)
+    return {"goal": goal.to_dict(), "tasks": [t.to_dict() for t in tasks]}
+
+
 @app.get("/api/goals/{goal_id}/export/full", tags=["export"])
 async def export_full_project(goal_id: int, request: Request):
     """Export a full goal with all tasks, comments, and artifacts."""
@@ -7049,6 +7073,8 @@ async def export_schema_docs(request: Request):
             "jira": "POST /api/import/jira",
             "clickup": "POST /api/import/clickup",
             "csv": "POST /api/import/csv",
+            "langchain": "POST /api/import/langchain",
+            "crewai": "POST /api/import/crewai",
         },
     }
 
