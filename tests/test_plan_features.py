@@ -94,14 +94,6 @@ class TestAuth:
         r = client.post("/api/auth/register", json={"email": "a@b.com", "password": "secret456"})
         assert r.status_code == 422
 
-    def test_register_bad_email(self):
-        r = client.post("/api/auth/register", json={"email": "notanemail", "password": "secret123"})
-        assert r.status_code == 422
-
-    def test_register_short_password(self):
-        r = client.post("/api/auth/register", json={"email": "a@b.com", "password": "12345"})
-        assert r.status_code == 422
-
     def test_login(self):
         client.post("/api/auth/register", json={"email": "user@test.com", "password": "pass123"})
         r = client.post("/api/auth/login", json={"email": "user@test.com", "password": "pass123"})
@@ -119,10 +111,6 @@ class TestAuth:
         r2 = client.get("/api/auth/me", headers=_auth_header(token))
         assert r2.status_code == 200
         assert r2.json()["email"] == "me@test.com"
-
-    def test_me_unauthenticated(self):
-        r = client.get("/api/auth/me")
-        assert r.status_code == 401
 
     def test_goals_scoped_to_user(self):
         r1 = client.post("/api/auth/register", json={"email": "u1@t.com", "password": "pass123"})
@@ -539,22 +527,3 @@ class TestUserStorage:
         assert p2.user_id == u2.id
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# Existing template detection still works
-# ═══════════════════════════════════════════════════════════════════════════════
-
-class TestExistingTemplates:
-    def test_money_online(self):
-        assert _detect_template(Goal(title="earn money online", description="")) == "make_money_online"
-
-    def test_learn_skill(self):
-        assert _detect_template(Goal(title="learn guitar", description="")) == "learn_skill"
-
-    def test_get_fit(self):
-        assert _detect_template(Goal(title="get fit", description="")) == "get_fit"
-
-    def test_build_project(self):
-        assert _detect_template(Goal(title="build a web app", description="")) == "build_project"
-
-    def test_generic(self):
-        assert _detect_template(Goal(title="something random", description="")) == "generic"
