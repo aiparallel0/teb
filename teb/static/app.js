@@ -5170,3 +5170,53 @@ const LazyViews = {
     });
   }
 };
+
+// ─── Service Worker Registration + Offline Queue ─────────────────────────────
+
+(function initServiceWorker() {
+  if (!('serviceWorker' in navigator)) return;
+
+  navigator.serviceWorker.register('./static/sw.js', { scope: './' })
+    .then(function(reg) { console.log('SW registered:', reg.scope); })
+    .catch(function(err) { console.warn('SW registration failed:', err); });
+
+  // Listen for messages from the service worker
+  navigator.serviceWorker.addEventListener('message', function(event) {
+    var data = event.data;
+    if (!data) return;
+
+    if (data.type === 'offline-queue-replay') {
+      if (typeof showToast === 'function') {
+        showToast('Replaying ' + data.count + ' queued request(s)…', 'info');
+      }
+    }
+    if (data.type === 'offline-queue-conflict') {
+      if (typeof showToast === 'function') {
+        showToast('Conflict detected for offline request — please review', 'warning');
+      }
+    }
+    if (data.type === 'offline-queue-complete') {
+      if (typeof showToast === 'function') {
+        var msg = data.replayed + ' request(s) replayed';
+        if (data.failed > 0) msg += ', ' + data.failed + ' failed';
+        showToast(msg, data.failed > 0 ? 'warning' : 'success');
+      }
+    }
+  });
+
+  // Replay offline queue when coming back online
+  window.addEventListener('online', function() {
+    if (navigator.serviceWorker.controller) {
+      navigator.serviceWorker.controller.postMessage({ type: 'replay-queue' });
+    }
+    if (typeof showToast === 'function') {
+      showToast('Back online — syncing changes…', 'info');
+    }
+  });
+
+  window.addEventListener('offline', function() {
+    if (typeof showToast === 'function') {
+      showToast('You are offline — changes will be saved and synced when reconnected', 'warning');
+    }
+  });
+})();
