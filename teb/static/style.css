@@ -91,15 +91,13 @@
   /* ── Typography — Baroque serif display + Clean sans body ── */
   --font-display: 'Cormorant Garamond', Georgia, 'Times New Roman', serif;
   --font-body: 'Outfit', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
-  --font-mono: 'JetBrains Mono', 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+  --font-mono: 'SF Mono', 'Fira Code', 'Cascadia Code', ui-monospace, monospace;
   --text-xs: .75rem;    --text-sm: .8125rem;  --text-base: .9375rem;
   --text-lg: 1.0625rem; --text-xl: 1.25rem;   --text-2xl: 1.5rem;
   --text-3xl: 2rem;     --text-4xl: 2.75rem;  --text-5xl: 3.5rem;
-  --font-weight-light: 300;
   --font-weight-regular: 400;
   --font-weight-medium: 500;
   --font-weight-semibold: 600;
-  --font-weight-bold: 700;
   --leading-tight: 1.2;    --leading-normal: 1.5;  --leading-relaxed: 1.625;
 
   /* ── Radius — Architectural, less bubbly ── */
@@ -204,7 +202,7 @@ body {
 ::placeholder {
   font-family: var(--font-body);
   color: var(--placeholder);
-  font-weight: var(--font-weight-light);
+  font-weight: var(--font-weight-regular);
 }
 
 #app { width: 100%; max-width: 780px; margin: 0 auto; padding: 0 var(--space-md); }
@@ -238,7 +236,7 @@ body {
 }
 .hero .tagline {
   font-family: var(--font-display);
-  font-weight: var(--font-weight-light);
+  font-weight: var(--font-weight-regular);
   font-style: normal;
   color: var(--muted);
   margin-top: var(--space-sm);
@@ -425,7 +423,7 @@ button:disabled { opacity: .5; cursor: not-allowed; pointer-events: none; }
 }
 .goal-item-status {
   font-size: var(--text-xs);
-  font-weight: var(--font-weight-bold);
+  font-weight: var(--font-weight-semibold);
   text-transform: uppercase;
   letter-spacing: .05em;
   padding: .2rem .625rem;
@@ -535,7 +533,7 @@ button:disabled { opacity: .5; cursor: not-allowed; pointer-events: none; }
   content: '✓';
   color: #fff;
   font-size: .85rem;
-  font-weight: var(--font-weight-bold);
+  font-weight: var(--font-weight-semibold);
 }
 
 .task-info { flex: 1; min-width: 0; }
@@ -631,7 +629,7 @@ button:disabled { opacity: .5; cursor: not-allowed; pointer-events: none; }
   content: '✓';
   color: #fff;
   font-size: .7rem;
-  font-weight: var(--font-weight-bold);
+  font-weight: var(--font-weight-semibold);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -867,7 +865,7 @@ button:disabled { opacity: .5; cursor: not-allowed; pointer-events: none; }
 .checkin-history-mood {
   display: inline-block;
   font-size: .65rem;
-  font-weight: var(--font-weight-bold);
+  font-weight: var(--font-weight-semibold);
   padding: .1rem .4rem;
   border-radius: var(--radius-full);
   margin-left: .3rem;
@@ -939,7 +937,7 @@ button:disabled { opacity: .5; cursor: not-allowed; pointer-events: none; }
 }
 .outcome-metric-pct {
   font-size: var(--text-xs);
-  font-weight: var(--font-weight-bold);
+  font-weight: var(--font-weight-semibold);
   color: var(--accent);
   min-width: 35px;
   text-align: right;
@@ -1310,7 +1308,7 @@ hr {
   font-style: italic;
   color: var(--muted);
   font-size: var(--text-lg);
-  font-weight: var(--font-weight-light);
+  font-weight: var(--font-weight-regular);
   letter-spacing: .02em;
 }
 
@@ -1414,7 +1412,7 @@ hr {
   content: "+";
   font-family: var(--font-body);
   font-size: var(--text-base);
-  font-weight: var(--font-weight-light);
+  font-weight: var(--font-weight-regular);
   transition: transform var(--duration-fast) var(--ease-out);
   color: var(--accent);
   min-width: 1rem;
@@ -1949,7 +1947,7 @@ button:focus-visible {
   padding: .75rem 1rem;
   font-weight: var(--font-weight-medium);
 }
-#goal-title::placeholder { font-weight: var(--font-weight-light); }
+#goal-title::placeholder { font-weight: var(--font-weight-regular); }
 
 #btn-create-goal {
   margin-top: var(--space-sm);
@@ -3577,8 +3575,8 @@ html.font-xl { font-size: 20px; }
   transition: transform 0.2s ease, box-shadow 0.2s ease;
 }
 .task-card:hover, .goal-card:hover, .kanban-card:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 8px 24px rgba(0,0,0,0.15);
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-md);
 }
 
 /* Loading skeleton */
@@ -3613,14 +3611,14 @@ picture img { width: 100%; height: auto; }
 
 /* ─── Gamification ─────────────────────────────────────────────── */
 .xp-summary { display: flex; align-items: center; gap: var(--space-md); flex-wrap: wrap; }
-.xp-level-badge { background: var(--accent); color: #fff; font-weight: var(--font-weight-bold); padding: .35rem .75rem; border-radius: var(--radius-full); font-size: var(--text-sm); white-space: nowrap; }
+.xp-level-badge { background: var(--accent); color: #fff; font-weight: var(--font-weight-semibold); padding: .35rem .75rem; border-radius: var(--radius-full); font-size: var(--text-sm); white-space: nowrap; }
 .xp-bar-wrap { flex: 1; min-width: 150px; }
 .xp-bar-bg { background: var(--bg-alt); border-radius: var(--radius-full); height: 10px; overflow: hidden; }
 .xp-bar-fill { background: linear-gradient(90deg, var(--accent), var(--gold-300)); height: 100%; border-radius: var(--radius-full); transition: width .4s ease; }
 .xp-bar-label { font-size: var(--text-xs); color: var(--muted); margin-top: .25rem; display: block; }
 .streak-badge { display: inline-flex; align-items: center; gap: .35rem; background: var(--surface); border: 1px solid var(--border-subtle); padding: .35rem .75rem; border-radius: var(--radius-full); font-size: var(--text-sm); margin-top: var(--space-sm); }
 .streak-icon { font-size: 1.1rem; }
-.streak-count { font-weight: var(--font-weight-bold); color: var(--accent); }
+.streak-count { font-weight: var(--font-weight-semibold); color: var(--accent); }
 .streak-display { margin-top: var(--space-sm); }
 .achievements-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: var(--space-sm); margin-top: var(--space-md); }
 .achievement-card { display: flex; align-items: center; gap: var(--space-sm); padding: var(--space-sm) var(--space-md); border: 1px solid var(--border-subtle); border-radius: var(--radius-md); background: var(--surface); opacity: .5; }
@@ -3639,56 +3637,6 @@ picture img { width: 100%; height: auto; }
    ═══════════════════════════════════════════════════════════════════════════ */
 
 /* ─── Animated Gradient Mesh Background (Auth & Landing) ──────────────────── */
-.gradient-mesh {
-  position: fixed;
-  inset: 0;
-  z-index: -1;
-  overflow: hidden;
-  pointer-events: none;
-}
-.gradient-mesh::before,
-.gradient-mesh::after {
-  content: '';
-  position: absolute;
-  border-radius: 50%;
-  filter: blur(100px);
-  opacity: .18;
-  animation: meshFloat 20s ease-in-out infinite alternate;
-}
-.gradient-mesh::before {
-  width: 60vw; height: 60vw;
-  top: -20%; left: -10%;
-  background: radial-gradient(circle, var(--gold-400), var(--amber-300));
-}
-.gradient-mesh::after {
-  width: 50vw; height: 50vw;
-  bottom: -20%; right: -15%;
-  background: radial-gradient(circle, var(--sage-400), var(--navy-300));
-  animation-delay: -10s;
-  animation-direction: alternate-reverse;
-}
-@keyframes meshFloat {
-  0%   { transform: translate(0, 0) scale(1); }
-  33%  { transform: translate(3%, 5%) scale(1.05); }
-  66%  { transform: translate(-2%, 3%) scale(.97); }
-  100% { transform: translate(1%, -2%) scale(1.02); }
-}
-[data-theme="dark"] .gradient-mesh::before { opacity: .08; }
-[data-theme="dark"] .gradient-mesh::after  { opacity: .06; }
-
-/* Third blob for richer texture */
-.gradient-mesh-blob {
-  position: absolute;
-  width: 40vw; height: 40vw;
-  top: 30%; left: 40%;
-  border-radius: 50%;
-  filter: blur(120px);
-  opacity: .12;
-  background: radial-gradient(circle, var(--accent), var(--navy-400));
-  animation: meshFloat 25s ease-in-out infinite alternate-reverse;
-  animation-delay: -5s;
-}
-[data-theme="dark"] .gradient-mesh-blob { opacity: .05; }
 
 /* ─── Enhanced Hero Section ───────────────────────────────────────────────── */
 .hero {
@@ -3967,7 +3915,7 @@ picture img { width: 100%; height: auto; }
   content: '✓';
   color: #fff;
   font-size: .8rem;
-  font-weight: var(--font-weight-bold);
+  font-weight: var(--font-weight-semibold);
   animation: checkPop .3s var(--ease-spring);
 }
 @keyframes checkPop {

@@ -26,6 +26,11 @@ EXECUTOR_MAX_RETRIES: int = int(os.getenv("TEB_EXECUTOR_MAX_RETRIES", "2"))
 # production so that sessions persist across deployments.
 _JWT_SECRET_ENV: Optional[str] = os.getenv("TEB_JWT_SECRET")
 if not _JWT_SECRET_ENV:
+    if os.getenv("TEB_ENV", "development") == "production":
+        raise RuntimeError(
+            "TEB_JWT_SECRET must be set in production. Generate one with: "
+            "python -c 'import secrets; print(secrets.token_hex(32))'"
+        )
     JWT_SECRET: str = secrets.token_hex(32)
     logging.getLogger(__name__).warning(
         "TEB_JWT_SECRET is not set. A random JWT secret has been generated "
@@ -43,19 +48,29 @@ SECRET_KEY: Optional[str] = os.getenv("TEB_SECRET_KEY")
 
 # CORS — comma-separated origins, or "*" to allow all (dev default).
 # Restrict to your actual domain(s) in production via TEB_CORS_ORIGINS.
-CORS_ORIGINS: List[str] = [
-    o.strip()
-    for o in os.getenv("TEB_CORS_ORIGINS", "*").split(",")
-    if o.strip()
-]
+_cors_env = os.getenv("TEB_CORS_ORIGINS", "")
+if _cors_env:
+    CORS_ORIGINS: List[str] = [o.strip() for o in _cors_env.split(",") if o.strip()]
+else:
+    # Default: restrict to production domain; add localhost in development
+    CORS_ORIGINS = ["https://portearchive.com"]
+    if os.getenv("TEB_ENV", "development") != "production":
+        CORS_ORIGINS += ["http://localhost:8000", "http://localhost:3000", "http://127.0.0.1:8000"]
+
 if CORS_ORIGINS == ["*"]:
     logging.getLogger(__name__).warning(
         "TEB_CORS_ORIGINS is set to '*' (allow all origins). "
         "Set TEB_CORS_ORIGINS to your domain(s) in production."
     )
 
+# Environment
+TEB_ENV: str = os.getenv("TEB_ENV", "development")
+
 # Logging
 LOG_LEVEL: str = os.getenv("TEB_LOG_LEVEL", "INFO")
+
+# Sentry DSN for error tracking (optional)
+SENTRY_DSN: Optional[str] = os.getenv("TEB_SENTRY_DSN")
 
 # Payment providers
 MERCURY_API_KEY: Optional[str] = os.getenv("TEB_MERCURY_API_KEY")

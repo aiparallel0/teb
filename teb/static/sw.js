@@ -1,5 +1,5 @@
 // teb Service Worker — offline support + API caching
-const CACHE_NAME = 'teb-v2';
+const CACHE_NAME = 'teb-v3';
 const STATIC_ASSETS = [
   './',
   './static/style.css',
