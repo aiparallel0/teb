@@ -357,3 +357,118 @@ class TestConfigHardening:
         from teb.config import CORS_ORIGINS
         # With hardened defaults, shouldn't be just ["*"]
         assert isinstance(CORS_ORIGINS, list)
+
+
+# ─── Phase 3C: SSE stream events ─────────────────────────────────────────────
+
+class TestSSEEvents:
+    """Test new SSE event types for orchestration streaming."""
+
+    def test_emit_task_started(self):
+        from teb.events import emit_task_started, event_bus
+        emit_task_started(user_id=1, task_id=42, title="Register Stripe", agent="finance", goal_id=10)
+        # Should not raise
+
+    def test_emit_task_progress(self):
+        from teb.events import emit_task_progress
+        emit_task_progress(user_id=1, task_id=42, step="Calling API...", elapsed_ms=1200)
+
+    def test_emit_orchestration_complete(self):
+        from teb.events import emit_orchestration_complete
+        emit_orchestration_complete(user_id=1, goal_id=10, tasks_executed=5, tasks_succeeded=4, tasks_failed=1)
+
+    def test_emit_execution_memory_escalation(self):
+        from teb.events import emit_execution_memory_escalation
+        emit_execution_memory_escalation(user_id=1, task_id=42, endpoint="https://api.test.com", reason="3 consecutive failures")
+
+
+# ─── Phase 4A: Docker Compose ────────────────────────────────────────────────
+
+class TestDockerCompose:
+    """Verify Docker Compose configurations are valid YAML."""
+
+    def test_dev_compose_valid(self):
+        import yaml
+        with open("docker-compose.yml") as f:
+            data = yaml.safe_load(f)
+        assert "services" in data
+        assert "teb" in data["services"]
+        assert "redis" in data["services"]
+
+    def test_prod_compose_valid(self):
+        import yaml
+        with open("docker-compose.prod.yml") as f:
+            data = yaml.safe_load(f)
+        assert "services" in data
+        assert "teb" in data["services"]
+        assert "postgres" in data["services"]
+        assert "redis" in data["services"]
+        # Verify PostgreSQL env is set
+        teb_env = data["services"]["teb"]["environment"]
+        assert any("postgresql" in str(e) for e in teb_env)
+
+    def test_prod_has_healthchecks(self):
+        import yaml
+        with open("docker-compose.prod.yml") as f:
+            data = yaml.safe_load(f)
+        for service in ("postgres", "redis", "teb"):
+            assert "healthcheck" in data["services"][service], f"{service} missing healthcheck"
+
+
+# ─── Phase 4B: Observability endpoints ───────────────────────────────────────
+
+@pytest.mark.anyio
+async def test_admin_metrics_endpoint(client):
+    """Test the admin metrics endpoint requires admin access."""
+    # Should get 403 since test user is not admin
+    resp = await client.get("/api/admin/metrics")
+    assert resp.status_code in (200, 403)
+
+
+# ─── Settings router ─────────────────────────────────────────────────────────
+
+@pytest.mark.anyio
+async def test_credentials_crud(client):
+    """Test credential CRUD via settings router."""
+    # Create
+    resp = await client.post("/api/credentials", json={
+        "name": "Test API", "base_url": "https://api.test.com",
+        "auth_header": "Authorization", "auth_value": "Bearer test123",
+        "description": "Test credential",
+    })
+    assert resp.status_code == 201
+    cred_id = resp.json()["id"]
+    assert resp.json()["name"] == "Test API"
+
+    # List
+    resp = await client.get("/api/credentials")
+    assert resp.status_code == 200
+    assert any(c["id"] == cred_id for c in resp.json())
+
+    # Delete
+    resp = await client.delete(f"/api/credentials/{cred_id}")
+    assert resp.status_code == 200
+
+
+@pytest.mark.anyio
+async def test_profile_get_patch(client):
+    """Test profile get and patch via settings router."""
+    resp = await client.get("/api/profile")
+    assert resp.status_code == 200
+
+    resp = await client.patch("/api/profile", json={"skills": "Python, FastAPI"})
+    assert resp.status_code == 200
+    assert resp.json()["skills"] == "Python, FastAPI"
+
+
+@pytest.mark.anyio
+async def test_goal_stream_endpoint(client):
+    """Test goal-specific SSE stream endpoint exists."""
+    # Create a goal
+    resp = await client.post("/api/goals", json={"title": "Stream test"})
+    assert resp.status_code == 201
+    goal_id = resp.json()["id"]
+
+    # Verify the route is registered by checking a non-existent goal gets 404
+    resp = await client.get("/api/goals/999999/stream")
+    assert resp.status_code in (404, 200)

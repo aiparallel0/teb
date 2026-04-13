@@ -36,6 +36,7 @@ from teb.models import (
 # ─── Domain routers (extracted from monolith) ─────────────────────────────────
 from teb.routers.health import router as health_router, set_start_time as _set_health_start_time, increment_request_metrics
 from teb.routers.auth import router as auth_router, set_rate_limiter as _set_auth_rate_limiter
+from teb.routers.settings import router as settings_router
 
 # ─── Logging ──────────────────────────────────────────────────────────────────
 
@@ -260,6 +261,29 @@ async def lifespan(app: FastAPI):
     _APP_START_TIME = time.monotonic()
     _set_health_start_time(_APP_START_TIME)
 
+    # ── Structured logging ────────────────────────────────────────────────
+    try:
+        from teb.logging_config import configure_logging
+        configure_logging()
+    except Exception:
+        pass  # Fall back to default logging
+
+    # ── Sentry error tracking ────────────────────────────────────────────
+    if config.SENTRY_DSN:
+        try:
+            import sentry_sdk  # noqa: PLC0415
+            sentry_sdk.init(
+                dsn=config.SENTRY_DSN,
+                traces_sample_rate=0.1,
+                environment=config.TEB_ENV,
+                release="teb@2.0.0",
+            )
+            logger.info("Sentry initialized (env=%s)", config.TEB_ENV)
+        except ImportError:
+            logger.warning("TEB_SENTRY_DSN is set but sentry-sdk is not installed. pip install sentry-sdk")
+        except Exception as exc:
+            logger.warning("Failed to initialize Sentry: %s", exc)
+
     # ── Configuration validation at startup ───────────────────────────────
     _validate_startup_config()
 
@@ -380,6 +404,7 @@ _TEMPLATES_DIR = Path(__file__).parent / "templates"
 # ─── Include domain routers ───────────────────────────────────────────────────
 app.include_router(health_router)
 app.include_router(auth_router)
+app.include_router(settings_router)
 
 # Wire up shared state for routers
 _set_auth_rate_limiter(_check_rate_limit)
@@ -1118,44 +1143,7 @@ async def delete_task(task_id: int, request: Request):
 
 # ─── API Credentials ─────────────────────────────────────────────────────────
 
-@app.post("/api/credentials", status_code=201)
-async def create_credential(body: CredentialCreate, request: Request):
-    uid = _require_user(request)
-    name = body.name.strip()
-    base_url = body.base_url.strip()
-    if not name:
-        raise HTTPException(status_code=422, detail="name must not be empty")
-    if not base_url:
-        raise HTTPException(status_code=422, detail="base_url must not be empty")
-    cred = ApiCredential(
-        name=name,
-        base_url=base_url,
-        auth_header=body.auth_header.strip() or "Authorization",
-        auth_value=body.auth_value,
-        description=body.description.strip(),
-        user_id=uid,
-    )
-    cred = storage.create_credential(cred)
-    return cred.to_dict()
-
-
-@app.get("/api/credentials")
-async def list_credentials(request: Request):
-    uid = _require_user(request)
-    return [c.to_dict() for c in storage.list_credentials(user_id=uid)]
-
-
-@app.delete("/api/credentials/{cred_id}", status_code=200)
-async def delete_credential(cred_id: int, request: Request):
-    uid = _require_user(request)
-    cred = storage.get_credential(cred_id)
-    if not cred:
-        raise HTTPException(status_code=404, detail="Credential not found")
-    # Users can only delete their own credentials (or legacy unscoped ones)
-    if cred.user_id is not None and cred.user_id != uid:
-        raise HTTPException(status_code=403, detail="Not your credential")
-    storage.delete_credential(cred_id)
-    return {"deleted": cred_id}
+# Credential routes moved to teb/routers/settings.py
 
 
 # ─── Task execution ──────────────────────────────────────────────────────────
@@ -1433,23 +1421,7 @@ async def outcome_suggestions(goal_id: int, request: Request):
 
 # ─── User Profile ────────────────────────────────────────────────────────────
 
-@app.get("/api/profile")
-async def get_profile(request: Request):
-    uid = _require_user(request)
-    profile = storage.get_or_create_profile(user_id=uid)
-    return profile.to_dict()
-
-
-@app.patch("/api/profile")
-async def update_profile(body: dict, request: Request):
-    uid = _require_user(request)
-    profile = storage.get_or_create_profile(user_id=uid)
-    for key in ("skills", "available_hours_per_day", "experience_level",
-                "interests", "preferred_learning_style"):
-        if key in body:
-            setattr(profile, key, body[key])
-    profile = storage.update_profile(profile)
-    return profile.to_dict()
+# Profile routes moved to teb/routers/settings.py
 
 
 # ─── Proactive Suggestions ──────────────────────────────────────────────────
@@ -3422,6 +3394,47 @@ async def sse_stream(request: Request,
     from teb import events as _events  # noqa: E402
     return StreamingResponse(
         _events.stream_events(uid, last_event_id),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@app.get("/api/goals/{goal_id}/stream")
+async def goal_sse_stream(
+    goal_id: int,
+    request: Request,
+    last_event_id: Optional[str] = Query(default=None, alias="Last-Event-ID"),
+):
+    """Server-Sent Events stream filtered to a specific goal.
+
+    Emits task_started, task_progress, task_completed, and orchestration_complete
+    events for real-time orchestration visibility.
+    """
+    uid = _require_user(request)
+    _get_goal_for_user(goal_id, uid)
+
+    if not last_event_id:
+        last_event_id = request.headers.get("Last-Event-ID")
+
+    from teb import events as _events  # noqa: E402
+
+    async def _filtered_stream():
+        """Filter the user's event stream to only events for this goal."""
+        async for chunk in _events.stream_events(uid, last_event_id):
+            # Pass through heartbeats
+            if chunk.startswith(": heartbeat"):
+                yield chunk
+                continue
+            # Filter to goal-related events
+            if f'"goal_id": {goal_id}' in chunk or f'"goal_id":{goal_id}' in chunk:
+                yield chunk
+
+    return StreamingResponse(
+        _filtered_stream(),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
@@ -6914,6 +6927,70 @@ async def cache_stats(request: Request):
         "and install the 'redis' package to enable Redis caching."
     )
     return stats
+
+
+# ─── Prometheus-compatible metrics ───────────────────────────────────────────
+
+@app.get("/api/admin/metrics", tags=["enterprise"])
+async def admin_metrics(request: Request):
+    """Prometheus-compatible metrics: active users, goals, tasks, AI latency, executor success rate."""
+    _check_api_rate_limit(request)
+    _require_admin(request)
+
+    user_count = 0
+    goal_count = 0
+    task_count = 0
+    done_goals = 0
+    done_tasks = 0
+    try:
+        with storage._conn() as con:
+            user_count = con.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+            goal_count = con.execute("SELECT COUNT(*) FROM goals").fetchone()[0]
+            done_goals = con.execute("SELECT COUNT(*) FROM goals WHERE status='done'").fetchone()[0]
+            task_count = con.execute("SELECT COUNT(*) FROM tasks").fetchone()[0]
+            done_tasks = con.execute("SELECT COUNT(*) FROM tasks WHERE status='done'").fetchone()[0]
+    except Exception:
+        pass
+
+    # Execution memory stats (if available)
+    exec_stats = {}
+    try:
+        from teb.memory import get_memory_stats
+        exec_stats = get_memory_stats()
+    except Exception:
+        pass
+
+    # Success graph stats
+    graph_stats = {}
+    try:
+        from teb.success_graph import get_graph_stats
+        graph_stats = get_graph_stats()
+    except Exception:
+        pass
+
+    uptime = round(time.monotonic() - _APP_START_TIME, 1)
+
+    return {
+        "uptime_seconds": uptime,
+        "users_total": user_count,
+        "goals_total": goal_count,
+        "goals_completed": done_goals,
+        "goal_completion_rate": round(done_goals / max(goal_count, 1), 3),
+        "tasks_total": task_count,
+        "tasks_completed": done_tasks,
+        "task_completion_rate": round(done_tasks / max(task_count, 1), 3),
+        "executor": {
+            "total_calls": exec_stats.get("total_calls", 0),
+            "success_rate": exec_stats.get("success_rate", 0),
+            "avg_latency_ms": exec_stats.get("avg_latency_ms", 0),
+        },
+        "success_graph": {
+            "nodes": graph_stats.get("nodes", 0),
+            "edges": graph_stats.get("edges", 0),
+            "observations": graph_stats.get("total_observations", 0),
+        },
+        "request_metrics": _metrics,
+    }
 
 
 # ─── Phase 6.3: CDN Config ──────────────────────────────────────────────────

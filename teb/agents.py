@@ -848,6 +848,22 @@ def orchestrate_goal(goal: Goal) -> Dict[str, Any]:
     goal.status = "decomposed"
     storage.update_goal(goal)
 
+    # Emit orchestration completion event
+    try:
+        from teb.events import emit_orchestration_complete
+        if goal.user_id:
+            tasks_succeeded = sum(1 for t in all_tasks if t.status == "done")
+            tasks_failed = sum(1 for t in all_tasks if t.status == "failed")
+            emit_orchestration_complete(
+                user_id=goal.user_id,
+                goal_id=goal.id,
+                tasks_executed=len(all_tasks),
+                tasks_succeeded=tasks_succeeded,
+                tasks_failed=tasks_failed,
+            )
+    except Exception:
+        pass
+
     return {
         "goal_id": goal.id,
         "strategy": coordinator_output.summary,

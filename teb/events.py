@@ -218,6 +218,47 @@ def emit_report_generated(user_id: int, goal_id: int, report_id: int, summary: s
     })
 
 
+# ─── Phase 3C: Real-time execution stream events ─────────────────────────────
+
+def emit_task_started(user_id: int, task_id: int, title: str, agent: str, goal_id: int) -> None:
+    """Emit when an agent starts working on a task."""
+    event_bus.publish(user_id, "task_started", {
+        "task_id": task_id, "title": title, "agent": agent, "goal_id": goal_id,
+    })
+
+
+def emit_task_progress(user_id: int, task_id: int, step: str, elapsed_ms: int) -> None:
+    """Emit progress updates during task execution."""
+    event_bus.publish(user_id, "task_progress", {
+        "task_id": task_id, "step": step, "elapsed_ms": elapsed_ms,
+    })
+
+
+def emit_orchestration_complete(
+    user_id: int,
+    goal_id: int,
+    tasks_executed: int,
+    tasks_succeeded: int,
+    tasks_failed: int,
+) -> None:
+    """Emit when a full orchestration run completes."""
+    event_bus.publish(user_id, "orchestration_complete", {
+        "goal_id": goal_id,
+        "tasks_executed": tasks_executed,
+        "tasks_succeeded": tasks_succeeded,
+        "tasks_failed": tasks_failed,
+    })
+
+
+def emit_execution_memory_escalation(
+    user_id: int, task_id: int, endpoint: str, reason: str
+) -> None:
+    """Emit when execution memory blocks a call and escalates to human review."""
+    event_bus.publish(user_id, "execution_escalated", {
+        "task_id": task_id, "endpoint": endpoint, "reason": reason,
+    })
+
+
 async def stream_events(user_id: int, last_event_id: Optional[str] = None) -> AsyncGenerator[str, None]:
     """Async generator that yields SSE-formatted strings for a user.
 
