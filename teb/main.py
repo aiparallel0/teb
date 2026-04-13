@@ -359,19 +359,354 @@ def _log_startup_config() -> None:
 
 
 tags_metadata = [
-    {"name": "auth", "description": "Authentication and user management"},
-    {"name": "goals", "description": "Goal CRUD and decomposition"},
-    {"name": "tasks", "description": "Task management and execution"},
-    {"name": "intelligence", "description": "AI scheduling, prioritization, and risk detection"},
-    {"name": "collaboration", "description": "Workspaces, notifications, activity feed"},
-    {"name": "views", "description": "Kanban, Gantt, calendar, timeline views"},
-    {"name": "integrations", "description": "External service integrations"},
-    {"name": "admin", "description": "Admin panel and platform management"},
+    # ── Core ──────────────────────────────────────────────────────────────
+    {
+        "name": "health",
+        "description": (
+            "Service health probes and observability. Includes liveness and readiness "
+            "checks for container orchestrators, plus a Prometheus-compatible metrics "
+            "endpoint for monitoring dashboards."
+        ),
+    },
+    {
+        "name": "auth",
+        "description": (
+            "Authentication and user-identity management. Register and log in with "
+            "email/password (bcrypt-hashed), obtain and refresh JWT access tokens, "
+            "and retrieve the current user profile. Rate-limited to 20 requests/min "
+            "with timing-safe responses for unknown emails."
+        ),
+    },
+    {
+        "name": "settings",
+        "description": (
+            "User settings, profile management, and API credential storage. "
+            "Manage encrypted credentials (Fernet-protected when TEB_SECRET_KEY is "
+            "set) and update user profile fields."
+        ),
+    },
+    {
+        "name": "notifications",
+        "description": (
+            "In-app notification delivery and management. List, read, and bulk-mark "
+            "notifications. Supports unread-count polling for real-time UI badges."
+        ),
+    },
+    # ── Goal → Task lifecycle ─────────────────────────────────────────────
+    {
+        "name": "goals",
+        "description": (
+            "Goal CRUD and AI-powered decomposition. Create high-level goals, "
+            "trigger decomposition into executable tasks (AI or template fallback), "
+            "manage goal metadata, collaborators, milestones, budgets, and ROI "
+            "tracking. The starting point of teb's core loop: "
+            "Goal → Clarify → Decompose → Execute → Measure → Learn."
+        ),
+    },
+    {
+        "name": "tasks",
+        "description": (
+            "Task management, status transitions, and autonomous execution. "
+            "Create, update, reorder, and complete tasks within a goal. "
+            "Supports dependency tracking, time estimates, assignees, "
+            "and autonomous execution via the built-in executor."
+        ),
+    },
+    {
+        "name": "cross-goal",
+        "description": (
+            "Cross-goal task views and saved filters. Query tasks across all goals "
+            "for the current user, and retrieve tasks matching a saved view's filter "
+            "criteria — enabling portfolio-level dashboards and unified task lists."
+        ),
+    },
+    {
+        "name": "dag",
+        "description": (
+            "Directed Acyclic Graph operations for task dependency management. "
+            "Visualize the full dependency graph for a goal, validate that no cycles "
+            "exist, and trigger DAG-aware parallel execution plans that respect "
+            "task ordering constraints."
+        ),
+    },
+    # ── Intelligence ──────────────────────────────────────────────────────
+    {
+        "name": "intelligence",
+        "description": (
+            "AI-powered intelligence layer. Includes smart scheduling, auto-"
+            "prioritization, completion time estimates, risk detection, focus-block "
+            "recommendations, duplicate detection, stagnation checks, AI writing "
+            "assistance, meeting-to-tasks conversion, tag suggestion, workflow "
+            "optimization, skill-gap analysis, and status report generation. "
+            "Every endpoint falls back to heuristic/template results when no AI "
+            "provider is configured."
+        ),
+    },
+    {
+        "name": "risk",
+        "description": (
+            "Task-level risk assessment and goal-level triage. Evaluate individual "
+            "task risk factors (blockers, overdue status, complexity) and run "
+            "automated triage across all tasks in a goal to surface the highest-"
+            "priority issues."
+        ),
+    },
+    {
+        "name": "scheduling",
+        "description": (
+            "AI-assisted schedule generation and calendar integration. Auto-schedule "
+            "tasks into optimal time slots respecting dependencies and capacity, "
+            "and retrieve the current user's consolidated schedule across all goals."
+        ),
+    },
+    {
+        "name": "reporting",
+        "description": (
+            "Progress reporting and scheduled report generation. Create on-demand "
+            "goal status reports and retrieve the history of generated reports "
+            "for audit and stakeholder communication."
+        ),
+    },
+    {
+        "name": "workload",
+        "description": (
+            "Workload analysis and rebalancing. View the current user's workload "
+            "distribution across goals and trigger automated task rebalancing to "
+            "prevent overcommitment and optimize throughput."
+        ),
+    },
+    # ── Learning & Memory ─────────────────────────────────────────────────
+    {
+        "name": "success-graph",
+        "description": (
+            "Success pattern tracking and path analysis. Aggregate statistics on "
+            "completed goals, discover the most effective execution paths, and "
+            "query historical success patterns to inform future goal planning."
+        ),
+    },
+    {
+        "name": "execution-memory",
+        "description": (
+            "Execution memory and institutional knowledge. Retrieve per-goal "
+            "execution history, view aggregate memory statistics, and get "
+            "AI-generated advice based on past execution patterns — closing the "
+            "Learn phase of teb's core loop."
+        ),
+    },
+    {
+        "name": "gamification",
+        "description": (
+            "Gamification, streaks, leaderboards, and challenges. Track daily "
+            "completion streaks, view XP-based leaderboards, create and participate "
+            "in challenges, and record progress — inspired by Habitica-style "
+            "motivation systems adapted for real-world goal execution."
+        ),
+    },
+    # ── Content & Customization ───────────────────────────────────────────
+    {
+        "name": "content-blocks",
+        "description": (
+            "Rich content blocks for goals and tasks. Attach, reorder, update, "
+            "and delete structured content blocks (text, checklists, embeds) on "
+            "any entity — providing Notion-style flexible documentation within "
+            "the execution context."
+        ),
+    },
+    {
+        "name": "themes",
+        "description": (
+            "UI theme management. Browse available themes, create custom themes, "
+            "activate a theme for the current session, and retrieve the currently "
+            "active theme configuration."
+        ),
+    },
+    # ── Integrations & Extensibility ──────────────────────────────────────
+    {
+        "name": "integrations",
+        "description": (
+            "External service integrations and OAuth connections. Browse the "
+            "integration directory, initiate and complete OAuth flows, apply "
+            "integration templates, and manage Zapier triggers, actions, and "
+            "subscriptions. Includes per-integration rate-limit status."
+        ),
+    },
+    {
+        "name": "webhooks",
+        "description": (
+            "Outbound webhook rule management. Create, list, update, delete, and "
+            "test webhook delivery rules. Payloads are signed with HMAC-SHA256 "
+            "for verification by the receiving service."
+        ),
+    },
+    {
+        "name": "plugins",
+        "description": (
+            "Plugin marketplace and extensibility SDK. Browse and install plugins "
+            "from the marketplace, register custom fields and custom views, and "
+            "access SDK documentation for building third-party extensions."
+        ),
+    },
+    {
+        "name": "mcp-client",
+        "description": (
+            "Model Context Protocol (MCP) client operations. Register external MCP "
+            "servers, discover their available tools, invoke tools by name, and "
+            "search across all registered servers for matching capabilities."
+        ),
+    },
+    # ── Data Portability ──────────────────────────────────────────────────
+    {
+        "name": "import",
+        "description": (
+            "Bulk data import from external platforms. Import goals and tasks from "
+            "Monday.com, Jira, ClickUp, or generic CSV files. Each importer maps "
+            "the source schema to teb's goal/task model and returns a summary "
+            "of created entities."
+        ),
+    },
+    {
+        "name": "export",
+        "description": (
+            "Data export and schema introspection. Export a complete goal with all "
+            "tasks, dependencies, and metadata as a portable JSON bundle, or "
+            "retrieve the export schema definition for integration tooling."
+        ),
+    },
+    # ── Enterprise ────────────────────────────────────────────────────────
+    {
+        "name": "enterprise",
+        "description": (
+            "Enterprise administration and platform operations. Includes SSO/SAML "
+            "configuration, IP allowlisting, audit logging, organization management, "
+            "member provisioning, platform analytics, custom branding, compliance "
+            "reporting, database and cache diagnostics, Prometheus metrics, CDN "
+            "configuration, horizontal scaling status, and multi-region deployment."
+        ),
+    },
+    {
+        "name": "scim",
+        "description": (
+            "SCIM 2.0 user provisioning API. Standards-compliant endpoints for "
+            "automated user lifecycle management — list, create, read, update, and "
+            "deactivate users from enterprise identity providers (Okta, Azure AD, "
+            "OneLogin, etc.)."
+        ),
+    },
+    # ── Community & Documentation ─────────────────────────────────────────
+    {
+        "name": "documentation",
+        "description": (
+            "API documentation and changelog. Retrieve the structured changelog "
+            "of API and platform updates."
+        ),
+    },
+    {
+        "name": "community",
+        "description": (
+            "Community hub — template gallery, plugin directory, blog, and public "
+            "roadmap. Browse and share goal templates, discover community plugins, "
+            "read and publish blog posts, view the product roadmap, and vote on "
+            "upcoming features."
+        ),
+    },
 ]
 
 app = FastAPI(
     title="teb API",
-    description="Task Execution Bridge — AI-powered goal decomposition and autonomous execution",
+    description="""
+# teb — Task Execution Bridge
+
+> Humans are will without infinite execution; AI is infinite execution without will —
+> teb sits at that seam, taking your raw intentions and dissolving everything beneath
+> them into solved problems.
+
+## Core Loop
+
+Every endpoint in this API serves one phase of teb's execution cycle:
+
+```
+Goal → Clarify → Decompose → Execute → Measure → Learn
+```
+
+## Endpoint Groups
+
+### Core
+| Group | Purpose |
+|---|---|
+| **health** | Liveness, readiness probes, and Prometheus metrics |
+| **auth** | JWT registration, login, token refresh, and user identity |
+| **settings** | User profile and encrypted credential management |
+| **notifications** | In-app notification delivery and read tracking |
+
+### Goal → Task Lifecycle
+| Group | Purpose |
+|---|---|
+| **goals** | Goal CRUD, AI/template decomposition, milestones, budgets, ROI |
+| **tasks** | Task CRUD, status transitions, dependencies, autonomous execution |
+| **cross-goal** | Portfolio-level task queries and saved-view filters |
+| **dag** | Dependency graph visualization, cycle validation, parallel execution |
+
+### Intelligence
+| Group | Purpose |
+|---|---|
+| **intelligence** | AI scheduling, prioritization, estimates, focus blocks, writing assist |
+| **risk** | Task risk assessment and goal-level triage |
+| **scheduling** | Auto-scheduling into calendar slots with dependency awareness |
+| **reporting** | On-demand and scheduled progress reports |
+| **workload** | Workload analysis and automated rebalancing |
+
+### Learning & Memory
+| Group | Purpose |
+|---|---|
+| **success-graph** | Historical success patterns and optimal execution paths |
+| **execution-memory** | Per-goal execution history and AI-generated advice |
+| **gamification** | Streaks, XP leaderboards, and challenges |
+
+### Content & Customization
+| Group | Purpose |
+|---|---|
+| **content-blocks** | Rich content blocks (text, checklists, embeds) on any entity |
+| **themes** | UI theme browsing, creation, and activation |
+
+### Integrations & Extensibility
+| Group | Purpose |
+|---|---|
+| **integrations** | OAuth connections, Zapier, integration directory and templates |
+| **webhooks** | Outbound webhook rules with HMAC-SHA256 signing |
+| **plugins** | Marketplace, custom fields, custom views, and SDK docs |
+| **mcp-client** | MCP server registration, tool discovery, and invocation |
+
+### Data Portability
+| Group | Purpose |
+|---|---|
+| **import** | Bulk import from Monday.com, Jira, ClickUp, and CSV |
+| **export** | Full goal export and schema introspection |
+
+### Enterprise
+| Group | Purpose |
+|---|---|
+| **enterprise** | SSO, IP allowlists, audit logs, orgs, branding, compliance, scaling |
+| **scim** | SCIM 2.0 automated user provisioning |
+
+### Community
+| Group | Purpose |
+|---|---|
+| **documentation** | API changelog |
+| **community** | Template gallery, plugin directory, blog, and public roadmap |
+
+## Authentication
+
+Most endpoints require a valid JWT bearer token. Obtain one via `POST /api/auth/login`
+and pass it in the `Authorization: Bearer <token>` header. Tokens can be refreshed
+via `POST /api/auth/refresh`. Auth endpoints are rate-limited to **20 requests/min**;
+all other API endpoints are rate-limited to **120 requests/min**.
+
+## AI Fallback Guarantee
+
+Every AI-powered endpoint has a built-in template or heuristic fallback.
+**No AI API key is required** — when keys are not configured, teb returns
+deterministic template results so the core loop always works.
+""",
     version="2.0.0",
     docs_url="/docs",
     redoc_url="/redoc",
