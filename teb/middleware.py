@@ -11,8 +11,8 @@ Provides:
 from __future__ import annotations
 
 import logging
+import secrets
 import time
-import uuid
 from typing import Callable
 
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -63,8 +63,8 @@ def add_security_headers(response: Response) -> None:
 # ─── Request ID Middleware ────────────────────────────────────────────────────
 
 def _generate_request_id() -> str:
-    """Generate a unique request ID (UUID4 hex, 32 chars)."""
-    return uuid.uuid4().hex
+    """Generate a unique, cryptographically secure request ID (32 hex chars)."""
+    return secrets.token_hex(16)
 
 
 class RequestIdMiddleware(BaseHTTPMiddleware):

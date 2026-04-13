@@ -5,6 +5,7 @@ import json
 import logging
 import logging.config
 import os
+import re
 import sys
 import time
 import uuid
@@ -530,9 +531,8 @@ class AuthRegister(BaseModel):
     @field_validator("email")
     @classmethod
     def validate_email(cls, v: str) -> str:
-        # Basic email format check — "@" with at least one "." after it
-        import re
-        if not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", v.strip()):
+        # Robust email format check
+        if not re.match(r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$", v.strip()):
             raise ValueError("Invalid email address format")
         return v.strip().lower()
 
@@ -773,10 +773,11 @@ async def readiness_probe():
             status_code=200,
             content={"ready": True},
         )
-    except Exception as exc:
+    except Exception:
+        logger.warning("Readiness probe failed", exc_info=True)
         return JSONResponse(
             status_code=503,
-            content={"ready": False, "detail": str(exc)},
+            content={"ready": False, "detail": "Database connectivity check failed"},
         )
 
 

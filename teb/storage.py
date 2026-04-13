@@ -1304,7 +1304,7 @@ def _run_migrations(con: sqlite3.Connection) -> None:
     if last_version != _CURRENT_SCHEMA_VERSION:
         con.execute(
             "INSERT INTO schema_versions (version, description, applied_at) VALUES (?, ?, ?)",
-            (_CURRENT_SCHEMA_VERSION, "Professional quality improvements", datetime.now(timezone.utc).isoformat()),
+            (_CURRENT_SCHEMA_VERSION, "Add schema_versions table, security headers, input validation, pagination, health probes", datetime.now(timezone.utc).isoformat()),
         )
 
 
