@@ -32,3 +32,7 @@ build/
 
 # OS
 .DS_Store
+
+# Dev artifacts
+diff.txt
+*.diff

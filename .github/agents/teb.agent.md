@@ -4,6 +4,15 @@ description: "Expert in goal-to-execution bridge systems. Knows teb's philosophy
 tools:
   - github_code_search
   - github_file_reader
+  - bash
+  - read_file
+  - write_file
+  - create_file
+  - edit_file
+  - grep
+  - glob
+  - run_tests
+  - create_pull_request
 ---
 
 # teb-architect
