@@ -3456,6 +3456,7 @@ function init() {
   BatchOps.init();
   UnifiedSearch.init();
   TaskFilterBar.init();
+  TaskFilter.init();
   setupCharCounter('goal-desc', 'goal-desc-counter');
 
   // Wire mood selector
@@ -4763,6 +4764,7 @@ const SavedViews = {
 // ─── Task Filter/Sort Engine ────────────────────────────────────────────────
 
 const TaskFilter = {
+  init() { /* ready */ },
   /**
    * Apply filters, sorting, and grouping to a task array.
    * @param {Array} tasks - array of task objects
