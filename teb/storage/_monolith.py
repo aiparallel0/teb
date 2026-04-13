@@ -38,6 +38,7 @@ from teb.models import (
     BrowserAction,
     CheckIn,
     CommentReaction,
+    ContentBlock,
     CustomField,
     CustomFieldDefinition,
     DashboardLayout,
@@ -3356,9 +3357,9 @@ def create_custom_field(cf: CustomField) -> CustomField:
     now = datetime.now(timezone.utc).isoformat()
     with _conn() as con:
         cur = con.execute(
-            """INSERT INTO custom_fields (task_id, field_name, field_value, field_type, created_at)
-               VALUES (?, ?, ?, ?, ?)""",
-            (cf.task_id, cf.field_name, cf.field_value, cf.field_type, now),
+            """INSERT INTO custom_fields (task_id, field_name, field_value, field_type, config_json, created_at)
+               VALUES (?, ?, ?, ?, ?, ?)""",
+            (cf.task_id, cf.field_name, cf.field_value, cf.field_type, cf.config_json, now),
         )
         cf.id = cur.lastrowid
         cf.created_at = datetime.fromisoformat(now)
@@ -3381,10 +3382,131 @@ def delete_custom_field(field_id: int) -> None:
         con.execute("DELETE FROM custom_fields WHERE id = ?", (field_id,))
 
 
+def get_custom_field(field_id: int) -> Optional[CustomField]:
+    """Get a single custom field by ID."""
+    with _conn() as con:
+        row = con.execute("SELECT * FROM custom_fields WHERE id = ?", (field_id,)).fetchone()
+    return _row_to_custom_field(row) if row else None
+
+
+def resolve_custom_field_value(cf: CustomField) -> str:
+    """Resolve the computed value for relation/rollup/formula custom fields.
+
+    For basic types (text, number, date, url) returns field_value as-is.
+    For relation: returns the title of the linked task.
+    For rollup: aggregates a numeric field across related tasks.
+    For formula: computes a built-in formula.
+    """
+    import json as _json
+
+    if cf.field_type in ("text", "number", "date", "url"):
+        return cf.field_value
+
+    config = _json.loads(cf.config_json) if cf.config_json else {}
+
+    if cf.field_type == "relation":
+        # field_value holds the related task ID
+        try:
+            related_task = get_task(int(cf.field_value))
+            return related_task.title if related_task else f"[Task #{cf.field_value} not found]"
+        except (ValueError, TypeError):
+            return "[Invalid relation]"
+
+    if cf.field_type == "rollup":
+        # Aggregate numeric fields from tasks related via a relation field
+        relation_field = config.get("relation_field", "")
+        target_field = config.get("target_field", "field_value")
+        aggregation = config.get("aggregation", "count")
+
+        # Find all relation custom fields on this task's siblings
+        related_ids: list[int] = []
+        fields = list_custom_fields(cf.task_id)
+        for f in fields:
+            if f.field_name == relation_field and f.field_type == "relation":
+                try:
+                    related_ids.append(int(f.field_value))
+                except (ValueError, TypeError):
+                    pass
+
+        # Collect target values from related tasks
+        values: list[float] = []
+        for rid in related_ids:
+            r_fields = list_custom_fields(rid)
+            for rf in r_fields:
+                if rf.field_name == target_field:
+                    try:
+                        values.append(float(rf.field_value))
+                    except (ValueError, TypeError):
+                        pass
+
+        if aggregation == "count":
+            return str(len(related_ids))
+        elif aggregation == "sum":
+            return str(sum(values))
+        elif aggregation == "avg":
+            return str(sum(values) / len(values)) if values else "0"
+        elif aggregation == "min":
+            return str(min(values)) if values else "0"
+        elif aggregation == "max":
+            return str(max(values)) if values else "0"
+        return str(len(related_ids))
+
+    if cf.field_type == "formula":
+        formula_type = config.get("formula_type", "")
+
+        if formula_type == "days_until_due":
+            task = get_task(cf.task_id)
+            if task and task.due_date:
+                try:
+                    due = datetime.fromisoformat(task.due_date)
+                    now = datetime.now(timezone.utc)
+                    delta = (due - now).days
+                    return str(delta)
+                except (ValueError, TypeError):
+                    return "[Invalid date]"
+            return "[No due date]"
+
+        if formula_type == "field_diff":
+            # Difference between two numeric custom fields
+            field_a = config.get("field_a", "")
+            field_b = config.get("field_b", "")
+            fields = list_custom_fields(cf.task_id)
+            val_a = val_b = 0.0
+            for f in fields:
+                if f.field_name == field_a:
+                    try:
+                        val_a = float(f.field_value)
+                    except (ValueError, TypeError):
+                        pass
+                if f.field_name == field_b:
+                    try:
+                        val_b = float(f.field_value)
+                    except (ValueError, TypeError):
+                        pass
+            return str(val_a - val_b)
+
+        if formula_type == "concat":
+            # Concatenate field values
+            field_names = config.get("fields", [])
+            fields = list_custom_fields(cf.task_id)
+            parts = []
+            field_map = {f.field_name: f.field_value for f in fields}
+            separator = config.get("separator", " ")
+            for name in field_names:
+                parts.append(field_map.get(name, ""))
+            return separator.join(parts)
+
+        return "[Unknown formula]"
+
+    return cf.field_value
+
+
 def _row_to_custom_field(row: sqlite3.Row) -> CustomField:
+    config_json = row["config_json"] if "config_json" in row.keys() else "{}"
     return CustomField(
         id=row["id"], task_id=row["task_id"], field_name=row["field_name"],
         field_value=row["field_value"], field_type=row["field_type"],
+        config_json=config_json,
         created_at=datetime.fromisoformat(row["created_at"]),
     )
 
@@ -6062,3 +6184,227 @@ def _row_to_team_challenge(row: sqlite3.Row) -> TeamChallenge:
         end_date=row["end_date"],
         created_at=datetime.fromisoformat(row["created_at"]) if row["created_at"] else None,
     )
+
+
+# ─── Content Blocks (recursive block-based content model) ────────────────────
+
+
+@_with_retry
+def create_content_block(block: ContentBlock) -> ContentBlock:
+    """Insert a new content block and return it with its assigned id."""
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        cur = con.execute(
+            """INSERT INTO content_blocks
+               (entity_type, entity_id, block_type, content, properties_json,
+                parent_block_id, order_index, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (block.entity_type, block.entity_id, block.block_type, block.content,
+             block.properties_json, block.parent_block_id, block.order_index, now, now),
+        )
+        block.id = cur.lastrowid
+        block.created_at = datetime.fromisoformat(now)
+        block.updated_at = datetime.fromisoformat(now)
+    return block
+
+
+def list_content_blocks(entity_type: str, entity_id: int, parent_block_id: Optional[int] = None) -> List[ContentBlock]:
+    """List content blocks for an entity, optionally filtered by parent.
+
+    When parent_block_id is None and no parent filter is intended, returns ALL
+    blocks for the entity.  Pass parent_block_id=0 to get only root-level blocks
+    (those with parent_block_id IS NULL).
+    """
+    with _conn() as con:
+        if parent_block_id == 0:
+            # Root-level blocks only
+            rows = con.execute(
+                """SELECT * FROM content_blocks
+                   WHERE entity_type = ? AND entity_id = ? AND parent_block_id IS NULL
+                   ORDER BY order_index""",
+                (entity_type, entity_id),
+            ).fetchall()
+        elif parent_block_id is not None:
+            rows = con.execute(
+                """SELECT * FROM content_blocks
+                   WHERE entity_type = ? AND entity_id = ? AND parent_block_id = ?
+                   ORDER BY order_index""",
+                (entity_type, entity_id, parent_block_id),
+            ).fetchall()
+        else:
+            rows = con.execute(
+                """SELECT * FROM content_blocks
+                   WHERE entity_type = ? AND entity_id = ?
+                   ORDER BY order_index""",
+                (entity_type, entity_id),
+            ).fetchall()
+    return [_row_to_content_block(r) for r in rows]
+
+
+def get_content_block(block_id: int) -> Optional[ContentBlock]:
+    """Get a single content block by id."""
+    with _conn() as con:
+        row = con.execute("SELECT * FROM content_blocks WHERE id = ?", (block_id,)).fetchone()
+    return _row_to_content_block(row) if row else None
+
+
+@_with_retry
+def update_content_block(block_id: int, **kwargs) -> Optional[ContentBlock]:
+    """Update a content block's fields.  Allowed fields: block_type, content,
+    properties_json, parent_block_id, order_index."""
+    # Explicit column whitelist — prevents SQL injection by mapping to known names
+    _ALLOWED_COLUMNS = {
+        "block_type": "block_type",
+        "content": "content",
+        "properties_json": "properties_json",
+        "parent_block_id": "parent_block_id",
+        "order_index": "order_index",
+    }
+    updates: dict = {}
+    values: list = []
+    for key, val in kwargs.items():
+        col = _ALLOWED_COLUMNS.get(key)
+        if col is not None:
+            updates[col] = val
+            values.append(val)
+    if not updates:
+        return get_content_block(block_id)
+    now = datetime.now(timezone.utc).isoformat()
+    # Build SET clause from whitelisted column names only
+    cols = list(updates.keys())
+    set_parts = [f"{c} = ?" for c in cols]
+    set_parts.append("updated_at = ?")
+    values.append(now)
+    values.append(block_id)
+    set_clause = ", ".join(set_parts)
+    with _conn() as con:
+        con.execute(f"UPDATE content_blocks SET {set_clause} WHERE id = ?", values)  # noqa: S608 — columns are whitelisted above
+    return get_content_block(block_id)
+
+
+@_with_retry
+def delete_content_block(block_id: int) -> None:
+    """Delete a content block and its children (via CASCADE)."""
+    with _conn() as con:
+        con.execute("DELETE FROM content_blocks WHERE id = ?", (block_id,))
+
+
+@_with_retry
+def reorder_content_blocks(entity_type: str, entity_id: int, block_ids: List[int]) -> None:
+    """Reorder blocks by setting order_index according to the provided id list."""
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as con:
+        for idx, bid in enumerate(block_ids):
+            con.execute(
+                "UPDATE content_blocks SET order_index = ?, updated_at = ? WHERE id = ? AND entity_type = ? AND entity_id = ?",
+                (idx, now, bid, entity_type, entity_id),
+            )
+
+
+def get_content_block_tree(entity_type: str, entity_id: int) -> List[dict]:
+    """Return the full block tree for an entity as nested dicts.
+
+    Each dict has a 'children' key containing its child blocks (recursively).
+    """
+    all_blocks = list_content_blocks(entity_type, entity_id)
+    by_parent: dict[Optional[int], list[ContentBlock]] = {}
+    for b in all_blocks:
+        by_parent.setdefault(b.parent_block_id, []).append(b)
+
+    def _build_tree(parent_id: Optional[int]) -> List[dict]:
+        children = by_parent.get(parent_id, [])
+        result = []
+        for block in sorted(children, key=lambda b: b.order_index):
+            d = block.to_dict()
+            d["children"] = _build_tree(block.id)
+            result.append(d)
+        return result
+
+    return _build_tree(None)
+
+
+def _row_to_content_block(row: sqlite3.Row) -> ContentBlock:
+    return ContentBlock(
+        id=row["id"],
+        entity_type=row["entity_type"],
+        entity_id=row["entity_id"],
+        block_type=row["block_type"],
+        content=row["content"],
+        properties_json=row["properties_json"],
+        parent_block_id=row["parent_block_id"],
+        order_index=row["order_index"],
+        created_at=datetime.fromisoformat(row["created_at"]) if row["created_at"] else None,
+        updated_at=datetime.fromisoformat(row["updated_at"]) if row["updated_at"] else None,
+    )
+
+
+# ─── Cross-goal task queries (for portfolio views) ──────────────────────────
+
+
+def list_user_tasks(
+    user_id: int,
+    status: Optional[str] = None,
+    priority: Optional[str] = None,
+    assigned_to: Optional[int] = None,
+    tags: Optional[str] = None,
+    due_before: Optional[str] = None,
+    due_after: Optional[str] = None,
+    sort_field: str = "order_index",
+    sort_dir: str = "asc",
+    limit: int = 200,
+) -> List[Task]:
+    """List tasks across ALL goals owned by a user, with optional filters.
+
+    This enables cross-goal portfolio views (e.g. 'all tasks due this week').
+    """
+    # Whitelist sort field and direction to prevent SQL injection
+    _SORT_FIELDS = {
+        "order_index": "t.order_index",
+        "due_date": "t.due_date",
+        "priority": "t.priority",
+        "status": "t.status",
+        "created_at": "t.created_at",
+        "updated_at": "t.updated_at",
+        "title": "t.title",
+    }
+    _SORT_DIRS = {"asc": "ASC", "desc": "DESC"}
+    safe_sort_col = _SORT_FIELDS.get(sort_field, "t.order_index")
+    safe_sort_dir = _SORT_DIRS.get(sort_dir.lower(), "ASC")
+
+    query = """
+        SELECT t.* FROM tasks t
+        JOIN goals g ON t.goal_id = g.id
+        WHERE g.user_id = ?
+    """
+    params: list = [user_id]
+
+    if status:
+        query += " AND t.status = ?"
+        params.append(status)
+    if priority:
+        query += " AND t.priority = ?"
+        params.append(priority)
+    if assigned_to is not None:
+        query += " AND t.assigned_to = ?"
+        params.append(assigned_to)
+    if tags:
+        # Match any tag in the comma-separated tags field
+        for tag in tags.split(","):
+            tag = tag.strip()
+            if tag:
+                query += " AND t.tags LIKE ?"
+                params.append(f"%{tag}%")
+    if due_before:
+        query += " AND t.due_date != '' AND t.due_date <= ?"
+        params.append(due_before)
+    if due_after:
+        query += " AND t.due_date != '' AND t.due_date >= ?"
+        params.append(due_after)
+
+    query += f" ORDER BY {safe_sort_col} {safe_sort_dir}"  # noqa: S608 — values from whitelist above
+    query += " LIMIT ?"
+    params.append(limit)
+
+    with _conn() as con:
+        rows = con.execute(query, params).fetchall()
+    return [_row_to_task(r) for r in rows]

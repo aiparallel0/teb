@@ -643,7 +643,9 @@ def _error_response(
 # ─── Auth helper ──────────────────────────────────────────────────────────────
 
 def _get_user_id(request: Request) -> Optional[int]:
-    """Extract user_id from the request's Authorization header (Bearer token).
+    """Extract user_id from the request's Authorization header (Bearer token)
+    or from a ``token`` query parameter (needed for EventSource/SSE which
+    cannot set custom headers).
 
     Returns None if no valid token is present (allows unauthenticated access
     to legacy endpoints).
@@ -652,6 +654,10 @@ def _get_user_id(request: Request) -> Optional[int]:
     if header.startswith("Bearer "):
         token = header[7:]
         return auth.decode_token(token)
+    # Fallback: token query parameter (used by EventSource for SSE)
+    token_param = request.query_params.get("token")
+    if token_param:
+        return auth.decode_token(token_param)
     return None
 
 
@@ -672,25 +678,52 @@ def _require_admin(request: Request) -> int:
     return uid
 
 
-def _get_goal_for_user(goal_id: int, user_id: int) -> Goal:
-    """Fetch a goal and verify the requesting user owns it (or it has no owner)."""
+def _get_collaborator_role(goal_id: int, user_id: int) -> Optional[str]:
+    """Return the collaborator role for a user on a goal, or None if not a collaborator."""
+    collabs = storage.list_collaborators(goal_id)
+    for c in collabs:
+        if c.user_id == user_id:
+            return c.role
+    return None
+
+
+def _get_goal_for_user(goal_id: int, user_id: int, require_role: Optional[str] = None) -> Goal:
+    """Fetch a goal and verify the requesting user owns it or is a collaborator.
+
+    If ``require_role`` is set, the user must be the owner **or** have that
+    collaborator role (or higher).  Role hierarchy: admin > editor > viewer.
+    """
     goal = storage.get_goal(goal_id)
     if not goal:
         raise HTTPException(status_code=404, detail="Goal not found")
-    if goal.user_id is not None and goal.user_id != user_id:
+
+    # Owner always has full access
+    if goal.user_id is None or goal.user_id == user_id:
+        return goal
+
+    # Check collaborator access
+    collab_role = _get_collaborator_role(goal_id, user_id)
+    if collab_role is None:
         raise HTTPException(status_code=403, detail="Not authorized")
+
+    # If a specific role is required, check hierarchy
+    if require_role:
+        _ROLE_LEVEL = {"viewer": 0, "editor": 1, "admin": 2}
+        needed = _ROLE_LEVEL.get(require_role, 0)
+        actual = _ROLE_LEVEL.get(collab_role, 0)
+        if actual < needed:
+            raise HTTPException(status_code=403, detail=f"Requires {require_role} access")
+
     return goal
 
 
-def _get_task_for_user(task_id: int, user_id: int) -> Task:
-    """Fetch a task and verify the requesting user owns its goal."""
+def _get_task_for_user(task_id: int, user_id: int, require_role: Optional[str] = None) -> Task:
+    """Fetch a task and verify the requesting user owns its goal or is a collaborator."""
     task = storage.get_task(task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
     if task.goal_id is not None:
-        goal = storage.get_goal(task.goal_id)
-        if goal and goal.user_id is not None and goal.user_id != user_id:
-            raise HTTPException(status_code=403, detail="Not authorized")
+        _get_goal_for_user(task.goal_id, user_id, require_role=require_role)
     return task
 
 
@@ -1055,7 +1088,7 @@ async def create_task_manual(body: TaskCreate, request: Request):
 @app.patch("/api/tasks/{task_id}")
 async def update_task(task_id: int, body: TaskPatch, request: Request):
     uid = _require_user(request)
-    task = _get_task_for_user(task_id, uid)
+    task = _get_task_for_user(task_id, uid, require_role="editor")
 
     valid_statuses = {"todo", "in_progress", "done", "skipped", "executing", "failed"}
     if body.status is not None:
@@ -1136,7 +1169,7 @@ async def update_task(task_id: int, body: TaskPatch, request: Request):
 @app.delete("/api/tasks/{task_id}", status_code=200)
 async def delete_task(task_id: int, request: Request):
     uid = _require_user(request)
-    task = _get_task_for_user(task_id, uid)
+    task = _get_task_for_user(task_id, uid, require_role="editor")
     goal_id = task.goal_id
     storage.delete_task(task_id)
     from teb import events as _events
@@ -1503,6 +1536,14 @@ async def orchestrate_goal(goal_id: int, request: Request):
     """
     uid = _require_user(request)
     goal = _get_goal_for_user(goal_id, uid)
+
+    # Validate DAG before orchestration
+    existing_tasks = storage.list_tasks(goal_id=goal_id)
+    if existing_tasks:
+        from teb import dag as _dag_mod  # noqa: E402
+        dag_validation = _dag_mod.validate_dag(existing_tasks)
+        if not dag_validation.is_valid:
+            raise HTTPException(status_code=400, detail=f"DAG validation failed: {'; '.join(dag_validation.errors)}")
 
     # Clear any previous tasks for a clean orchestration
     storage.delete_tasks_for_goal(goal_id)
@@ -4700,7 +4741,13 @@ async def remove_goal_collaborator(goal_id: int, collab_user_id: int, request: R
 
 @app.post("/api/tasks/{task_id}/fields")
 async def add_custom_field(task_id: int, request: Request):
-    """Add a custom field to a task."""
+    """Add a custom field to a task.
+
+    Supports basic types (text, number, date, url) and relational types:
+    - relation: links to another task. Pass ``field_value`` as the target task ID.
+    - rollup: aggregates across related tasks. Pass ``config`` with aggregation settings.
+    - formula: computed field. Pass ``config`` with formula_type.
+    """
     uid = _require_user(request)
     _check_api_rate_limit(request)
     task = storage.get_task(task_id)
@@ -4710,18 +4757,45 @@ async def add_custom_field(task_id: int, request: Request):
     name = body.get("field_name", "").strip()
     if not name:
         raise HTTPException(status_code=400, detail="field_name is required")
+    field_type = body.get("field_type", "text")
+    valid_types = {"text", "number", "date", "url", "relation", "rollup", "formula"}
+    if field_type not in valid_types:
+        raise HTTPException(status_code=400, detail=f"field_type must be one of {valid_types}")
+    config = body.get("config", {})
     cf = CustomField(task_id=task_id, field_name=name,
                      field_value=body.get("field_value", ""),
-                     field_type=body.get("field_type", "text"))
+                     field_type=field_type,
+                     config_json=json.dumps(config) if config else "{}")
     cf = storage.create_custom_field(cf)
     return cf.to_dict()
 
 
 @app.get("/api/tasks/{task_id}/fields")
 async def list_custom_fields_endpoint(task_id: int, request: Request):
-    """List custom fields for a task."""
+    """List custom fields for a task, with resolved values for computed types."""
     uid = _require_user(request)
-    return [f.to_dict() for f in storage.list_custom_fields(task_id)]
+    fields = storage.list_custom_fields(task_id)
+    result = []
+    for f in fields:
+        d = f.to_dict()
+        if f.field_type in ("relation", "rollup", "formula"):
+            d["resolved_value"] = storage.resolve_custom_field_value(f)
+        result.append(d)
+    return result
+
+
+@app.get("/api/fields/{field_id}/resolve")
+async def resolve_custom_field(field_id: int, request: Request):
+    """Resolve (compute) the value of a relation/rollup/formula field."""
+    _check_api_rate_limit(request)
+    uid = _require_user(request)
+    cf = storage.get_custom_field(field_id)
+    if not cf:
+        raise HTTPException(status_code=404, detail="Custom field not found")
+    resolved = storage.resolve_custom_field_value(cf)
+    d = cf.to_dict()
+    d["resolved_value"] = resolved
+    return d
 
 
 @app.delete("/api/fields/{field_id}")
@@ -5752,6 +5826,90 @@ async def delete_view_endpoint(view_id: int, request: Request):
     uid = _require_user(request)
     storage.delete_saved_view(view_id, uid)
     return {"deleted": True}
+
+
+@app.get("/api/users/me/tasks", tags=["cross-goal"])
+async def list_user_tasks_endpoint(
+    request: Request,
+    status: Optional[str] = Query(default=None),
+    priority: Optional[str] = Query(default=None),
+    assigned_to: Optional[int] = Query(default=None),
+    tags: Optional[str] = Query(default=None),
+    due_before: Optional[str] = Query(default=None),
+    due_after: Optional[str] = Query(default=None),
+    sort_field: str = Query(default="order_index"),
+    sort_dir: str = Query(default="asc"),
+    limit: int = Query(default=200, ge=1, le=1000),
+):
+    """List all tasks across all goals for the current user.
+
+    Supports filtering by status, priority, assigned_to, tags, and due date range.
+    Supports sorting by any allowed field.
+    Enables cross-goal portfolio views.
+    """
+    _check_api_rate_limit(request)
+    uid = _require_user(request)
+    tasks = storage.list_user_tasks(
+        user_id=uid,
+        status=status,
+        priority=priority,
+        assigned_to=assigned_to,
+        tags=tags,
+        due_before=due_before,
+        due_after=due_after,
+        sort_field=sort_field,
+        sort_dir=sort_dir,
+        limit=limit,
+    )
+    return [t.to_dict() for t in tasks]
+
+
+@app.get("/api/views/{view_id}/tasks", tags=["cross-goal"])
+async def get_view_tasks(view_id: int, request: Request):
+    """Apply a saved view's filters and sort to the user's tasks, returning filtered results.
+
+    Works cross-goal — returns tasks from ALL the user's goals matching the view's config.
+    """
+    _check_api_rate_limit(request)
+    uid = _require_user(request)
+    view = storage.get_saved_view(view_id)
+    if not view:
+        raise HTTPException(status_code=404, detail="View not found")
+    if view.user_id != uid:
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    filters = json.loads(view.filters_json) if view.filters_json else {}
+    sort_config = json.loads(view.sort_json) if view.sort_json else {}
+
+    tasks = storage.list_user_tasks(
+        user_id=uid,
+        status=filters.get("status"),
+        priority=filters.get("priority"),
+        assigned_to=filters.get("assigned_to"),
+        tags=filters.get("tags"),
+        due_before=filters.get("due_before"),
+        due_after=filters.get("due_after"),
+        sort_field=sort_config.get("field", "order_index"),
+        sort_dir=sort_config.get("direction", "asc"),
+    )
+
+    result = [t.to_dict() for t in tasks]
+
+    # Apply group_by on the server side for convenience
+    if view.group_by:
+        grouped: dict = {}
+        for t in result:
+            key = t.get(view.group_by, "Other")
+            if isinstance(key, list):
+                key = ", ".join(str(k) for k in key) if key else "None"
+            elif key is None:
+                key = "None"
+            else:
+                key = str(key)
+            grouped.setdefault(key, []).append(t)
+        return {"view": view.to_dict(), "grouped": grouped, "total": len(result)}
+
+    return {"view": view.to_dict(), "tasks": result, "total": len(result)}
 
 
 # ─── Phase 3: Dashboard Layouts ──────────────────────────────────────────────
@@ -7527,6 +7685,206 @@ async def update_challenge_progress(challenge_id: int, request: Request):
     if not updated:
         raise HTTPException(status_code=404, detail="Challenge not found")
     return updated.to_dict()
+
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Content Blocks — Recursive block-based content model
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+@app.get("/api/{entity_type}/{entity_id}/blocks", tags=["content-blocks"])
+async def list_blocks(entity_type: str, entity_id: int, request: Request, tree: bool = Query(default=False)):
+    """List content blocks for an entity.
+
+    Use ?tree=true to get a nested tree structure instead of a flat list.
+    entity_type must be 'tasks' or 'goals'.
+    """
+    _check_api_rate_limit(request)
+    uid = _require_user(request)
+    # Map plural route params to singular entity_type
+    et = {"tasks": "task", "goals": "goal"}.get(entity_type)
+    if not et:
+        raise HTTPException(status_code=400, detail="entity_type must be 'tasks' or 'goals'")
+    if tree:
+        return storage.get_content_block_tree(et, entity_id)
+    blocks = storage.list_content_blocks(et, entity_id)
+    return [b.to_dict() for b in blocks]
+
+
+@app.post("/api/{entity_type}/{entity_id}/blocks", status_code=201, tags=["content-blocks"])
+async def create_block(entity_type: str, entity_id: int, request: Request):
+    """Create a new content block for an entity."""
+    import json as _json
+    _check_api_rate_limit(request)
+    uid = _require_user(request)
+    et = {"tasks": "task", "goals": "goal"}.get(entity_type)
+    if not et:
+        raise HTTPException(status_code=400, detail="entity_type must be 'tasks' or 'goals'")
+    body = await request.json()
+    from teb.models import ContentBlock  # noqa: E402
+    block = ContentBlock(
+        entity_type=et,
+        entity_id=entity_id,
+        block_type=body.get("block_type", "paragraph"),
+        content=body.get("content", ""),
+        properties_json=_json.dumps(body.get("properties", {})),
+        parent_block_id=body.get("parent_block_id"),
+        order_index=body.get("order_index", 0),
+    )
+    created = storage.create_content_block(block)
+    return created.to_dict()
+
+
+@app.get("/api/blocks/{block_id}", tags=["content-blocks"])
+async def get_block(block_id: int, request: Request):
+    """Get a single content block by id."""
+    _check_api_rate_limit(request)
+    uid = _require_user(request)
+    block = storage.get_content_block(block_id)
+    if not block:
+        raise HTTPException(status_code=404, detail="Block not found")
+    return block.to_dict()
+
+
+@app.patch("/api/blocks/{block_id}", tags=["content-blocks"])
+async def update_block(block_id: int, request: Request):
+    """Update a content block's fields."""
+    import json as _json
+    _check_api_rate_limit(request)
+    uid = _require_user(request)
+    body = await request.json()
+    kwargs = {}
+    if "block_type" in body:
+        kwargs["block_type"] = body["block_type"]
+    if "content" in body:
+        kwargs["content"] = body["content"]
+    if "properties" in body:
+        kwargs["properties_json"] = _json.dumps(body["properties"])
+    if "parent_block_id" in body:
+        kwargs["parent_block_id"] = body["parent_block_id"]
+    if "order_index" in body:
+        kwargs["order_index"] = body["order_index"]
+    updated = storage.update_content_block(block_id, **kwargs)
+    if not updated:
+        raise HTTPException(status_code=404, detail="Block not found")
+    return updated.to_dict()
+
+
+@app.delete("/api/blocks/{block_id}", status_code=204, tags=["content-blocks"])
+async def delete_block(block_id: int, request: Request):
+    """Delete a content block and its children."""
+    _check_api_rate_limit(request)
+    uid = _require_user(request)
+    block = storage.get_content_block(block_id)
+    if not block:
+        raise HTTPException(status_code=404, detail="Block not found")
+    storage.delete_content_block(block_id)
+
+
+@app.post("/api/{entity_type}/{entity_id}/blocks/reorder", tags=["content-blocks"])
+async def reorder_blocks(entity_type: str, entity_id: int, request: Request):
+    """Reorder content blocks by providing an ordered list of block IDs."""
+    _check_api_rate_limit(request)
+    uid = _require_user(request)
+    et = {"tasks": "task", "goals": "goal"}.get(entity_type)
+    if not et:
+        raise HTTPException(status_code=400, detail="entity_type must be 'tasks' or 'goals'")
+    body = await request.json()
+    block_ids = body.get("block_ids", [])
+    if not isinstance(block_ids, list):
+        raise HTTPException(status_code=400, detail="block_ids must be a list of integers")
+    storage.reorder_content_blocks(et, entity_id, block_ids)
+    return {"status": "ok"}
+
+
+
+
+# ---------------------------------------------------------------------------
+# DAG execution planner endpoints
+# ---------------------------------------------------------------------------
+
+
+@app.get("/api/goals/{goal_id}/dag", tags=["dag"])
+async def get_goal_dag(goal_id: int, request: Request):
+    """Return the DAG structure (execution plan + critical path) for a goal's tasks."""
+    _check_api_rate_limit(request)
+    uid = _require_user(request)
+    goal = _get_goal_for_user(goal_id, uid)
+    tasks = storage.list_tasks(goal_id=goal_id)
+    from teb import dag as _dag  # noqa: E402
+    validation = _dag.validate_dag(tasks)
+    if not validation.is_valid:
+        return {"valid": False, "errors": validation.errors, "plan": [], "critical_path": []}
+    plan = _dag.build_execution_plan(tasks)
+    critical_ids = _dag.get_critical_path(tasks)
+    task_map = {t.id: t for t in tasks}
+    return {
+        "valid": True,
+        "errors": [],
+        "plan": [
+            {
+                "batch": batch.batch_index,
+                "task_ids": batch.task_ids,
+                "titles": [task_map[tid].title for tid in batch.task_ids if tid in task_map],
+            }
+            for batch in plan
+        ],
+        "critical_path": [
+            {"id": tid, "title": task_map[tid].title}
+            for tid in critical_ids
+            if tid in task_map
+        ],
+    }
+
+
+@app.post("/api/goals/{goal_id}/dag/validate", tags=["dag"])
+async def validate_goal_dag(goal_id: int, request: Request):
+    """Validate the DAG for a goal's tasks, reporting any cycles or missing dependencies."""
+    _check_api_rate_limit(request)
+    uid = _require_user(request)
+    goal = _get_goal_for_user(goal_id, uid)
+    tasks = storage.list_tasks(goal_id=goal_id)
+    from teb import dag as _dag  # noqa: E402
+    validation = _dag.validate_dag(tasks)
+    return {"valid": validation.is_valid, "errors": validation.errors}
+
+
+@app.post("/api/goals/{goal_id}/execute-dag", tags=["dag"])
+async def execute_goal_dag(goal_id: int, request: Request):
+    """Execute tasks in DAG order -- returns the execution plan with batch sequence.
+
+    Validates the DAG first, then marks batch 0 tasks as in_progress.
+    Frontend can poll or use SSE for progress updates.
+    """
+    _check_api_rate_limit(request)
+    uid = _require_user(request)
+    goal = _get_goal_for_user(goal_id, uid)
+    tasks = storage.list_tasks(goal_id=goal_id)
+    from teb import dag as _dag  # noqa: E402
+    validation = _dag.validate_dag(tasks)
+    if not validation.is_valid:
+        raise HTTPException(status_code=400, detail=f"DAG validation failed: {'; '.join(validation.errors)}")
+    plan = _dag.build_execution_plan(tasks)
+    task_map = {t.id: t for t in tasks}
+    # Start first batch
+    started: list[int] = []
+    if plan:
+        for tid in plan[0].task_ids:
+            task = task_map.get(tid)
+            if task and task.status == "todo":
+                task.status = "in_progress"
+                storage.update_task(task)
+                started.append(tid)
+    return {
+        "status": "executing",
+        "batches": len(plan),
+        "started_task_ids": started,
+        "plan": [
+            {"batch": batch.batch_index, "task_ids": batch.task_ids}
+            for batch in plan
+        ],
+    }
 
 
 if config.BASE_PATH:

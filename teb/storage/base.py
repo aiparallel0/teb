@@ -501,6 +501,22 @@ def init_db() -> None:
             CREATE INDEX IF NOT EXISTS idx_api_usage_user ON api_usage_log(user_id);
             CREATE INDEX IF NOT EXISTS idx_api_usage_time ON api_usage_log(created_at);
 
+            -- Content Blocks (recursive block-based content model)
+            CREATE TABLE IF NOT EXISTS content_blocks (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                entity_type     TEXT    NOT NULL DEFAULT 'task',
+                entity_id       INTEGER NOT NULL,
+                block_type      TEXT    NOT NULL DEFAULT 'paragraph',
+                content         TEXT    NOT NULL DEFAULT '',
+                properties_json TEXT    NOT NULL DEFAULT '{}',
+                parent_block_id INTEGER REFERENCES content_blocks(id) ON DELETE CASCADE,
+                order_index     INTEGER NOT NULL DEFAULT 0,
+                created_at      TEXT    NOT NULL,
+                updated_at      TEXT    NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_content_blocks_entity ON content_blocks(entity_type, entity_id);
+            CREATE INDEX IF NOT EXISTS idx_content_blocks_parent ON content_blocks(parent_block_id);
+
             -- Schema version tracking for migration history
             CREATE TABLE IF NOT EXISTS schema_versions (
                 id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -930,6 +946,7 @@ def _run_migrations(con: sqlite3.Connection) -> None:
             field_name      TEXT    NOT NULL,
             field_value     TEXT    NOT NULL DEFAULT '',
             field_type      TEXT    NOT NULL DEFAULT 'text',
+            config_json     TEXT    NOT NULL DEFAULT '{}',
             created_at      TEXT    NOT NULL
         )
     """)
@@ -1258,6 +1275,27 @@ def _run_migrations(con: sqlite3.Connection) -> None:
     _safe_add_column(con, "goals", "version", "INTEGER NOT NULL DEFAULT 1")
     _safe_add_column(con, "tasks", "version", "INTEGER NOT NULL DEFAULT 1")
     _safe_add_column(con, "tasks", "assigned_to", "INTEGER DEFAULT NULL")
+
+    # ─── Custom Fields: add config_json for relation/rollup/formula types ──
+    _safe_add_column(con, "custom_fields", "config_json", "TEXT NOT NULL DEFAULT '{}'")
+
+    # ─── Content Blocks table (recursive block model) ───────────────────
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS content_blocks (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            entity_type     TEXT    NOT NULL DEFAULT 'task',
+            entity_id       INTEGER NOT NULL,
+            block_type      TEXT    NOT NULL DEFAULT 'paragraph',
+            content         TEXT    NOT NULL DEFAULT '',
+            properties_json TEXT    NOT NULL DEFAULT '{}',
+            parent_block_id INTEGER REFERENCES content_blocks(id) ON DELETE CASCADE,
+            order_index     INTEGER NOT NULL DEFAULT 0,
+            created_at      TEXT    NOT NULL,
+            updated_at      TEXT    NOT NULL
+        )
+    """)
+    con.execute("CREATE INDEX IF NOT EXISTS idx_content_blocks_entity ON content_blocks(entity_type, entity_id)")
+    con.execute("CREATE INDEX IF NOT EXISTS idx_content_blocks_parent ON content_blocks(parent_block_id)")
 
     # ─── Record current schema version ───────────────────────────────────
     _CURRENT_SCHEMA_VERSION = "2.0.0"

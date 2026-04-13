@@ -1017,23 +1017,37 @@ class GoalCollaborator:
 
 @dataclass
 class CustomField:
-    """User-defined key-value metadata on a task."""
+    """User-defined metadata on a task.
+
+    Supports basic types (text, number, date, url) and relational types:
+    - **relation**: links to another task by ID.  ``field_value`` is the target task ID.
+    - **rollup**: aggregates a numeric field across related tasks.
+      ``field_value`` stores the relation field name; ``config_json``
+      stores ``{"aggregation": "sum|count|avg|min|max", "target_field": "..."}``
+    - **formula**: computed from other fields on the same task.
+      ``field_value`` stores the expression string (e.g. ``"days_until_due"``).
+      ``config_json`` stores ``{"formula_type": "days_until_due|field_diff|concat", ...}``
+    """
     task_id: int
     field_name: str
     field_value: str = ""
-    field_type: str = "text"           # text | number | date | url
+    field_type: str = "text"           # text | number | date | url | relation | rollup | formula
+    config_json: str = "{}"            # JSON config for relation/rollup/formula types
     id: Optional[int] = None
     created_at: Optional[datetime] = None
 
     def to_dict(self) -> dict:
-        return {
+        import json as _json
+        base = {
             "id": self.id,
             "task_id": self.task_id,
             "field_name": self.field_name,
             "field_value": self.field_value,
             "field_type": self.field_type,
+            "config": _json.loads(self.config_json) if self.config_json else {},
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }
+        return base
 
 
 # ─── Goal Progress Snapshots (WP-14) ────────────────────────────────────────
@@ -2018,4 +2032,52 @@ class TeamChallenge:
             "start_date": self.start_date or None,
             "end_date": self.end_date or None,
             "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+
+
+# ─── Content Blocks (recursive block-based content) ─────────────────────────
+
+@dataclass
+class ContentBlock:
+    """A single block in a recursive content tree.
+
+    Every task or goal description can be represented as a tree of typed blocks,
+    enabling rich text, embeds, code blocks, checklists, and nested structures.
+
+    Block types:
+        paragraph, heading, code, quote, callout, checklist_item,
+        bullet_list, numbered_list, image, embed, divider, toggle
+
+    Properties (stored as JSON):
+        - level: heading level (1-3) for heading blocks
+        - language: programming language for code blocks
+        - checked: boolean for checklist_item blocks
+        - url: URL for image and embed blocks
+        - color: callout/highlight color
+        - caption: image/embed caption
+    """
+    entity_type: str                    # "task" | "goal" | "comment"
+    entity_id: int                      # FK to tasks.id, goals.id, or comments.id
+    block_type: str = "paragraph"       # paragraph | heading | code | quote | callout | checklist_item | bullet_list | numbered_list | image | embed | divider | toggle
+    content: str = ""                   # text content of this block
+    properties_json: str = "{}"         # JSON dict of type-specific properties
+    parent_block_id: Optional[int] = None  # FK to content_blocks.id for nested blocks
+    order_index: int = 0                # position among siblings
+    id: Optional[int] = None
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+    def to_dict(self) -> dict:
+        import json as _json
+        return {
+            "id": self.id,
+            "entity_type": self.entity_type,
+            "entity_id": self.entity_id,
+            "block_type": self.block_type,
+            "content": self.content,
+            "properties": _json.loads(self.properties_json) if self.properties_json else {},
+            "parent_block_id": self.parent_block_id,
+            "order_index": self.order_index,
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
         }
