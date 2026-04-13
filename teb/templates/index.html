@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>teb</title>
+  <title>teb — AI Goal Execution Platform</title>
   <base href="{{BASE_PATH}}/" />
   <link rel="manifest" href="{{CDN_PREFIX}}static/manifest.json" />
   <meta name="theme-color" content="#1a1a2e" />
@@ -11,11 +11,9 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;0,700;1,300;1,400;1,500&family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@400;600&family=Outfit:wght@400;500;600&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="{{CDN_PREFIX}}static/style.css" />
   <script>window.__BASE_PATH__ = "{{BASE_PATH}}";</script>
-  <link rel="preload" href="static/style.css" as="style" />
-  <link rel="preload" href="static/app.js" as="script" />
   <meta name="description" content="teb — AI-powered goal decomposition and task execution platform" />
 </head>
 <body role="application">
@@ -51,11 +49,6 @@
       </div>
       <div id="command-palette-results" class="command-palette-results"></div>
     </div>
-  </div>
-
-  <!-- Animated gradient mesh background -->
-  <div class="gradient-mesh" aria-hidden="true">
-    <div class="gradient-mesh-blob"></div>
   </div>
 
   <!-- Sidebar -->
@@ -134,7 +127,7 @@
     <header id="header-bar" class="header-bar">
       <button id="btn-mobile-menu" class="header-menu-btn" aria-label="Open menu">☰</button>
       <div class="header-search-wrap">
-        <input id="global-search-input" type="text" class="global-search-input" placeholder="Search goals & tasks…" autocomplete="off" />
+        <input id="global-search-input" type="text" class="global-search-input" placeholder="Search goals & tasks…" autocomplete="off" aria-label="Search goals and tasks" />
         <div id="search-results-panel" class="search-results-panel" style="display:none"></div>
       </div>
       <nav id="breadcrumbs" class="breadcrumbs" aria-label="Breadcrumb">
@@ -155,10 +148,10 @@
 
     <div id="app" role="main" aria-live="polite">
     <!-- Auth screen -->
-    <section id="screen-auth" class="screen" role="main">
+    <section id="screen-auth" class="screen">
       <header class="hero">
         <h1>teb</h1>
-        <p class="tagline">From ambition to execution.</p>
+        <p class="tagline">Describe any goal. AI breaks it into tasks. Execute one at a time — or let autopilot handle it.</p>
       </header>
       <div class="card" id="auth-card">
         <h2 id="auth-title" style="font-family:var(--font-display);font-size:var(--text-2xl);font-weight:var(--font-weight-medium);text-align:center;margin-bottom:var(--space-md)">Sign in</h2>
@@ -180,10 +173,10 @@
     </section>
 
     <!-- Landing screen -->
-    <section id="screen-landing" class="screen" role="main">
+    <section id="screen-landing" class="screen">
       <header class="hero">
         <h1>teb</h1>
-        <p class="tagline">From ambition to execution.</p>
+        <p class="tagline">Describe any goal. AI breaks it into tasks. Execute one at a time — or let autopilot handle it.</p>
         <div id="user-bar" class="user-bar" style="display:none">
           <span id="user-email"></span>
           <button id="btn-logout" class="btn-secondary btn-sm">Sign out</button>
@@ -193,22 +186,22 @@
       <!-- Goal Stats Overview -->
       <div id="goal-stats-overview" class="goal-stats-overview" style="display:none">
         <div class="goal-stat-card">
-          <div class="goal-stat-icon">🎯</div>
+          <div class="goal-stat-icon" aria-hidden="true">🎯</div>
           <div id="stat-total-goals" class="goal-stat-value">0</div>
           <div class="goal-stat-label">Total Goals</div>
         </div>
         <div class="goal-stat-card">
-          <div class="goal-stat-icon">✅</div>
+          <div class="goal-stat-icon" aria-hidden="true">✅</div>
           <div id="stat-completed-goals" class="goal-stat-value">0</div>
           <div class="goal-stat-label">Completed</div>
         </div>
         <div class="goal-stat-card">
-          <div class="goal-stat-icon">⚡</div>
+          <div class="goal-stat-icon" aria-hidden="true">⚡</div>
           <div id="stat-active-goals" class="goal-stat-value">0</div>
           <div class="goal-stat-label">Active</div>
         </div>
         <div class="goal-stat-card">
-          <div class="goal-stat-icon">📋</div>
+          <div class="goal-stat-icon" aria-hidden="true">📋</div>
           <div id="stat-total-tasks" class="goal-stat-value">0</div>
           <div class="goal-stat-label">Tasks</div>
         </div>
@@ -234,7 +227,7 @@
     </section>
 
     <!-- Clarifying questions screen -->
-    <section id="screen-clarify" class="screen" role="main">
+    <section id="screen-clarify" class="screen">
       <div class="card">
         <a class="back-link" id="back-from-clarify">← Back</a>
         <div class="clarify-header-row">
@@ -253,7 +246,7 @@
     </section>
 
     <!-- Tasks screen (includes drip mode + all-tasks toggle) -->
-    <section id="screen-tasks" class="screen" role="main">
+    <section id="screen-tasks" class="screen">
       <div class="tasks-header">
         <a class="back-link" id="back-from-tasks">← Back</a>
         <h2 id="tasks-goal-title"></h2>

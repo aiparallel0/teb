@@ -1,13 +1,32 @@
+# docker-compose.yml — Development stack for teb (SQLite + Redis)
+#
+# For production with PostgreSQL, use: docker compose -f docker-compose.prod.yml up -d
+#
 services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   teb:
     build: .
     ports:
       - "8000:8000"
+    depends_on:
+      redis:
+        condition: service_healthy
     volumes:
       # Persist the SQLite database outside the container
       - teb-data:/app/data
     environment:
       - DATABASE_URL=sqlite:///data/teb.db
+      - REDIS_URL=redis://redis:6379/0
+      - TEB_ENV=development
       - TEB_JWT_SECRET=${TEB_JWT_SECRET:?Set TEB_JWT_SECRET in .env}
       # Base path for reverse-proxy mounting — required for portearchive.com/teb hosting.
       # Set to empty or remove for standalone deployments (app served at /).
@@ -18,6 +37,8 @@ services:
       - OPENAI_BASE_URL=${OPENAI_BASE_URL:-https://api.openai.com/v1}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       - TEB_AI_PROVIDER=${TEB_AI_PROVIDER:-auto}
+      # Observability
+      - TEB_SENTRY_DSN=${TEB_SENTRY_DSN:-}
       # - TEB_CORS_ORIGINS=https://yourdomain.com
     env_file:
       - .env

@@ -244,12 +244,12 @@ const toast = {
     const el = document.createElement('div');
     el.className = `toast toast-${type}`;
     el.innerHTML = `
-      <span class="toast-icon">${icons[type] || 'ℹ'}</span>
+      <span class="toast-icon" aria-hidden="true">${icons[type] || 'ℹ'}</span>
       <div class="toast-body">
         <div class="toast-title">${escHtml(title)}</div>
         ${message ? `<div class="toast-message">${escHtml(message)}</div>` : ''}
       </div>
-      <button class="toast-close" aria-label="Dismiss">&times;</button>
+      <button class="toast-close" aria-label="Dismiss notification">&times;</button>
     `;
 
     el.querySelector('.toast-close').addEventListener('click', () => this._dismiss(el));
@@ -857,10 +857,14 @@ function initKeyboardShortcuts() {
       return;
     }
 
-    // Escape: close panels
+    // Escape: close panels and modals
     if (e.key === 'Escape') {
       if (CommandPalette._visible) { CommandPalette.hide(); return; }
       if (TaskDetailPanel._currentTask) { TaskDetailPanel.close(); return; }
+      const settingsModal = document.getElementById('settings-modal');
+      if (settingsModal && settingsModal.style.display !== 'none') { settingsModal.style.display = 'none'; return; }
+      const adminModal = document.getElementById('admin-modal');
+      if (adminModal && adminModal.style.display !== 'none') { adminModal.style.display = 'none'; return; }
       return;
     }
 
@@ -1151,6 +1155,8 @@ function debounce(fn, ms) {
   };
 }
 
+const debouncedRefreshGoalView = debounce(() => refreshGoalView(), 300);
+
 // ─── Character counter ───────────────────────────────────────────────────────
 
 function setupCharCounter(textareaId, counterId) {
@@ -1399,16 +1405,6 @@ on('btn-expand-desc', 'click', () => {
   btn.textContent = visible ? '+ Add details' : '− Hide details';
 });
 
-// Quick-capture: expand/collapse description panel
-on('btn-expand-desc', 'click', () => {
-  const panel = document.getElementById('goal-desc-panel');
-  const btn = document.getElementById('btn-expand-desc');
-  if (!panel || !btn) return;
-  const visible = panel.style.display !== 'none';
-  panel.style.display = visible ? 'none' : 'block';
-  btn.textContent = visible ? '+ Add details' : '− Hide details';
-});
-
 // Enter key on goal title input
 on('goal-title', 'keydown', e => {
   if (e.key === 'Enter') {
@@ -1579,14 +1575,23 @@ async function showTasksScreen(goal, freshDecompose) {
   loadDrip();
   loadFocusTask();
   loadProgressDetail();
-  loadCheckinHistory();
-  loadOutcomeMetrics();
-  loadNudge();
-  loadAutopilotStatus();
-  loadRoiDashboard();
-  loadPlatformInsights();
-  loadGamification();
-  loadAgentActivity();
+
+  // Stage 2: deferred secondary data (2s timeout)
+  const _ric = window.requestIdleCallback || ((cb) => setTimeout(cb, 100));
+  _ric(() => {
+    loadCheckinHistory();
+    loadOutcomeMetrics();
+    loadNudge();
+    loadAutopilotStatus();
+  }, { timeout: 2000 });
+
+  // Stage 3: background analytics (5s timeout)
+  _ric(() => {
+    loadRoiDashboard();
+    loadPlatformInsights();
+    loadGamification();
+    loadAgentActivity();
+  }, { timeout: 5000 });
   showScreen('screen-tasks');
   updateBreadcrumbs([{text:'Home', href:'#/home'}, {text: goal.title}]);
 
@@ -3023,18 +3028,7 @@ on('btn-add-credential', 'click', async () => {
 
 // ─── Keyboard shortcuts ──────────────────────────────────────────────────────
 
-document.addEventListener('keydown', (e) => {
-  // Escape to close modals
-  if (e.key === 'Escape') {
-    const settingsModal = document.getElementById('settings-modal');
-    const adminModal = document.getElementById('admin-modal');
-    if (settingsModal && settingsModal.style.display !== 'none') {
-      settingsModal.style.display = 'none';
-    } else if (adminModal && adminModal.style.display !== 'none') {
-      adminModal.style.display = 'none';
-    }
-  }
-});
+
 
 // Click outside modal to close
 on('settings-modal', 'click', (e) => {
@@ -4445,7 +4439,7 @@ function checkSessionValidity() {
     // Decode JWT payload (base64)
     const parts = token.split('.');
     if (parts.length !== 3) return;
-    const payload = JSON.parse(atob(parts[1]));
+    const payload = JSON.parse(atob(parts[1].replace(/-/g, '+').replace(/_/g, '/')));
     if (payload.exp) {
       const expiresAt = payload.exp * 1000;
       const now = Date.now();
@@ -4962,6 +4956,9 @@ const SoundFX = {
       try { this._audioCtx = new (window.AudioContext || window.webkitAudioContext)(); }
       catch { return null; }
     }
+    if (this._audioCtx.state === 'suspended') {
+      this._audioCtx.resume().catch(() => {});
+    }
     return this._audioCtx;
   },
 
@@ -5173,3 +5170,53 @@ const LazyViews = {
     });
   }
 };
+
+// ─── Service Worker Registration + Offline Queue ─────────────────────────────
+
+(function initServiceWorker() {
+  if (!('serviceWorker' in navigator)) return;
+
+  navigator.serviceWorker.register('./static/sw.js', { scope: './' })
+    .then(function(reg) { console.log('SW registered:', reg.scope); })
+    .catch(function(err) { console.warn('SW registration failed:', err); });
+
+  // Listen for messages from the service worker
+  navigator.serviceWorker.addEventListener('message', function(event) {
+    var data = event.data;
+    if (!data) return;
+
+    if (data.type === 'offline-queue-replay') {
+      if (typeof showToast === 'function') {
+        showToast('Replaying ' + data.count + ' queued request(s)…', 'info');
+      }
+    }
+    if (data.type === 'offline-queue-conflict') {
+      if (typeof showToast === 'function') {
+        showToast('Conflict detected for offline request — please review', 'warning');
+      }
+    }
+    if (data.type === 'offline-queue-complete') {
+      if (typeof showToast === 'function') {
+        var msg = data.replayed + ' request(s) replayed';
+        if (data.failed > 0) msg += ', ' + data.failed + ' failed';
+        showToast(msg, data.failed > 0 ? 'warning' : 'success');
+      }
+    }
+  });
+
+  // Replay offline queue when coming back online
+  window.addEventListener('online', function() {
+    if (navigator.serviceWorker.controller) {
+      navigator.serviceWorker.controller.postMessage({ type: 'replay-queue' });
+    }
+    if (typeof showToast === 'function') {
+      showToast('Back online — syncing changes…', 'info');
+    }
+  });
+
+  window.addEventListener('offline', function() {
+    if (typeof showToast === 'function') {
+      showToast('You are offline — changes will be saved and synced when reconnected', 'warning');
+    }
+  });
+})();

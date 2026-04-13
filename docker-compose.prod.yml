@@ -1,0 +1,83 @@
+# docker-compose.prod.yml — Production stack for teb
+#
+# Includes PostgreSQL, Redis, and the teb application.
+# Usage:
+#   cp .env.example .env  # fill in secrets
+#   docker compose -f docker-compose.prod.yml up -d
+#
+services:
+  postgres:
+    image: postgres:16-alpine
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    environment:
+      POSTGRES_DB: teb
+      POSTGRES_USER: teb
+      POSTGRES_PASSWORD: ${TEB_DB_PASSWORD:?Set TEB_DB_PASSWORD in .env}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U teb"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    volumes:
+      - redisdata:/data
+    command: redis-server --appendonly yes --maxmemory 128mb --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  teb:
+    build: .
+    ports:
+      - "${TEB_PORT:-8000}:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      - DATABASE_URL=postgresql://teb:${TEB_DB_PASSWORD}@postgres:5432/teb
+      - REDIS_URL=redis://redis:6379/0
+      - TEB_JWT_SECRET=${TEB_JWT_SECRET:?Set TEB_JWT_SECRET in .env}
+      - TEB_ENV=production
+      - TEB_BASE_PATH=${TEB_BASE_PATH:-/teb}
+      # AI providers
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - OPENAI_BASE_URL=${OPENAI_BASE_URL:-https://api.openai.com/v1}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - TEB_AI_PROVIDER=${TEB_AI_PROVIDER:-auto}
+      # Observability
+      - TEB_SENTRY_DSN=${TEB_SENTRY_DSN:-}
+      - TEB_LOG_LEVEL=${TEB_LOG_LEVEL:-INFO}
+      # Payments
+      - TEB_MERCURY_API_KEY=${TEB_MERCURY_API_KEY:-}
+      - TEB_STRIPE_API_KEY=${TEB_STRIPE_API_KEY:-}
+      # Encryption
+      - TEB_SECRET_KEY=${TEB_SECRET_KEY:-}
+      - TEB_ENCRYPTION_KEY=${TEB_ENCRYPTION_KEY:-}
+      # CORS
+      - TEB_CORS_ORIGINS=${TEB_CORS_ORIGINS:-https://portearchive.com}
+    env_file:
+      - .env
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+
+volumes:
+  pgdata:
+  redisdata:

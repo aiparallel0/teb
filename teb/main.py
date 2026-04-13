@@ -33,6 +33,12 @@ from teb.models import (
     Workspace, WorkspaceMember,
 )
 
+# ─── Domain routers (extracted from monolith) ─────────────────────────────────
+from teb.routers.health import router as health_router, set_start_time as _set_health_start_time, increment_request_metrics
+from teb.routers.auth import router as auth_router, set_rate_limiter as _set_auth_rate_limiter
+from teb.routers.settings import router as settings_router
+from teb.routers.notifications import router as notifications_router, set_rate_limiter as _set_notif_rate_limiter
+
 # ─── Logging ──────────────────────────────────────────────────────────────────
 
 class _JsonFormatter(logging.Formatter):
@@ -254,6 +260,30 @@ async def _autonomous_execution_loop() -> None:
 async def lifespan(app: FastAPI):
     global _auto_exec_task, _APP_START_TIME
     _APP_START_TIME = time.monotonic()
+    _set_health_start_time(_APP_START_TIME)
+
+    # ── Structured logging ────────────────────────────────────────────────
+    try:
+        from teb.logging_config import configure_logging
+        configure_logging()
+    except Exception:
+        pass  # Fall back to default logging
+
+    # ── Sentry error tracking ────────────────────────────────────────────
+    if config.SENTRY_DSN:
+        try:
+            import sentry_sdk  # noqa: PLC0415
+            sentry_sdk.init(
+                dsn=config.SENTRY_DSN,
+                traces_sample_rate=0.1,
+                environment=config.TEB_ENV,
+                release="teb@2.0.0",
+            )
+            logger.info("Sentry initialized (env=%s)", config.TEB_ENV)
+        except ImportError:
+            logger.warning("TEB_SENTRY_DSN is set but sentry-sdk is not installed. pip install sentry-sdk")
+        except Exception as exc:
+            logger.warning("Failed to initialize Sentry: %s", exc)
 
     # ── Configuration validation at startup ───────────────────────────────
     _validate_startup_config()
@@ -370,6 +400,17 @@ app.add_middleware(RequestIdMiddleware)
 # Static files
 _STATIC_DIR = Path(__file__).parent / "static"
 _TEMPLATES_DIR = Path(__file__).parent / "templates"
+
+
+# ─── Include domain routers ───────────────────────────────────────────────────
+app.include_router(health_router)
+app.include_router(auth_router)
+app.include_router(settings_router)
+app.include_router(notifications_router)
+
+# Wire up shared state for routers
+_set_auth_rate_limiter(_check_rate_limit)
+_set_notif_rate_limiter(_check_api_rate_limit)
 
 app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
 
@@ -532,32 +573,6 @@ class DripClarifyAnswer(BaseModel):
     answer: str
 
 
-class AuthRegister(BaseModel):
-    email: str = Field(..., min_length=3, max_length=254, description="Email address")
-    password: str = Field(..., min_length=6, max_length=128, description="Password (min 6 characters)")
-
-    @field_validator("email")
-    @classmethod
-    def validate_email(cls, v: str) -> str:
-        # Robust email format check
-        if not re.match(r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$", v.strip()):
-            raise ValueError("Invalid email address format")
-        return v.strip().lower()
-
-
-class AuthLogin(BaseModel):
-    email: str = Field(..., min_length=3, max_length=254)
-    password: str = Field(..., min_length=1, max_length=128)
-
-
-class AuthRefresh(BaseModel):
-    refresh_token: str
-
-
-class AuthLogout(BaseModel):
-    refresh_token: Optional[str] = None
-
-
 class TelegramUpdate(BaseModel):
     """Minimal Telegram webhook update structure."""
     message: Optional[dict] = None
@@ -698,175 +713,13 @@ def _increment_request_metrics(status_code: int) -> None:
     _metrics["requests_by_status"][key] = _metrics["requests_by_status"].get(key, 0) + 1
     if status_code >= 500:
         _metrics["errors_total"] += 1
+    # Also update the health router's metrics copy
+    increment_request_metrics(status_code)
 
 
-@app.get("/health", tags=["health"])
-async def health_check():
-    """Comprehensive health check — database, AI, payments, uptime, and version."""
-    import platform
-    import shutil
+# Health routes moved to teb/routers/health.py
 
-    components: dict = {}
-
-    # Database connectivity
-    try:
-        with storage._conn() as con:
-            con.execute("SELECT 1")
-            row = con.execute(
-                "SELECT COUNT(*) AS cnt FROM sqlite_master WHERE type='table'"
-            ).fetchone()
-            table_count = row["cnt"] if row else 0
-        components["database"] = {"status": "ok", "tables": table_count}
-        db_ok = True
-    except Exception as exc:
-        components["database"] = {"status": "error", "detail": str(exc)}
-        db_ok = False
-
-    # AI provider availability
-    ai_provider = config.get_ai_provider()
-    components["ai"] = {
-        "status": "ok" if ai_provider else "unconfigured",
-        "provider": ai_provider or "none",
-    }
-
-    # Payment providers
-    from teb import payments as _pay
-    providers = _pay.list_providers()
-    components["payments"] = {
-        "status": "ok" if any(p["configured"] for p in providers) else "unconfigured",
-        "providers": providers,
-    }
-
-    # Disk space
-    try:
-        disk = shutil.disk_usage("/")
-        disk_free_mb = round(disk.free / (1024 * 1024), 1)
-        disk_pct = round((disk.used / disk.total) * 100, 1)
-        components["disk"] = {
-            "status": "ok" if disk_pct < 90 else "warning",
-            "free_mb": disk_free_mb,
-            "used_percent": disk_pct,
-        }
-    except Exception:
-        components["disk"] = {"status": "unknown"}
-
-    # Overall status
-    status = "healthy" if db_ok else "degraded"
-    code = 200 if db_ok else 503
-    uptime_seconds = round(time.monotonic() - _APP_START_TIME, 1)
-
-    return JSONResponse(
-        status_code=code,
-        content={
-            "status": status,
-            "version": "2.0.0",
-            "uptime_seconds": uptime_seconds,
-            "python_version": platform.python_version(),
-            "components": components,
-        },
-    )
-
-
-@app.get("/api/health/ready", tags=["health"])
-async def readiness_probe():
-    """Readiness probe for container orchestration (Kubernetes, ECS, etc.).
-
-    Returns 200 if the database is reachable and the app can serve traffic.
-    Returns 503 if the app is not ready.
-    """
-    try:
-        with storage._conn() as con:
-            con.execute("SELECT 1")
-        return JSONResponse(
-            status_code=200,
-            content={"ready": True},
-        )
-    except Exception:
-        logger.warning("Readiness probe failed", exc_info=True)
-        return JSONResponse(
-            status_code=503,
-            content={"ready": False, "detail": "Database connectivity check failed"},
-        )
-
-
-@app.get("/api/health/live", tags=["health"])
-async def liveness_probe():
-    """Liveness probe — always returns 200 if the process is running."""
-    return {"alive": True}
-
-
-@app.get("/api/metrics", tags=["health"])
-async def get_metrics():
-    """Basic application metrics (request counts, uptime, error rate).
-
-    Returns JSON metrics suitable for monitoring dashboards.
-    For Prometheus-format metrics, use a dedicated exporter.
-    """
-    uptime_seconds = round(time.monotonic() - _APP_START_TIME, 1)
-    total = max(_metrics["requests_total"], 1)
-    error_rate = round(_metrics["errors_total"] / total * 100, 2)
-
-    return {
-        "uptime_seconds": uptime_seconds,
-        "requests_total": _metrics["requests_total"],
-        "requests_by_status": _metrics["requests_by_status"],
-        "errors_total": _metrics["errors_total"],
-        "error_rate_percent": error_rate,
-    }
-
-
-# ─── Auth ─────────────────────────────────────────────────────────────────────
-
-@app.post("/api/auth/register", status_code=201)
-async def register(body: AuthRegister, request: Request):
-    """Register a new user and return a JWT token."""
-    _check_rate_limit(request)
-    try:
-        result = auth.register_user(body.email, body.password)
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc))
-    return result
-
-
-@app.post("/api/auth/login")
-async def login(body: AuthLogin, request: Request):
-    """Log in and return a JWT token."""
-    _check_rate_limit(request)
-    try:
-        result = auth.login_user(body.email, body.password)
-    except ValueError as exc:
-        raise HTTPException(status_code=401, detail=str(exc))
-    return result
-
-
-@app.get("/api/auth/me")
-async def auth_me(request: Request):
-    """Get the current authenticated user."""
-    uid = _require_user(request)
-    user = storage.get_user(uid)
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-    return user.to_dict()
-
-
-@app.post("/api/auth/refresh")
-async def auth_refresh(request: Request, body: AuthRefresh):
-    """Exchange a refresh token for a new access token + refresh token."""
-    _check_rate_limit(request)
-    try:
-        result = auth.refresh_access_token(body.refresh_token)
-    except ValueError as exc:
-        raise HTTPException(status_code=401, detail=str(exc))
-    return result
-
-
-@app.post("/api/auth/logout")
-async def auth_logout(request: Request, body: AuthLogout):
-    """Revoke refresh tokens. Revokes all tokens if no specific token provided."""
-    uid = _require_user(request)
-    auth.logout_user(uid, body.refresh_token)
-    return {"message": "Logged out"}
-
+# Auth routes moved to teb/routers/auth.py
 
 # ─── Frontend ─────────────────────────────────────────────────────────────────
 
@@ -1293,44 +1146,7 @@ async def delete_task(task_id: int, request: Request):
 
 # ─── API Credentials ─────────────────────────────────────────────────────────
 
-@app.post("/api/credentials", status_code=201)
-async def create_credential(body: CredentialCreate, request: Request):
-    uid = _require_user(request)
-    name = body.name.strip()
-    base_url = body.base_url.strip()
-    if not name:
-        raise HTTPException(status_code=422, detail="name must not be empty")
-    if not base_url:
-        raise HTTPException(status_code=422, detail="base_url must not be empty")
-    cred = ApiCredential(
-        name=name,
-        base_url=base_url,
-        auth_header=body.auth_header.strip() or "Authorization",
-        auth_value=body.auth_value,
-        description=body.description.strip(),
-        user_id=uid,
-    )
-    cred = storage.create_credential(cred)
-    return cred.to_dict()
-
-
-@app.get("/api/credentials")
-async def list_credentials(request: Request):
-    uid = _require_user(request)
-    return [c.to_dict() for c in storage.list_credentials(user_id=uid)]
-
-
-@app.delete("/api/credentials/{cred_id}", status_code=200)
-async def delete_credential(cred_id: int, request: Request):
-    uid = _require_user(request)
-    cred = storage.get_credential(cred_id)
-    if not cred:
-        raise HTTPException(status_code=404, detail="Credential not found")
-    # Users can only delete their own credentials (or legacy unscoped ones)
-    if cred.user_id is not None and cred.user_id != uid:
-        raise HTTPException(status_code=403, detail="Not your credential")
-    storage.delete_credential(cred_id)
-    return {"deleted": cred_id}
+# Credential routes moved to teb/routers/settings.py
 
 
 # ─── Task execution ──────────────────────────────────────────────────────────
@@ -1608,23 +1424,7 @@ async def outcome_suggestions(goal_id: int, request: Request):
 
 # ─── User Profile ────────────────────────────────────────────────────────────
 
-@app.get("/api/profile")
-async def get_profile(request: Request):
-    uid = _require_user(request)
-    profile = storage.get_or_create_profile(user_id=uid)
-    return profile.to_dict()
-
-
-@app.patch("/api/profile")
-async def update_profile(body: dict, request: Request):
-    uid = _require_user(request)
-    profile = storage.get_or_create_profile(user_id=uid)
-    for key in ("skills", "available_hours_per_day", "experience_level",
-                "interests", "preferred_learning_style"):
-        if key in body:
-            setattr(profile, key, body[key])
-    profile = storage.update_profile(profile)
-    return profile.to_dict()
+# Profile routes moved to teb/routers/settings.py
 
 
 # ─── Proactive Suggestions ──────────────────────────────────────────────────
@@ -3606,6 +3406,47 @@ async def sse_stream(request: Request,
     )
 
 
+@app.get("/api/goals/{goal_id}/stream")
+async def goal_sse_stream(
+    goal_id: int,
+    request: Request,
+    last_event_id: Optional[str] = Query(default=None, alias="Last-Event-ID"),
+):
+    """Server-Sent Events stream filtered to a specific goal.
+
+    Emits task_started, task_progress, task_completed, and orchestration_complete
+    events for real-time orchestration visibility.
+    """
+    uid = _require_user(request)
+    _get_goal_for_user(goal_id, uid)
+
+    if not last_event_id:
+        last_event_id = request.headers.get("Last-Event-ID")
+
+    from teb import events as _events  # noqa: E402
+
+    async def _filtered_stream():
+        """Filter the user's event stream to only events for this goal."""
+        async for chunk in _events.stream_events(uid, last_event_id):
+            # Pass through heartbeats
+            if chunk.startswith(": heartbeat"):
+                yield chunk
+                continue
+            # Filter to goal-related events
+            if f'"goal_id": {goal_id}' in chunk or f'"goal_id":{goal_id}' in chunk:
+                yield chunk
+
+    return StreamingResponse(
+        _filtered_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
 @app.get("/api/events/status")
 async def sse_status(request: Request):
     """Get SSE event bus status."""
@@ -3825,6 +3666,89 @@ async def mcp_list_tools(request: Request):
     _require_user(request)
     from teb import mcp_server  # noqa: E402
     return {"tools": mcp_server.MCP_TOOLS}
+
+
+# ─── MCP Client (outbound tool calls to external MCP servers) ────────────────
+
+@app.get("/api/mcp/servers", tags=["mcp-client"])
+async def list_mcp_servers_endpoint(request: Request):
+    """List all registered external MCP servers."""
+    _require_user(request)
+    from teb import mcp_client  # noqa: E402
+    return [s.to_dict() for s in mcp_client.list_mcp_servers()]
+
+
+@app.post("/api/mcp/servers", status_code=201, tags=["mcp-client"])
+async def register_mcp_server_endpoint(request: Request):
+    """Register an external MCP server for teb to use as a tool source."""
+    _require_user(request)
+    body = await request.json()
+    name = body.get("name", "").strip()
+    url = body.get("url", "").strip()
+    if not name or not url:
+        raise HTTPException(status_code=422, detail="name and url are required")
+    from teb import mcp_client  # noqa: E402
+    try:
+        server = mcp_client.register_mcp_server(
+            name=name, url=url,
+            description=body.get("description", ""),
+            auth_header=body.get("auth_header", ""),
+            auth_value=body.get("auth_value", ""),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    return server.to_dict()
+
+
+@app.delete("/api/mcp/servers/{server_name}", tags=["mcp-client"])
+async def unregister_mcp_server_endpoint(server_name: str, request: Request):
+    """Remove an external MCP server from the registry."""
+    _require_user(request)
+    from teb import mcp_client  # noqa: E402
+    ok = mcp_client.unregister_mcp_server(server_name)
+    if not ok:
+        raise HTTPException(status_code=404, detail=f"Server '{server_name}' not found")
+    return {"deleted": server_name}
+
+
+@app.post("/api/mcp/servers/{server_name}/discover", tags=["mcp-client"])
+async def discover_mcp_tools_endpoint(server_name: str, request: Request):
+    """Discover available tools on a registered MCP server."""
+    _require_user(request)
+    from teb import mcp_client  # noqa: E402
+    tools = mcp_client.discover_tools(server_name)
+    return {"server": server_name, "tools": [t.to_dict() for t in tools]}
+
+
+@app.post("/api/mcp/call", tags=["mcp-client"])
+async def call_mcp_tool_endpoint(request: Request):
+    """Call a tool on an external MCP server.
+
+    Body: {"server": "name", "tool": "tool_name", "arguments": {...}}
+    """
+    _require_user(request)
+    body = await request.json()
+    server_name = body.get("server", "")
+    tool_name = body.get("tool", "")
+    arguments = body.get("arguments", {})
+    if not server_name or not tool_name:
+        raise HTTPException(status_code=422, detail="server and tool are required")
+    from teb import mcp_client  # noqa: E402
+    result = mcp_client.call_tool(server_name, tool_name, arguments)
+    return result.to_dict()
+
+
+@app.post("/api/mcp/find-tools", tags=["mcp-client"])
+async def find_mcp_tools_endpoint(request: Request):
+    """Find MCP tools relevant to a task description."""
+    _require_user(request)
+    body = await request.json()
+    description = body.get("description", "")
+    if not description:
+        raise HTTPException(status_code=422, detail="description is required")
+    from teb import mcp_client  # noqa: E402
+    tools = mcp_client.find_tools_for_task(description)
+    return {"tools": [t.to_dict() for t in tools], "count": len(tools)}
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -5258,44 +5182,7 @@ async def join_workspace_endpoint(request: Request):
     return member.to_dict()
 
 
-# ─── Phase 2: Notification endpoints ─────────────────────────────────────────
-
-@app.get("/api/notifications")
-async def list_notifications_endpoint(request: Request,
-                                      unread_only: bool = Query(False),
-                                      limit: int = Query(50)):
-    """List notifications for the current user."""
-    uid = _require_user(request)
-    _check_api_rate_limit(request)
-    return [n.to_dict() for n in storage.list_user_notifications(uid, unread_only=unread_only, limit=limit)]
-
-
-@app.post("/api/notifications/{notif_id}/read")
-async def mark_notification_read_endpoint(notif_id: int, request: Request):
-    """Mark a single notification as read."""
-    uid = _require_user(request)
-    _check_api_rate_limit(request)
-    ok = storage.mark_notification_read(notif_id, uid)
-    if not ok:
-        raise HTTPException(status_code=404, detail="Notification not found")
-    return {"read": True}
-
-
-@app.post("/api/notifications/read-all")
-async def mark_all_notifications_read_endpoint(request: Request):
-    """Mark all notifications as read."""
-    uid = _require_user(request)
-    _check_api_rate_limit(request)
-    count = storage.mark_all_notifications_read(uid)
-    return {"marked": count}
-
-
-@app.get("/api/notifications/count")
-async def count_notifications_endpoint(request: Request):
-    """Get unread notification count."""
-    uid = _require_user(request)
-    _check_api_rate_limit(request)
-    return {"unread": storage.count_unread_notifications(uid)}
+# Notification routes moved to teb/routers/notifications.py
 
 
 # ─── Phase 2: Activity Feed endpoint ─────────────────────────────────────────
@@ -7091,6 +6978,70 @@ async def cache_stats(request: Request):
     return stats
 
 
+# ─── Prometheus-compatible metrics ───────────────────────────────────────────
+
+@app.get("/api/admin/metrics", tags=["enterprise"])
+async def admin_metrics(request: Request):
+    """Prometheus-compatible metrics: active users, goals, tasks, AI latency, executor success rate."""
+    _check_api_rate_limit(request)
+    _require_admin(request)
+
+    user_count = 0
+    goal_count = 0
+    task_count = 0
+    done_goals = 0
+    done_tasks = 0
+    try:
+        with storage._conn() as con:
+            user_count = con.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+            goal_count = con.execute("SELECT COUNT(*) FROM goals").fetchone()[0]
+            done_goals = con.execute("SELECT COUNT(*) FROM goals WHERE status='done'").fetchone()[0]
+            task_count = con.execute("SELECT COUNT(*) FROM tasks").fetchone()[0]
+            done_tasks = con.execute("SELECT COUNT(*) FROM tasks WHERE status='done'").fetchone()[0]
+    except Exception:
+        pass
+
+    # Execution memory stats (if available)
+    exec_stats = {}
+    try:
+        from teb.memory import get_memory_stats
+        exec_stats = get_memory_stats()
+    except Exception:
+        pass
+
+    # Success graph stats
+    graph_stats = {}
+    try:
+        from teb.success_graph import get_graph_stats
+        graph_stats = get_graph_stats()
+    except Exception:
+        pass
+
+    uptime = round(time.monotonic() - _APP_START_TIME, 1)
+
+    return {
+        "uptime_seconds": uptime,
+        "users_total": user_count,
+        "goals_total": goal_count,
+        "goals_completed": done_goals,
+        "goal_completion_rate": round(done_goals / max(goal_count, 1), 3),
+        "tasks_total": task_count,
+        "tasks_completed": done_tasks,
+        "task_completion_rate": round(done_tasks / max(task_count, 1), 3),
+        "executor": {
+            "total_calls": exec_stats.get("total_calls", 0),
+            "success_rate": exec_stats.get("success_rate", 0),
+            "avg_latency_ms": exec_stats.get("avg_latency_ms", 0),
+        },
+        "success_graph": {
+            "nodes": graph_stats.get("nodes", 0),
+            "edges": graph_stats.get("edges", 0),
+            "observations": graph_stats.get("total_observations", 0),
+        },
+        "request_metrics": _metrics,
+    }
+
+
 # ─── Phase 6.3: CDN Config ──────────────────────────────────────────────────
 
 @app.get("/api/admin/cdn/config", tags=["enterprise"])
@@ -7444,6 +7395,73 @@ async def rebalance_goal(goal_id: int, request: Request):
 
 
 # ─── Phase 6: Social Gamification ────────────────────────────────────────────
+
+
+# ─── Success Graph ────────────────────────────────────────────────────────────
+
+@app.get("/api/success-graph/stats", tags=["success-graph"])
+async def success_graph_stats(request: Request, goal_type: Optional[str] = Query(default=None)):
+    """Get statistics about the success path graph."""
+    _require_user(request)
+    from teb.success_graph import get_graph_stats
+    return get_graph_stats(goal_type)
+
+
+@app.get("/api/success-graph/path", tags=["success-graph"])
+async def success_graph_best_path(request: Request, goal_type: str = Query(...)):
+    """Get the highest-weight execution path for a goal type."""
+    _require_user(request)
+    from teb.success_graph import get_best_path
+    path = get_best_path(goal_type)
+    return {"goal_type": goal_type, "path": path, "steps": len(path)}
+
+
+@app.get("/api/success-graph/paths", tags=["success-graph"])
+async def success_graph_top_paths(
+    request: Request,
+    goal_type: str = Query(...),
+    top_k: int = Query(default=3, ge=1, le=10),
+):
+    """Get the top-K proven execution paths for a goal type."""
+    _require_user(request)
+    from teb.success_graph import get_top_paths
+    paths = get_top_paths(goal_type, top_k=top_k)
+    return {"goal_type": goal_type, "paths": paths, "count": len(paths)}
+
+
+
+# ─── Execution Memory ─────────────────────────────────────────────────────────
+
+@app.get("/api/goals/{goal_id}/execution-memory", tags=["execution-memory"])
+async def get_execution_memory(goal_id: int, request: Request, limit: int = Query(default=50, ge=1, le=200)):
+    """Get execution memory (API call history) for a goal."""
+    user_id = _require_user(request)
+    _get_goal_for_user(goal_id, user_id)
+    from teb.memory import get_memory_for_goal
+    entries = get_memory_for_goal(goal_id, limit=limit)
+    return {"goal_id": goal_id, "entries": entries, "count": len(entries)}
+
+
+@app.get("/api/execution-memory/stats", tags=["execution-memory"])
+async def execution_memory_stats(request: Request, goal_id: Optional[int] = Query(default=None)):
+    """Get aggregate execution memory statistics."""
+    _require_user(request)
+    from teb.memory import get_memory_stats
+    return get_memory_stats(goal_id)
+
+
+@app.get("/api/execution-memory/advice", tags=["execution-memory"])
+async def execution_memory_advice(
+    request: Request,
+    endpoint: str = Query(...),
+    method: str = Query(default="GET"),
+):
+    """Check execution memory for advice on whether to proceed with an API call."""
+    _require_user(request)
+    from teb.memory import should_execute
+    advice = should_execute(endpoint, method)
+    return advice.to_dict()
+
 
 @app.get("/api/users/me/streak", tags=["gamification"])
 async def get_user_streak(request: Request):

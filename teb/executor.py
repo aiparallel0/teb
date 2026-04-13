@@ -305,8 +305,14 @@ def _is_retryable(result: StepResult) -> bool:
 def execute_step(
     step: ExecutionStep,
     credentials_by_id: Dict[int, ApiCredential],
+    goal_id: Optional[int] = None,
+    task_id: Optional[int] = None,
 ) -> StepResult:
-    """Execute a single API call with retry logic for transient failures."""
+    """Execute a single API call with retry logic for transient failures.
+
+    Integrates with execution memory to record calls and check for
+    repeated failures before executing.
+    """
     cred = credentials_by_id.get(step.credential_id)
     if not cred:
         return StepResult(
@@ -321,6 +327,20 @@ def execute_step(
             step=step, status_code=None, response_body="",
             success=False, error=f"Blocked: URL '{cred.base_url}' targets a private or disallowed address",
         )
+
+    # Check execution memory for repeated failures
+    try:
+        from teb.memory import should_execute, record_call
+        advice = should_execute(url, step.method, step.body)
+        if not advice.proceed:
+            logger.warning("Execution memory blocked call to %s: %s", url, advice.reason)
+            return StepResult(
+                step=step, status_code=None, response_body="",
+                success=False,
+                error=f"Auto-escalated: {advice.reason}",
+            )
+    except Exception:
+        pass  # Memory check is non-critical; proceed with execution
 
     # Build headers: add auth, merge step-specific headers
     headers = dict(step.headers)
@@ -359,6 +379,23 @@ def execute_step(
             )
 
         if last_result.success or not _is_retryable(last_result):
+            # Record in execution memory
+            try:
+                from teb.memory import record_call
+                elapsed = time.monotonic()  # approximate; real timing is per-attempt
+                record_call(
+                    endpoint=url,
+                    method=step.method,
+                    payload=step.body,
+                    status_code=last_result.status_code,
+                    success=last_result.success,
+                    latency_ms=0,  # actual latency tracked per-attempt above
+                    error_message=last_result.error or "",
+                    goal_id=goal_id,
+                    task_id=task_id,
+                )
+            except Exception:
+                pass  # Memory recording is non-critical
             return last_result
 
         # Exponential backoff before retry
