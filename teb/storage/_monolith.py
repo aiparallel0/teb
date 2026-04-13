@@ -6252,15 +6252,33 @@ def get_content_block(block_id: int) -> Optional[ContentBlock]:
 def update_content_block(block_id: int, **kwargs) -> Optional[ContentBlock]:
     """Update a content block's fields.  Allowed fields: block_type, content,
     properties_json, parent_block_id, order_index."""
-    allowed = {"block_type", "content", "properties_json", "parent_block_id", "order_index"}
-    updates = {k: v for k, v in kwargs.items() if k in allowed}
+    # Explicit column whitelist — prevents SQL injection by mapping to known names
+    _ALLOWED_COLUMNS = {
+        "block_type": "block_type",
+        "content": "content",
+        "properties_json": "properties_json",
+        "parent_block_id": "parent_block_id",
+        "order_index": "order_index",
+    }
+    updates: dict = {}
+    values: list = []
+    for key, val in kwargs.items():
+        col = _ALLOWED_COLUMNS.get(key)
+        if col is not None:
+            updates[col] = val
+            values.append(val)
     if not updates:
         return get_content_block(block_id)
-    updates["updated_at"] = datetime.now(timezone.utc).isoformat()
-    set_clause = ", ".join(f"{k} = ?" for k in updates)
-    values = list(updates.values()) + [block_id]
+    now = datetime.now(timezone.utc).isoformat()
+    # Build SET clause from whitelisted column names only
+    cols = list(updates.keys())
+    set_parts = [f"{c} = ?" for c in cols]
+    set_parts.append("updated_at = ?")
+    values.append(now)
+    values.append(block_id)
+    set_clause = ", ".join(set_parts)
     with _conn() as con:
-        con.execute(f"UPDATE content_blocks SET {set_clause} WHERE id = ?", values)
+        con.execute(f"UPDATE content_blocks SET {set_clause} WHERE id = ?", values)  # noqa: S608 — columns are whitelisted above
     return get_content_block(block_id)
 
 
@@ -6339,11 +6357,19 @@ def list_user_tasks(
 
     This enables cross-goal portfolio views (e.g. 'all tasks due this week').
     """
-    allowed_sort = {"order_index", "due_date", "priority", "status", "created_at", "updated_at", "title"}
-    if sort_field not in allowed_sort:
-        sort_field = "order_index"
-    if sort_dir.lower() not in ("asc", "desc"):
-        sort_dir = "asc"
+    # Whitelist sort field and direction to prevent SQL injection
+    _SORT_FIELDS = {
+        "order_index": "t.order_index",
+        "due_date": "t.due_date",
+        "priority": "t.priority",
+        "status": "t.status",
+        "created_at": "t.created_at",
+        "updated_at": "t.updated_at",
+        "title": "t.title",
+    }
+    _SORT_DIRS = {"asc": "ASC", "desc": "DESC"}
+    safe_sort_col = _SORT_FIELDS.get(sort_field, "t.order_index")
+    safe_sort_dir = _SORT_DIRS.get(sort_dir.lower(), "ASC")
 
     query = """
         SELECT t.* FROM tasks t
@@ -6375,7 +6401,7 @@ def list_user_tasks(
         query += " AND t.due_date != '' AND t.due_date >= ?"
         params.append(due_after)
 
-    query += f" ORDER BY t.{sort_field} {sort_dir}"
+    query += f" ORDER BY {safe_sort_col} {safe_sort_dir}"  # noqa: S608 — values from whitelist above
     query += " LIMIT ?"
     params.append(limit)
 
