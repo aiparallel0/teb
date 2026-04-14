@@ -99,22 +99,6 @@ from teb.models import (
     WorkspaceMember,
 )
 
-def _row_to_user(row: sqlite3.Row) -> User:
-    return User(
-        id=row["id"],
-        email=row["email"],
-        password_hash=row["password_hash"],
-        role=row["role"] if "role" in row.keys() else "user",
-        email_verified=bool(row["email_verified"]) if "email_verified" in row.keys() else False,
-        failed_login_attempts=row["failed_login_attempts"] if "failed_login_attempts" in row.keys() else 0,
-        locked_until=(
-            datetime.fromisoformat(row["locked_until"])
-            if "locked_until" in row.keys() and row["locked_until"]
-            else None
-        ),
-        created_at=datetime.fromisoformat(row["created_at"]),
-    )
-
 
 def create_user(user: User) -> User:
     now = datetime.now(timezone.utc).isoformat()
@@ -131,13 +115,13 @@ def create_user(user: User) -> User:
 def get_user_by_email(email: str) -> Optional[User]:
     with _conn() as con:
         row = con.execute("SELECT * FROM users WHERE email = ?", (email,)).fetchone()
-    return _row_to_user(row) if row else None
+    return User.from_row(row) if row else None
 
 
 def get_user(user_id: int) -> Optional[User]:
     with _conn() as con:
         row = con.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
-    return _row_to_user(row) if row else None
+    return User.from_row(row) if row else None
 
 
 def update_user(user: User) -> User:
@@ -157,7 +141,7 @@ def list_all_users() -> List[User]:
     """Admin: return all users ordered by created_at DESC."""
     with _conn() as con:
         rows = con.execute("SELECT * FROM users ORDER BY created_at DESC").fetchall()
-    return [_row_to_user(r) for r in rows]
+    return [User.from_row(r) for r in rows]
 
 
 def delete_user(user_id: int) -> None:
@@ -409,27 +393,6 @@ class VersionConflictError(Exception):
 
 # ─── Tasks ────────────────────────────────────────────────────────────────────
 
-def _row_to_task(row: sqlite3.Row) -> Task:
-    t = Task(
-        id=row["id"],
-        goal_id=row["goal_id"],
-        parent_id=row["parent_id"],
-        title=row["title"],
-        description=row["description"],
-        estimated_minutes=row["estimated_minutes"],
-        status=row["status"],
-        order_index=row["order_index"],
-    )
-    t.due_date = row["due_date"] if "due_date" in row.keys() else ""
-    t.depends_on = row["depends_on"] if "depends_on" in row.keys() else "[]"
-    t.tags = row["tags"] if "tags" in row.keys() else ""
-    t.assigned_to = row["assigned_to"] if "assigned_to" in row.keys() else None
-    t.priority = row["priority"] if "priority" in row.keys() else "normal"
-    t.version = row["version"] if "version" in row.keys() else 1
-    t.created_at = datetime.fromisoformat(row["created_at"])
-    t.updated_at = datetime.fromisoformat(row["updated_at"])
-    return t
-
 
 @_with_retry
 def create_task(task: Task) -> Task:
@@ -454,7 +417,7 @@ def create_task(task: Task) -> Task:
 def get_task(task_id: int) -> Optional[Task]:
     with _conn() as con:
         row = con.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
-    return _row_to_task(row) if row else None
+    return Task.from_row(row) if row else None
 
 
 def list_tasks(goal_id: Optional[int] = None, status: Optional[str] = None) -> List[Task]:
@@ -469,7 +432,7 @@ def list_tasks(goal_id: Optional[int] = None, status: Optional[str] = None) -> L
     query += " ORDER BY order_index ASC, id ASC"
     with _conn() as con:
         rows = con.execute(query, params).fetchall()
-    return [_row_to_task(r) for r in rows]
+    return [Task.from_row(r) for r in rows]
 
 
 @_with_retry
@@ -576,18 +539,6 @@ def delete_credential(cred_id: int) -> None:
 
 # ─── Execution Logs ──────────────────────────────────────────────────────────
 
-def _row_to_execution_log(row: sqlite3.Row) -> ExecutionLog:
-    return ExecutionLog(
-        id=row["id"],
-        task_id=row["task_id"],
-        credential_id=row["credential_id"],
-        action=row["action"],
-        request_summary=row["request_summary"],
-        response_summary=row["response_summary"],
-        status=row["status"],
-        created_at=datetime.fromisoformat(row["created_at"]),
-    )
-
 
 @_with_retry
 def create_execution_log(log: ExecutionLog) -> ExecutionLog:
@@ -610,21 +561,10 @@ def list_execution_logs(task_id: int) -> List[ExecutionLog]:
             "SELECT * FROM execution_logs WHERE task_id = ? ORDER BY created_at ASC",
             (task_id,),
         ).fetchall()
-    return [_row_to_execution_log(r) for r in rows]
+    return [ExecutionLog.from_row(r) for r in rows]
 
 
 # ─── Check-ins ───────────────────────────────────────────────────────────────
-
-def _row_to_checkin(row: sqlite3.Row) -> CheckIn:
-    return CheckIn(
-        id=row["id"],
-        goal_id=row["goal_id"],
-        done_summary=row["done_summary"],
-        blockers=row["blockers"],
-        mood=row["mood"],
-        feedback=row["feedback"],
-        created_at=datetime.fromisoformat(row["created_at"]),
-    )
 
 
 def create_checkin(ci: CheckIn) -> CheckIn:
@@ -648,7 +588,7 @@ def list_checkins(goal_id: int, limit: Optional[int] = None) -> List[CheckIn]:
         params.append(limit)
     with _conn() as con:
         rows = con.execute(query, params).fetchall()
-    return [_row_to_checkin(r) for r in rows]
+    return [CheckIn.from_row(r) for r in rows]
 
 
 def get_last_checkin(goal_id: int) -> Optional[CheckIn]:
@@ -657,22 +597,10 @@ def get_last_checkin(goal_id: int) -> Optional[CheckIn]:
             "SELECT * FROM check_ins WHERE goal_id = ? ORDER BY created_at DESC LIMIT 1",
             (goal_id,),
         ).fetchone()
-    return _row_to_checkin(row) if row else None
+    return CheckIn.from_row(row) if row else None
 
 
 # ─── Outcome Metrics ─────────────────────────────────────────────────────────
-
-def _row_to_outcome_metric(row: sqlite3.Row) -> OutcomeMetric:
-    return OutcomeMetric(
-        id=row["id"],
-        goal_id=row["goal_id"],
-        label=row["label"],
-        target_value=row["target_value"],
-        current_value=row["current_value"],
-        unit=row["unit"],
-        created_at=datetime.fromisoformat(row["created_at"]),
-        updated_at=datetime.fromisoformat(row["updated_at"]),
-    )
 
 
 def create_outcome_metric(om: OutcomeMetric) -> OutcomeMetric:
@@ -692,7 +620,7 @@ def create_outcome_metric(om: OutcomeMetric) -> OutcomeMetric:
 def get_outcome_metric(metric_id: int) -> Optional[OutcomeMetric]:
     with _conn() as con:
         row = con.execute("SELECT * FROM outcome_metrics WHERE id = ?", (metric_id,)).fetchone()
-    return _row_to_outcome_metric(row) if row else None
+    return OutcomeMetric.from_row(row) if row else None
 
 
 def list_outcome_metrics(goal_id: int) -> List[OutcomeMetric]:
@@ -701,7 +629,7 @@ def list_outcome_metrics(goal_id: int) -> List[OutcomeMetric]:
             "SELECT * FROM outcome_metrics WHERE goal_id = ? ORDER BY created_at ASC",
             (goal_id,),
         ).fetchall()
-    return [_row_to_outcome_metric(r) for r in rows]
+    return [OutcomeMetric.from_row(r) for r in rows]
 
 
 def update_outcome_metric(om: OutcomeMetric) -> OutcomeMetric:
@@ -716,16 +644,6 @@ def update_outcome_metric(om: OutcomeMetric) -> OutcomeMetric:
 
 
 # ─── Nudge Events ────────────────────────────────────────────────────────────
-
-def _row_to_nudge(row: sqlite3.Row) -> NudgeEvent:
-    return NudgeEvent(
-        id=row["id"],
-        goal_id=row["goal_id"],
-        nudge_type=row["nudge_type"],
-        message=row["message"],
-        acknowledged=bool(row["acknowledged"]),
-        created_at=datetime.fromisoformat(row["created_at"]),
-    )
 
 
 def create_nudge(ne: NudgeEvent) -> NudgeEvent:
@@ -749,14 +667,14 @@ def list_nudges(goal_id: int, unacknowledged_only: bool = False) -> List[NudgeEv
     query += " ORDER BY created_at DESC"
     with _conn() as con:
         rows = con.execute(query, params).fetchall()
-    return [_row_to_nudge(r) for r in rows]
+    return [NudgeEvent.from_row(r) for r in rows]
 
 
 def get_nudge(nudge_id: int) -> Optional[NudgeEvent]:
     """Get a single nudge event by ID."""
     with _conn() as con:
         row = con.execute("SELECT * FROM nudge_events WHERE id = ?", (nudge_id,)).fetchone()
-    return _row_to_nudge(row) if row else None
+    return NudgeEvent.from_row(row) if row else None
 
 
 def acknowledge_nudge(nudge_id: int) -> Optional[NudgeEvent]:
@@ -765,27 +683,12 @@ def acknowledge_nudge(nudge_id: int) -> Optional[NudgeEvent]:
         if not row:
             return None
         con.execute("UPDATE nudge_events SET acknowledged = 1 WHERE id = ?", (nudge_id,))
-    ne = _row_to_nudge(row)
+    ne = NudgeEvent.from_row(row)
     ne.acknowledged = True
     return ne
 
 
 # ─── User Profiles ───────────────────────────────────────────────────────────
-
-def _row_to_user_profile(row: sqlite3.Row) -> UserProfile:
-    return UserProfile(
-        id=row["id"],
-        user_id=row["user_id"] if "user_id" in row.keys() else None,
-        skills=row["skills"],
-        available_hours_per_day=row["available_hours_per_day"],
-        experience_level=row["experience_level"],
-        interests=row["interests"],
-        preferred_learning_style=row["preferred_learning_style"],
-        goals_completed=row["goals_completed"],
-        total_tasks_completed=row["total_tasks_completed"],
-        created_at=datetime.fromisoformat(row["created_at"]),
-        updated_at=datetime.fromisoformat(row["updated_at"]),
-    )
 
 
 def get_or_create_profile(user_id: Optional[int] = None) -> UserProfile:
@@ -802,7 +705,7 @@ def get_or_create_profile(user_id: Optional[int] = None) -> UserProfile:
         else:
             row = con.execute("SELECT * FROM user_profiles ORDER BY id LIMIT 1").fetchone()
         if row:
-            return _row_to_user_profile(row)
+            return UserProfile.from_row(row)
         now = datetime.now(timezone.utc).isoformat()
         cur = con.execute(
             "INSERT INTO user_profiles (user_id, created_at, updated_at) VALUES (?, ?, ?)",
@@ -833,17 +736,6 @@ def update_profile(profile: UserProfile) -> UserProfile:
 
 # ─── Success Paths ───────────────────────────────────────────────────────────
 
-def _row_to_success_path(row: sqlite3.Row) -> SuccessPath:
-    return SuccessPath(
-        id=row["id"],
-        goal_type=row["goal_type"],
-        steps_json=row["steps_json"],
-        outcome_summary=row["outcome_summary"],
-        source_goal_id=row["source_goal_id"],
-        times_reused=row["times_reused"],
-        created_at=datetime.fromisoformat(row["created_at"]),
-    )
-
 
 def create_success_path(sp: SuccessPath) -> SuccessPath:
     now = datetime.now(timezone.utc).isoformat()
@@ -867,7 +759,7 @@ def list_success_paths(goal_type: Optional[str] = None) -> List[SuccessPath]:
     query += " ORDER BY times_reused DESC, created_at DESC"
     with _conn() as con:
         rows = con.execute(query, params).fetchall()
-    return [_row_to_success_path(r) for r in rows]
+    return [SuccessPath.from_row(r) for r in rows]
 
 
 def increment_success_path_reuse(path_id: int) -> None:
@@ -879,17 +771,6 @@ def increment_success_path_reuse(path_id: int) -> None:
 
 
 # ─── Proactive Suggestions ──────────────────────────────────────────────────
-
-def _row_to_suggestion(row: sqlite3.Row) -> ProactiveSuggestion:
-    return ProactiveSuggestion(
-        id=row["id"],
-        goal_id=row["goal_id"],
-        suggestion=row["suggestion"],
-        rationale=row["rationale"],
-        category=row["category"],
-        status=row["status"],
-        created_at=datetime.fromisoformat(row["created_at"]),
-    )
 
 
 def create_suggestion(ps: ProactiveSuggestion) -> ProactiveSuggestion:
@@ -914,7 +795,7 @@ def list_suggestions(goal_id: int, status: Optional[str] = None) -> List[Proacti
     query += " ORDER BY created_at DESC"
     with _conn() as con:
         rows = con.execute(query, params).fetchall()
-    return [_row_to_suggestion(r) for r in rows]
+    return [ProactiveSuggestion.from_row(r) for r in rows]
 
 
 def update_suggestion_status(suggestion_id: int, status: str) -> Optional[ProactiveSuggestion]:
@@ -926,25 +807,12 @@ def update_suggestion_status(suggestion_id: int, status: str) -> Optional[Proact
             "UPDATE proactive_suggestions SET status = ? WHERE id = ?",
             (status, suggestion_id),
         )
-    ps = _row_to_suggestion(row)
+    ps = ProactiveSuggestion.from_row(row)
     ps.status = status
     return ps
 
 
 # ─── Agent Handoffs ──────────────────────────────────────────────────────────
-
-def _row_to_handoff(row: sqlite3.Row) -> AgentHandoff:
-    return AgentHandoff(
-        id=row["id"],
-        goal_id=row["goal_id"],
-        from_agent=row["from_agent"],
-        to_agent=row["to_agent"],
-        task_id=row["task_id"],
-        input_summary=row["input_summary"],
-        output_summary=row["output_summary"],
-        status=row["status"],
-        created_at=datetime.fromisoformat(row["created_at"]) if row["created_at"] else None,
-    )
 
 
 @_with_retry
@@ -981,22 +849,10 @@ def list_handoffs(goal_id: int) -> List[AgentHandoff]:
             "SELECT * FROM agent_handoffs WHERE goal_id = ? ORDER BY created_at ASC",
             (goal_id,),
         ).fetchall()
-    return [_row_to_handoff(r) for r in rows]
+    return [AgentHandoff.from_row(r) for r in rows]
 
 
 # ─── Agent Messages ──────────────────────────────────────────────────────────
-
-def _row_to_agent_message(row: sqlite3.Row) -> AgentMessage:
-    return AgentMessage(
-        id=row["id"],
-        goal_id=row["goal_id"],
-        from_agent=row["from_agent"],
-        to_agent=row["to_agent"],
-        message_type=row["message_type"],
-        content=row["content"],
-        in_reply_to=row["in_reply_to"],
-        created_at=datetime.fromisoformat(row["created_at"]) if row["created_at"] else None,
-    )
 
 
 def create_agent_message(msg: AgentMessage) -> AgentMessage:
@@ -1025,7 +881,7 @@ def list_agent_messages(goal_id: int, agent_type: Optional[str] = None) -> List[
         params = [goal_id]
     with _conn() as con:
         rows = con.execute(query, params).fetchall()
-    return [_row_to_agent_message(r) for r in rows]
+    return [AgentMessage.from_row(r) for r in rows]
 
 
 # ─── Agent Activity ──────────────────────────────────────────────────────────
@@ -1083,19 +939,6 @@ def get_agent_activity(goal_id: int, limit: int = 50) -> list:
 
 # ─── Browser Actions ────────────────────────────────────────────────────────
 
-def _row_to_browser_action(row: sqlite3.Row) -> BrowserAction:
-    return BrowserAction(
-        id=row["id"],
-        task_id=row["task_id"],
-        action_type=row["action_type"],
-        target=row["target"],
-        value=row["value"],
-        status=row["status"],
-        error=row["error"],
-        screenshot_path=row["screenshot_path"],
-        created_at=datetime.fromisoformat(row["created_at"]) if row["created_at"] else None,
-    )
-
 
 def create_browser_action(action: BrowserAction) -> BrowserAction:
     now = datetime.now(timezone.utc).isoformat()
@@ -1130,24 +973,10 @@ def list_browser_actions(task_id: int) -> List[BrowserAction]:
             "SELECT * FROM browser_actions WHERE task_id = ? ORDER BY created_at ASC",
             (task_id,),
         ).fetchall()
-    return [_row_to_browser_action(r) for r in rows]
+    return [BrowserAction.from_row(r) for r in rows]
 
 
 # ─── Integrations ────────────────────────────────────────────────────────────
-
-def _row_to_integration(row: sqlite3.Row) -> Integration:
-    return Integration(
-        id=row["id"],
-        service_name=row["service_name"],
-        category=row["category"],
-        base_url=row["base_url"],
-        auth_type=row["auth_type"],
-        auth_header=row["auth_header"],
-        docs_url=row["docs_url"],
-        capabilities=row["capabilities"],
-        common_endpoints=row["common_endpoints"],
-        created_at=datetime.fromisoformat(row["created_at"]) if row["created_at"] else None,
-    )
 
 
 def create_integration(integration: Integration) -> Integration:
@@ -1172,7 +1001,7 @@ def get_integration(service_name: str) -> Optional[Integration]:
         row = con.execute(
             "SELECT * FROM integrations WHERE service_name = ?", (service_name,),
         ).fetchone()
-    return _row_to_integration(row) if row else None
+    return Integration.from_row(row) if row else None
 
 
 def list_integrations(category: Optional[str] = None) -> List[Integration]:
@@ -1184,7 +1013,7 @@ def list_integrations(category: Optional[str] = None) -> List[Integration]:
         params = []
     with _conn() as con:
         rows = con.execute(query, params).fetchall()
-    return [_row_to_integration(r) for r in rows]
+    return [Integration.from_row(r) for r in rows]
 
 
 def delete_integration(integration_id: int) -> None:
@@ -1193,22 +1022,6 @@ def delete_integration(integration_id: int) -> None:
 
 
 # ─── Spending Budgets ────────────────────────────────────────────────────────
-
-def _row_to_spending_budget(row: sqlite3.Row) -> SpendingBudget:
-    return SpendingBudget(
-        id=row["id"],
-        goal_id=row["goal_id"],
-        daily_limit=row["daily_limit"],
-        total_limit=row["total_limit"],
-        category=row["category"],
-        require_approval=bool(row["require_approval"]),
-        spent_today=row["spent_today"],
-        spent_total=row["spent_total"],
-        autopilot_enabled=bool(row["autopilot_enabled"]) if "autopilot_enabled" in row.keys() else False,
-        autopilot_threshold=row["autopilot_threshold"] if "autopilot_threshold" in row.keys() else 50.0,
-        created_at=datetime.fromisoformat(row["created_at"]),
-        updated_at=datetime.fromisoformat(row["updated_at"]),
-    )
 
 
 def create_spending_budget(budget: SpendingBudget) -> SpendingBudget:
@@ -1237,7 +1050,7 @@ def get_spending_budget(budget_id: int) -> Optional[SpendingBudget]:
         row = con.execute(
             "SELECT * FROM spending_budgets WHERE id = ?", (budget_id,),
         ).fetchone()
-    return _row_to_spending_budget(row) if row else None
+    return SpendingBudget.from_row(row) if row else None
 
 
 def list_spending_budgets(goal_id: int) -> List[SpendingBudget]:
@@ -1246,7 +1059,7 @@ def list_spending_budgets(goal_id: int) -> List[SpendingBudget]:
             "SELECT * FROM spending_budgets WHERE goal_id = ? ORDER BY category ASC",
             (goal_id,),
         ).fetchall()
-    budgets = [_row_to_spending_budget(r) for r in rows]
+    budgets = [SpendingBudget.from_row(r) for r in rows]
     # Auto-reset stale daily counters on every listing
     return [maybe_reset_daily_spending(b) for b in budgets]
 
@@ -1259,13 +1072,13 @@ def find_spending_budget(goal_id: int, category: str) -> Optional[SpendingBudget
             (goal_id, category),
         ).fetchone()
         if row:
-            return _row_to_spending_budget(row)
+            return SpendingBudget.from_row(row)
         # Fall back to general budget
         row = con.execute(
             "SELECT * FROM spending_budgets WHERE goal_id = ? AND category = 'general'",
             (goal_id,),
         ).fetchone()
-    return _row_to_spending_budget(row) if row else None
+    return SpendingBudget.from_row(row) if row else None
 
 
 def update_spending_budget(budget: SpendingBudget) -> SpendingBudget:
@@ -1309,20 +1122,6 @@ def maybe_reset_daily_spending(budget: SpendingBudget) -> SpendingBudget:
 
 # ─── Spending Requests ───────────────────────────────────────────────────────
 
-def _row_to_spending_request(row: sqlite3.Row) -> SpendingRequest:
-    return SpendingRequest(
-        id=row["id"],
-        task_id=row["task_id"],
-        budget_id=row["budget_id"],
-        amount=row["amount"],
-        currency=row["currency"],
-        description=row["description"],
-        service=row["service"],
-        status=row["status"],
-        denial_reason=row["denial_reason"],
-        created_at=datetime.fromisoformat(row["created_at"]),
-    )
-
 
 def create_spending_request(req: SpendingRequest) -> SpendingRequest:
     now = datetime.now(timezone.utc).isoformat()
@@ -1344,7 +1143,7 @@ def get_spending_request(request_id: int) -> Optional[SpendingRequest]:
         row = con.execute(
             "SELECT * FROM spending_requests WHERE id = ?", (request_id,),
         ).fetchone()
-    return _row_to_spending_request(row) if row else None
+    return SpendingRequest.from_row(row) if row else None
 
 
 def list_spending_requests(
@@ -1366,7 +1165,7 @@ def list_spending_requests(
     query += " ORDER BY created_at DESC"
     with _conn() as con:
         rows = con.execute(query, params).fetchall()
-    return [_row_to_spending_request(r) for r in rows]
+    return [SpendingRequest.from_row(r) for r in rows]
 
 
 def update_spending_request(req: SpendingRequest) -> SpendingRequest:
@@ -1381,21 +1180,6 @@ def update_spending_request(req: SpendingRequest) -> SpendingRequest:
 
 
 # ─── Messaging Configs ───────────────────────────────────────────────────────
-
-def _row_to_messaging_config(row: sqlite3.Row) -> MessagingConfig:
-    return MessagingConfig(
-        id=row["id"],
-        channel=row["channel"],
-        config_json=row["config_json"],
-        enabled=bool(row["enabled"]),
-        notify_nudges=bool(row["notify_nudges"]),
-        notify_tasks=bool(row["notify_tasks"]),
-        notify_spending=bool(row["notify_spending"]),
-        notify_checkins=bool(row["notify_checkins"]),
-        user_id=row["user_id"] if "user_id" in row.keys() else None,
-        created_at=datetime.fromisoformat(row["created_at"]),
-        updated_at=datetime.fromisoformat(row["updated_at"]),
-    )
 
 
 def create_messaging_config(cfg: MessagingConfig) -> MessagingConfig:
@@ -1422,7 +1206,7 @@ def get_messaging_config(config_id: int) -> Optional[MessagingConfig]:
         row = con.execute(
             "SELECT * FROM messaging_configs WHERE id = ?", (config_id,),
         ).fetchone()
-    return _row_to_messaging_config(row) if row else None
+    return MessagingConfig.from_row(row) if row else None
 
 
 def list_messaging_configs(enabled_only: bool = False, user_id: Optional[int] = None) -> List[MessagingConfig]:
@@ -1439,7 +1223,7 @@ def list_messaging_configs(enabled_only: bool = False, user_id: Optional[int] = 
     query += " ORDER BY created_at ASC"
     with _conn() as con:
         rows = con.execute(query, params).fetchall()
-    return [_row_to_messaging_config(r) for r in rows]
+    return [MessagingConfig.from_row(r) for r in rows]
 
 
 def update_messaging_config(cfg: MessagingConfig) -> MessagingConfig:
@@ -1844,7 +1628,7 @@ def list_auto_execute_tasks() -> List[Task]:
         gid = row["goal_id"]
         if gid not in seen_goals:
             seen_goals.add(gid)
-            result.append(_row_to_task(row))
+            result.append(Task.from_row(row))
     return result
 
 
@@ -2526,7 +2310,7 @@ def get_goal_template(template_id: int) -> Optional[GoalTemplate]:
         row = con.execute("SELECT * FROM goal_templates WHERE id = ?", (template_id,)).fetchone()
     if not row:
         return None
-    return _row_to_goal_template(row)
+    return GoalTemplate.from_row(row)
 
 
 def list_goal_templates(goal_type: Optional[str] = None, category: Optional[str] = None,
@@ -2548,7 +2332,7 @@ def list_goal_templates(goal_type: Optional[str] = None, category: Optional[str]
             f"SELECT * FROM goal_templates {where} ORDER BY times_used DESC, rating_sum DESC LIMIT ?",
             params + [limit],
         ).fetchall()
-    return [_row_to_goal_template(r) for r in rows]
+    return [GoalTemplate.from_row(r) for r in rows]
 
 
 def rate_goal_template(template_id: int, rating: float) -> Optional[GoalTemplate]:
@@ -2563,26 +2347,12 @@ def rate_goal_template(template_id: int, rating: float) -> Optional[GoalTemplate
         row = con.execute("SELECT * FROM goal_templates WHERE id = ?", (template_id,)).fetchone()
     if not row:
         return None
-    return _row_to_goal_template(row)
+    return GoalTemplate.from_row(row)
 
 
 def increment_template_usage(template_id: int) -> None:
     with _conn() as con:
         con.execute("UPDATE goal_templates SET times_used = times_used + 1 WHERE id = ?", (template_id,))
-
-
-def _row_to_goal_template(row) -> GoalTemplate:
-    return GoalTemplate(
-        id=row["id"], title=row["title"], description=row["description"],
-        goal_type=row["goal_type"], category=row["category"],
-        skill_level=row["skill_level"], tasks_json=row["tasks_json"],
-        milestones_json=row["milestones_json"], services_json=row["services_json"],
-        outcome_type=row["outcome_type"], estimated_days=row["estimated_days"],
-        rating_sum=row["rating_sum"], rating_count=row["rating_count"],
-        times_used=row["times_used"], source_goal_id=row["source_goal_id"],
-        author_id=row["author_id"],
-        created_at=datetime.fromisoformat(row["created_at"]),
-    )
 
 
 # ─── Step 8: Execution Sandbox / Context ─────────────────────────────────────
@@ -2686,7 +2456,7 @@ def get_plugin(name: str) -> Optional[PluginManifest]:
         row = con.execute("SELECT * FROM plugins WHERE name = ?", (name,)).fetchone()
     if not row:
         return None
-    return _row_to_plugin(row)
+    return PluginManifest.from_row(row)
 
 
 def list_plugins(enabled_only: bool = False) -> list[PluginManifest]:
@@ -2695,7 +2465,7 @@ def list_plugins(enabled_only: bool = False) -> list[PluginManifest]:
             rows = con.execute("SELECT * FROM plugins WHERE enabled = 1 ORDER BY name").fetchall()
         else:
             rows = con.execute("SELECT * FROM plugins ORDER BY name").fetchall()
-    return [_row_to_plugin(r) for r in rows]
+    return [PluginManifest.from_row(r) for r in rows]
 
 
 def update_plugin(plugin: PluginManifest) -> PluginManifest:
@@ -2713,16 +2483,6 @@ def update_plugin(plugin: PluginManifest) -> PluginManifest:
 def delete_plugin(name: str) -> None:
     with _conn() as con:
         con.execute("DELETE FROM plugins WHERE name = ?", (name,))
-
-
-def _row_to_plugin(row) -> PluginManifest:
-    return PluginManifest(
-        id=row["id"], name=row["name"], version=row["version"],
-        description=row["description"], task_types=row["task_types"],
-        required_credentials=row["required_credentials"],
-        module_path=row["module_path"], enabled=bool(row["enabled"]),
-        created_at=datetime.fromisoformat(row["created_at"]),
-    )
 
 
 # ─── Task Comments ───────────────────────────────────────────────────────────
@@ -2746,18 +2506,7 @@ def list_task_comments(task_id: int) -> List[TaskComment]:
             "SELECT * FROM task_comments WHERE task_id = ? ORDER BY created_at ASC",
             (task_id,),
         ).fetchall()
-    return [_row_to_task_comment(r) for r in rows]
-
-
-def _row_to_task_comment(row: sqlite3.Row) -> TaskComment:
-    return TaskComment(
-        id=row["id"],
-        task_id=row["task_id"],
-        content=row["content"],
-        author_type=row["author_type"],
-        author_id=row["author_id"],
-        created_at=datetime.fromisoformat(row["created_at"]),
-    )
+    return [TaskComment.from_row(r) for r in rows]
 
 
 def delete_task_comment(comment_id: int) -> None:
@@ -2787,19 +2536,7 @@ def list_task_artifacts(task_id: int) -> List[TaskArtifact]:
             "SELECT * FROM task_artifacts WHERE task_id = ? ORDER BY created_at ASC",
             (task_id,),
         ).fetchall()
-    return [_row_to_task_artifact(r) for r in rows]
-
-
-def _row_to_task_artifact(row: sqlite3.Row) -> TaskArtifact:
-    return TaskArtifact(
-        id=row["id"],
-        task_id=row["task_id"],
-        artifact_type=row["artifact_type"],
-        title=row["title"],
-        content_url=row["content_url"],
-        metadata_json=row["metadata_json"],
-        created_at=datetime.fromisoformat(row["created_at"]),
-    )
+    return [TaskArtifact.from_row(r) for r in rows]
 
 
 def delete_task_artifact(artifact_id: int) -> None:
@@ -2829,13 +2566,13 @@ def list_webhook_configs(user_id: int) -> List[WebhookConfig]:
             "SELECT * FROM webhook_configs WHERE user_id = ? ORDER BY created_at DESC",
             (user_id,),
         ).fetchall()
-    return [_row_to_webhook_config(r) for r in rows]
+    return [WebhookConfig.from_row(r) for r in rows]
 
 
 def get_webhook_config(webhook_id: int) -> Optional[WebhookConfig]:
     with _conn() as con:
         row = con.execute("SELECT * FROM webhook_configs WHERE id = ?", (webhook_id,)).fetchone()
-    return _row_to_webhook_config(row) if row else None
+    return WebhookConfig.from_row(row) if row else None
 
 
 def update_webhook_config(wh: WebhookConfig) -> WebhookConfig:
@@ -2863,24 +2600,11 @@ def list_webhooks_for_event(user_id: int, event_type: str) -> List[WebhookConfig
         ).fetchall()
     results = []
     for row in rows:
-        wh = _row_to_webhook_config(row)
+        wh = WebhookConfig.from_row(row)
         events = json.loads(wh.events) if wh.events else []
         if not events or event_type in events:
             results.append(wh)
     return results
-
-
-def _row_to_webhook_config(row: sqlite3.Row) -> WebhookConfig:
-    return WebhookConfig(
-        id=row["id"],
-        user_id=row["user_id"],
-        url=row["url"],
-        events=row["events"],
-        secret=row["secret"],
-        enabled=bool(row["enabled"]),
-        created_at=datetime.fromisoformat(row["created_at"]),
-        updated_at=datetime.fromisoformat(row["updated_at"]),
-    )
 
 
 # ─── Task Search ─────────────────────────────────────────────────────────────
@@ -2910,7 +2634,7 @@ def search_tasks(goal_id: Optional[int] = None, query: str = "",
     sql += " ORDER BY order_index ASC, id ASC"
     with _conn() as con:
         rows = con.execute(sql, params).fetchall()
-    return [_row_to_task(r) for r in rows]
+    return [Task.from_row(r) for r in rows]
 
 
 # ─── Dependency Graph Helpers ────────────────────────────────────────────────
@@ -2921,7 +2645,7 @@ def get_task_dependents(task_id: int) -> List[Task]:
         rows = con.execute("SELECT * FROM tasks ORDER BY order_index ASC, id ASC").fetchall()
     result = []
     for row in rows:
-        t = _row_to_task(row)
+        t = Task.from_row(row)
         deps = json.loads(t.depends_on) if t.depends_on else []
         if task_id in deps:
             result.append(t)
@@ -2997,7 +2721,7 @@ def create_checkpoint(cp: ExecutionCheckpoint) -> ExecutionCheckpoint:
 def get_checkpoint(checkpoint_id: int) -> Optional[ExecutionCheckpoint]:
     with _conn() as con:
         row = con.execute("SELECT * FROM execution_checkpoints WHERE id = ?", (checkpoint_id,)).fetchone()
-    return _row_to_checkpoint(row) if row else None
+    return ExecutionCheckpoint.from_row(row) if row else None
 
 
 @_with_retry
@@ -3007,7 +2731,7 @@ def list_checkpoints(goal_id: int) -> List[ExecutionCheckpoint]:
             "SELECT * FROM execution_checkpoints WHERE goal_id = ? ORDER BY created_at DESC",
             (goal_id,),
         ).fetchall()
-    return [_row_to_checkpoint(r) for r in rows]
+    return [ExecutionCheckpoint.from_row(r) for r in rows]
 
 
 @_with_retry
@@ -3018,7 +2742,7 @@ def get_active_checkpoint(goal_id: int) -> Optional[ExecutionCheckpoint]:
             "SELECT * FROM execution_checkpoints WHERE goal_id = ? AND status = 'active' ORDER BY created_at DESC LIMIT 1",
             (goal_id,),
         ).fetchone()
-    return _row_to_checkpoint(row) if row else None
+    return ExecutionCheckpoint.from_row(row) if row else None
 
 
 @_with_retry
@@ -3032,18 +2756,6 @@ def update_checkpoint(checkpoint_id: int, **kwargs) -> Optional[ExecutionCheckpo
     with _conn() as con:
         con.execute(f"UPDATE execution_checkpoints SET {set_clause} WHERE id = ?", params)
     return get_checkpoint(checkpoint_id)
-
-
-def _row_to_checkpoint(row: sqlite3.Row) -> ExecutionCheckpoint:
-    return ExecutionCheckpoint(
-        id=row["id"],
-        goal_id=row["goal_id"],
-        task_id=row["task_id"],
-        step_index=row["step_index"],
-        state_json=row["state_json"],
-        status=row["status"],
-        created_at=datetime.fromisoformat(row["created_at"]),
-    )
 
 
 # ─── Agent Schedules & Flows (WP-02) ────────────────────────────────────────
@@ -3071,19 +2783,7 @@ def list_agent_schedules(goal_id: int) -> List[AgentSchedule]:
             "SELECT * FROM agent_schedules WHERE goal_id = ? ORDER BY agent_type ASC",
             (goal_id,),
         ).fetchall()
-    return [_row_to_agent_schedule(r) for r in rows]
-
-
-def _row_to_agent_schedule(row: sqlite3.Row) -> AgentSchedule:
-    return AgentSchedule(
-        id=row["id"],
-        agent_type=row["agent_type"],
-        goal_id=row["goal_id"],
-        interval_hours=row["interval_hours"],
-        next_run_at=row["next_run_at"],
-        paused=bool(row["paused"]),
-        created_at=datetime.fromisoformat(row["created_at"]),
-    )
+    return [AgentSchedule.from_row(r) for r in rows]
 
 
 @_with_retry
@@ -3108,18 +2808,7 @@ def list_agent_flows(goal_id: int) -> List[AgentFlow]:
             "SELECT * FROM agent_flows WHERE goal_id = ? ORDER BY created_at DESC",
             (goal_id,),
         ).fetchall()
-    return [_row_to_agent_flow(r) for r in rows]
-
-
-def _row_to_agent_flow(row: sqlite3.Row) -> AgentFlow:
-    return AgentFlow(
-        id=row["id"],
-        goal_id=row["goal_id"],
-        steps_json=row["steps_json"],
-        current_step=row["current_step"],
-        status=row["status"],
-        created_at=datetime.fromisoformat(row["created_at"]),
-    )
+    return [AgentFlow.from_row(r) for r in rows]
 
 
 # ─── Gamification (WP-04) ───────────────────────────────────────────────────
@@ -3129,7 +2818,7 @@ def get_or_create_user_xp(user_id: int) -> UserXP:
     with _conn() as con:
         row = con.execute("SELECT * FROM user_xp WHERE user_id = ?", (user_id,)).fetchone()
         if row:
-            return _row_to_user_xp(row)
+            return UserXP.from_row(row)
         now = datetime.now(timezone.utc).isoformat()
         cur = con.execute(
             """INSERT INTO user_xp (user_id, total_xp, level, current_streak, longest_streak, last_activity_date, created_at, updated_at)
@@ -3199,32 +2888,7 @@ def list_achievements(user_id: int) -> List[Achievement]:
             "SELECT * FROM achievements WHERE user_id = ? ORDER BY earned_at DESC",
             (user_id,),
         ).fetchall()
-    return [_row_to_achievement(r) for r in rows]
-
-
-def _row_to_user_xp(row: sqlite3.Row) -> UserXP:
-    return UserXP(
-        id=row["id"],
-        user_id=row["user_id"],
-        total_xp=row["total_xp"],
-        level=row["level"],
-        current_streak=row["current_streak"],
-        longest_streak=row["longest_streak"],
-        last_activity_date=row["last_activity_date"],
-        created_at=datetime.fromisoformat(row["created_at"]),
-        updated_at=datetime.fromisoformat(row["updated_at"]),
-    )
-
-
-def _row_to_achievement(row: sqlite3.Row) -> Achievement:
-    return Achievement(
-        id=row["id"],
-        user_id=row["user_id"],
-        achievement_type=row["achievement_type"],
-        title=row["title"],
-        description=row["description"],
-        earned_at=datetime.fromisoformat(row["earned_at"]),
-    )
+    return [Achievement.from_row(r) for r in rows]
 
 
 # ─── Time Tracking (WP-08) ──────────────────────────────────────────────────
@@ -3250,7 +2914,7 @@ def list_time_entries(task_id: int) -> List[TimeEntry]:
         rows = con.execute(
             "SELECT * FROM time_entries WHERE task_id = ? ORDER BY created_at DESC", (task_id,),
         ).fetchall()
-    return [_row_to_time_entry(r) for r in rows]
+    return [TimeEntry.from_row(r) for r in rows]
 
 
 @_with_retry
@@ -3262,15 +2926,6 @@ def get_task_total_time(task_id: int) -> int:
             (task_id,),
         ).fetchone()
     return row["total"] if row else 0
-
-
-def _row_to_time_entry(row: sqlite3.Row) -> TimeEntry:
-    return TimeEntry(
-        id=row["id"], task_id=row["task_id"], user_id=row["user_id"],
-        started_at=row["started_at"], ended_at=row["ended_at"],
-        duration_minutes=row["duration_minutes"], note=row["note"],
-        created_at=datetime.fromisoformat(row["created_at"]),
-    )
 
 
 # ─── Recurrence Rules (WP-10) ───────────────────────────────────────────────
@@ -3293,21 +2948,13 @@ def create_recurrence_rule(rule: RecurrenceRule) -> RecurrenceRule:
 def get_recurrence_rule(task_id: int) -> Optional[RecurrenceRule]:
     with _conn() as con:
         row = con.execute("SELECT * FROM recurrence_rules WHERE task_id = ?", (task_id,)).fetchone()
-    return _row_to_recurrence(row) if row else None
+    return RecurrenceRule.from_row(row) if row else None
 
 
 @_with_retry
 def delete_recurrence_rule(task_id: int) -> None:
     with _conn() as con:
         con.execute("DELETE FROM recurrence_rules WHERE task_id = ?", (task_id,))
-
-
-def _row_to_recurrence(row: sqlite3.Row) -> RecurrenceRule:
-    return RecurrenceRule(
-        id=row["id"], task_id=row["task_id"], frequency=row["frequency"],
-        interval=row["interval_val"], next_due=row["next_due"],
-        end_date=row["end_date"], created_at=datetime.fromisoformat(row["created_at"]),
-    )
 
 
 # ─── Goal Collaborators (WP-11) ─────────────────────────────────────────────
@@ -3333,7 +2980,7 @@ def list_collaborators(goal_id: int) -> List[GoalCollaborator]:
             "SELECT * FROM goal_collaborators WHERE goal_id = ? ORDER BY created_at ASC",
             (goal_id,),
         ).fetchall()
-    return [_row_to_collaborator(r) for r in rows]
+    return [GoalCollaborator.from_row(r) for r in rows]
 
 
 @_with_retry
@@ -3341,13 +2988,6 @@ def remove_collaborator(goal_id: int, user_id: int) -> None:
     with _conn() as con:
         con.execute("DELETE FROM goal_collaborators WHERE goal_id = ? AND user_id = ?",
                      (goal_id, user_id))
-
-
-def _row_to_collaborator(row: sqlite3.Row) -> GoalCollaborator:
-    return GoalCollaborator(
-        id=row["id"], goal_id=row["goal_id"], user_id=row["user_id"],
-        role=row["role"], created_at=datetime.fromisoformat(row["created_at"]),
-    )
 
 
 # ─── Custom Fields (WP-12) ──────────────────────────────────────────────────
@@ -3373,7 +3013,7 @@ def list_custom_fields(task_id: int) -> List[CustomField]:
             "SELECT * FROM custom_fields WHERE task_id = ? ORDER BY field_name ASC",
             (task_id,),
         ).fetchall()
-    return [_row_to_custom_field(r) for r in rows]
+    return [CustomField.from_row(r) for r in rows]
 
 
 @_with_retry
@@ -3386,7 +3026,7 @@ def get_custom_field(field_id: int) -> Optional[CustomField]:
     """Get a single custom field by ID."""
     with _conn() as con:
         row = con.execute("SELECT * FROM custom_fields WHERE id = ?", (field_id,)).fetchone()
-    return _row_to_custom_field(row) if row else None
+    return CustomField.from_row(row) if row else None
 
 
 def resolve_custom_field_value(cf: CustomField) -> str:
@@ -3501,16 +3141,6 @@ def resolve_custom_field_value(cf: CustomField) -> str:
     return cf.field_value
 
 
-def _row_to_custom_field(row: sqlite3.Row) -> CustomField:
-    config_json = row["config_json"] if "config_json" in row.keys() else "{}"
-    return CustomField(
-        id=row["id"], task_id=row["task_id"], field_name=row["field_name"],
-        field_value=row["field_value"], field_type=row["field_type"],
-        config_json=config_json,
-        created_at=datetime.fromisoformat(row["created_at"]),
-    )
-
-
 # ─── Progress Snapshots (WP-14) ─────────────────────────────────────────────
 
 @_with_retry
@@ -3540,15 +3170,7 @@ def list_progress_snapshots(goal_id: int) -> List[ProgressSnapshot]:
             "SELECT * FROM progress_snapshots WHERE goal_id = ? ORDER BY captured_at DESC",
             (goal_id,),
         ).fetchall()
-    return [_row_to_snapshot(r) for r in rows]
-
-
-def _row_to_snapshot(row: sqlite3.Row) -> ProgressSnapshot:
-    return ProgressSnapshot(
-        id=row["id"], goal_id=row["goal_id"], total_tasks=row["total_tasks"],
-        completed_tasks=row["completed_tasks"], percentage=row["percentage"],
-        captured_at=datetime.fromisoformat(row["captured_at"]),
-    )
+    return [ProgressSnapshot.from_row(r) for r in rows]
 
 
 # ─── Notification Preferences (WP-16) ───────────────────────────────────────
@@ -3583,15 +3205,7 @@ def list_notification_preferences(user_id: int) -> List[NotificationPreference]:
             "SELECT * FROM notification_preferences WHERE user_id = ? ORDER BY channel, event_type",
             (user_id,),
         ).fetchall()
-    return [_row_to_notif_pref(r) for r in rows]
-
-
-def _row_to_notif_pref(row: sqlite3.Row) -> NotificationPreference:
-    return NotificationPreference(
-        id=row["id"], user_id=row["user_id"], channel=row["channel"],
-        event_type=row["event_type"], enabled=bool(row["enabled"]),
-        created_at=datetime.fromisoformat(row["created_at"]),
-    )
+    return [NotificationPreference.from_row(r) for r in rows]
 
 
 # ─── Personal API Keys (WP-17) ──────────────────────────────────────────────
@@ -3617,29 +3231,20 @@ def list_personal_api_keys(user_id: int) -> List[PersonalApiKey]:
             "SELECT * FROM personal_api_keys WHERE user_id = ? ORDER BY created_at DESC",
             (user_id,),
         ).fetchall()
-    return [_row_to_api_key(r) for r in rows]
+    return [PersonalApiKey.from_row(r) for r in rows]
 
 
 @_with_retry
 def get_api_key_by_hash(key_hash: str) -> Optional[PersonalApiKey]:
     with _conn() as con:
         row = con.execute("SELECT * FROM personal_api_keys WHERE key_hash = ?", (key_hash,)).fetchone()
-    return _row_to_api_key(row) if row else None
+    return PersonalApiKey.from_row(row) if row else None
 
 
 @_with_retry
 def delete_personal_api_key(key_id: int, user_id: int) -> None:
     with _conn() as con:
         con.execute("DELETE FROM personal_api_keys WHERE id = ? AND user_id = ?", (key_id, user_id))
-
-
-def _row_to_api_key(row: sqlite3.Row) -> PersonalApiKey:
-    return PersonalApiKey(
-        id=row["id"], user_id=row["user_id"], name=row["name"],
-        key_hash=row["key_hash"], key_prefix=row["key_prefix"],
-        last_used_at=row["last_used_at"],
-        created_at=datetime.fromisoformat(row["created_at"]),
-    )
 
 
 # ─── Task Blockers (WP-19) ──────────────────────────────────────────────────
@@ -3669,7 +3274,7 @@ def list_task_blockers(task_id: int, status: Optional[str] = None) -> List[TaskB
     query += " ORDER BY created_at DESC"
     with _conn() as con:
         rows = con.execute(query, params).fetchall()
-    return [_row_to_blocker(r) for r in rows]
+    return [TaskBlocker.from_row(r) for r in rows]
 
 
 @_with_retry
@@ -3679,16 +3284,7 @@ def resolve_task_blocker(blocker_id: int) -> Optional[TaskBlocker]:
         con.execute("UPDATE task_blockers SET status = 'resolved', resolved_at = ? WHERE id = ?",
                      (now, blocker_id))
         row = con.execute("SELECT * FROM task_blockers WHERE id = ?", (blocker_id,)).fetchone()
-    return _row_to_blocker(row) if row else None
-
-
-def _row_to_blocker(row: sqlite3.Row) -> TaskBlocker:
-    return TaskBlocker(
-        id=row["id"], task_id=row["task_id"], description=row["description"],
-        blocker_type=row["blocker_type"], status=row["status"],
-        resolved_at=row["resolved_at"],
-        created_at=datetime.fromisoformat(row["created_at"]),
-    )
+    return TaskBlocker.from_row(row) if row else None
 
 
 # ─── Dashboard Widgets (WP-20) ──────────────────────────────────────────────
@@ -3715,7 +3311,7 @@ def list_dashboard_widgets(user_id: int) -> List[DashboardWidget]:
             "SELECT * FROM dashboard_widgets WHERE user_id = ? ORDER BY position ASC",
             (user_id,),
         ).fetchall()
-    return [_row_to_widget(r) for r in rows]
+    return [DashboardWidget.from_row(r) for r in rows]
 
 
 @_with_retry
@@ -3741,22 +3337,13 @@ def update_dashboard_widget(widget_id: int, user_id: int, **kwargs) -> Optional[
     with _conn() as con:
         con.execute(query, params)
         row = con.execute("SELECT * FROM dashboard_widgets WHERE id = ?", (widget_id,)).fetchone()
-    return _row_to_widget(row) if row else None
+    return DashboardWidget.from_row(row) if row else None
 
 
 @_with_retry
 def delete_dashboard_widget(widget_id: int, user_id: int) -> None:
     with _conn() as con:
         con.execute("DELETE FROM dashboard_widgets WHERE id = ? AND user_id = ?", (widget_id, user_id))
-
-
-def _row_to_widget(row: sqlite3.Row) -> DashboardWidget:
-    return DashboardWidget(
-        id=row["id"], user_id=row["user_id"], widget_type=row["widget_type"],
-        position=row["position"], config_json=row["config_json"],
-        enabled=bool(row["enabled"]),
-        created_at=datetime.fromisoformat(row["created_at"]),
-    )
 
 
 # ─── Phase 2: Workspace CRUD ────────────────────────────────────────────────
@@ -3778,7 +3365,7 @@ def create_workspace(ws: Workspace) -> Workspace:
 def get_workspace(ws_id: int) -> Optional[Workspace]:
     with _conn() as con:
         row = con.execute("SELECT * FROM workspaces WHERE id = ?", (ws_id,)).fetchone()
-    return _row_to_workspace(row) if row else None
+    return Workspace.from_row(row) if row else None
 
 
 def list_user_workspaces(user_id: int) -> List[Workspace]:
@@ -3789,7 +3376,7 @@ def list_user_workspaces(user_id: int) -> List[Workspace]:
             "WHERE wm.user_id = ? ORDER BY w.created_at DESC",
             (user_id,),
         ).fetchall()
-    return [_row_to_workspace(r) for r in rows]
+    return [Workspace.from_row(r) for r in rows]
 
 
 @_with_retry
@@ -3812,7 +3399,7 @@ def list_workspace_members(ws_id: int) -> List[WorkspaceMember]:
             "SELECT * FROM workspace_members WHERE workspace_id = ? ORDER BY joined_at ASC",
             (ws_id,),
         ).fetchall()
-    return [_row_to_workspace_member(r) for r in rows]
+    return [WorkspaceMember.from_row(r) for r in rows]
 
 
 @_with_retry
@@ -3830,29 +3417,7 @@ def get_workspace_by_invite_code(code: str) -> Optional[Workspace]:
         row = con.execute(
             "SELECT * FROM workspaces WHERE invite_code = ?", (code,)
         ).fetchone()
-    return _row_to_workspace(row) if row else None
-
-
-def _row_to_workspace(row: sqlite3.Row) -> Workspace:
-    return Workspace(
-        id=row["id"],
-        name=row["name"],
-        owner_id=row["owner_id"],
-        description=row["description"],
-        invite_code=row["invite_code"],
-        plan=row["plan"],
-        created_at=datetime.fromisoformat(row["created_at"]),
-    )
-
-
-def _row_to_workspace_member(row: sqlite3.Row) -> WorkspaceMember:
-    return WorkspaceMember(
-        id=row["id"],
-        workspace_id=row["workspace_id"],
-        user_id=row["user_id"],
-        role=row["role"],
-        joined_at=datetime.fromisoformat(row["joined_at"]),
-    )
+    return Workspace.from_row(row) if row else None
 
 
 # ─── Phase 2: Notifications CRUD ────────────────────────────────────────────
@@ -3881,7 +3446,7 @@ def list_user_notifications(user_id: int, unread_only: bool = False, limit: int 
     params.append(limit)
     with _conn() as con:
         rows = con.execute(query, params).fetchall()
-    return [_row_to_notification(r) for r in rows]
+    return [Notification.from_row(r) for r in rows]
 
 
 @_with_retry
@@ -3911,20 +3476,6 @@ def count_unread_notifications(user_id: int) -> int:
             (user_id,),
         ).fetchone()
     return row["cnt"] if row else 0
-
-
-def _row_to_notification(row: sqlite3.Row) -> Notification:
-    return Notification(
-        id=row["id"],
-        user_id=row["user_id"],
-        title=row["title"],
-        body=row["body"],
-        notification_type=row["notification_type"],
-        source_type=row["source_type"],
-        source_id=row["source_id"],
-        read=bool(row["read"]),
-        created_at=datetime.fromisoformat(row["created_at"]),
-    )
 
 
 # ─── Phase 2: Activity Feed CRUD ────────────────────────────────────────────
@@ -3965,22 +3516,7 @@ def list_activity_feed(
     params.append(limit)
     with _conn() as con:
         rows = con.execute(query, params).fetchall()
-    return [_row_to_activity_entry(r) for r in rows]
-
-
-def _row_to_activity_entry(row: sqlite3.Row) -> ActivityFeedEntry:
-    return ActivityFeedEntry(
-        id=row["id"],
-        user_id=row["user_id"],
-        action=row["action"],
-        entity_type=row["entity_type"],
-        entity_id=row["entity_id"],
-        entity_title=row["entity_title"],
-        details=row["details"],
-        workspace_id=row["workspace_id"],
-        goal_id=row["goal_id"],
-        created_at=datetime.fromisoformat(row["created_at"]),
-    )
+    return [ActivityFeedEntry.from_row(r) for r in rows]
 
 
 # ─── Phase 2: Comment Reactions CRUD ────────────────────────────────────────
@@ -4015,17 +3551,7 @@ def list_comment_reactions(comment_id: int) -> List[CommentReaction]:
             "SELECT * FROM comment_reactions WHERE comment_id = ? ORDER BY created_at ASC",
             (comment_id,),
         ).fetchall()
-    return [_row_to_comment_reaction(r) for r in rows]
-
-
-def _row_to_comment_reaction(row: sqlite3.Row) -> CommentReaction:
-    return CommentReaction(
-        id=row["id"],
-        comment_id=row["comment_id"],
-        user_id=row["user_id"],
-        emoji=row["emoji"],
-        created_at=datetime.fromisoformat(row["created_at"]),
-    )
+    return [CommentReaction.from_row(r) for r in rows]
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -4162,7 +3688,7 @@ def list_goal_collaborators(goal_id: int) -> List[GoalCollaborator]:
             "SELECT * FROM goal_collaborators WHERE goal_id = ? ORDER BY created_at ASC",
             (goal_id,),
         ).fetchall()
-    return [_row_to_goal_collaborator(r) for r in rows]
+    return [GoalCollaborator.from_row(r) for r in rows]
 
 
 @_with_retry
@@ -4173,16 +3699,6 @@ def unshare_goal(goal_id: int, user_id: int) -> bool:
             (goal_id, user_id),
         )
         return cur.rowcount > 0
-
-
-def _row_to_goal_collaborator(row: sqlite3.Row) -> GoalCollaborator:
-    return GoalCollaborator(
-        id=row["id"],
-        goal_id=row["goal_id"],
-        user_id=row["user_id"],
-        role=row["role"],
-        created_at=datetime.fromisoformat(row["created_at"]),
-    )
 
 
 # ─── @mentions extraction ───────────────────────────────────────────────────
@@ -4215,7 +3731,7 @@ def list_tasks_assigned_to(user_id: int) -> List[Task]:
             "SELECT * FROM tasks WHERE assigned_to = ? ORDER BY order_index ASC, id ASC",
             (user_id,),
         ).fetchall()
-    return [_row_to_task(r) for r in rows]
+    return [Task.from_row(r) for r in rows]
 
 
 # ─── Direct Messaging ───────────────────────────────────────────────────────
@@ -4256,7 +3772,7 @@ def list_messages(user_id: int, other_user_id: int, limit: int = 50) -> List[Dir
             "ORDER BY created_at ASC LIMIT ?",
             (user_id, other_user_id, other_user_id, user_id, limit),
         ).fetchall()
-    return [_row_to_direct_message(r) for r in rows]
+    return [DirectMessage.from_row(r) for r in rows]
 
 
 @_with_retry
@@ -4267,17 +3783,6 @@ def mark_message_read(message_id: int, user_id: int) -> bool:
             (message_id, user_id),
         )
         return cur.rowcount > 0
-
-
-def _row_to_direct_message(row: sqlite3.Row) -> DirectMessage:
-    return DirectMessage(
-        id=row["id"],
-        sender_id=row["sender_id"],
-        recipient_id=row["recipient_id"],
-        content=row["content"],
-        read=bool(row["read"]),
-        created_at=datetime.fromisoformat(row["created_at"]),
-    )
 
 
 # ─── Goal Chat Messages ─────────────────────────────────────────────────────
@@ -4302,17 +3807,7 @@ def list_goal_chat_messages(goal_id: int, limit: int = 100) -> List[GoalChatMess
             "SELECT * FROM goal_chat_messages WHERE goal_id = ? ORDER BY created_at ASC LIMIT ?",
             (goal_id, limit),
         ).fetchall()
-    return [_row_to_goal_chat_message(r) for r in rows]
-
-
-def _row_to_goal_chat_message(row: sqlite3.Row) -> GoalChatMessage:
-    return GoalChatMessage(
-        id=row["id"],
-        goal_id=row["goal_id"],
-        user_id=row["user_id"],
-        content=row["content"],
-        created_at=datetime.fromisoformat(row["created_at"]),
-    )
+    return [GoalChatMessage.from_row(r) for r in rows]
 
 
 # ─── Email Notification Config ──────────────────────────────────────────────
@@ -4324,7 +3819,7 @@ def get_email_notification_config(user_id: int) -> Optional[EmailNotificationCon
         ).fetchone()
     if not row:
         return None
-    return _row_to_email_notification_config(row)
+    return EmailNotificationConfig.from_row(row)
 
 
 @_with_retry
@@ -4352,17 +3847,6 @@ def upsert_email_notification_config(cfg: EmailNotificationConfig) -> EmailNotif
     return cfg
 
 
-def _row_to_email_notification_config(row: sqlite3.Row) -> EmailNotificationConfig:
-    return EmailNotificationConfig(
-        id=row["id"],
-        user_id=row["user_id"],
-        digest_frequency=row["digest_frequency"],
-        notify_on_mention=bool(row["notify_on_mention"]),
-        notify_on_assignment=bool(row["notify_on_assignment"]),
-        notify_on_comment=bool(row["notify_on_comment"]),
-    )
-
-
 # ─── Push Subscriptions ─────────────────────────────────────────────────────
 
 @_with_retry
@@ -4385,7 +3869,7 @@ def list_push_subscriptions(user_id: int) -> List[PushSubscription]:
             "SELECT * FROM push_subscriptions WHERE user_id = ? ORDER BY created_at DESC",
             (user_id,),
         ).fetchall()
-    return [_row_to_push_subscription(r) for r in rows]
+    return [PushSubscription.from_row(r) for r in rows]
 
 
 @_with_retry
@@ -4396,17 +3880,6 @@ def delete_push_subscription(endpoint: str, user_id: int) -> bool:
             (endpoint, user_id),
         )
         return cur.rowcount > 0
-
-
-def _row_to_push_subscription(row: sqlite3.Row) -> PushSubscription:
-    return PushSubscription(
-        id=row["id"],
-        user_id=row["user_id"],
-        endpoint=row["endpoint"],
-        p256dh=row["p256dh"],
-        auth=row["auth"],
-        created_at=datetime.fromisoformat(row["created_at"]),
-    )
 
 
 # ─── Saved Views (Phase 3) ──────────────────────────────────────────────────
@@ -4433,29 +3906,20 @@ def list_saved_views(user_id: int) -> List[SavedView]:
             "SELECT * FROM saved_views WHERE user_id = ? ORDER BY created_at DESC",
             (user_id,),
         ).fetchall()
-    return [_row_to_saved_view(r) for r in rows]
+    return [SavedView.from_row(r) for r in rows]
 
 
 @_with_retry
 def get_saved_view(view_id: int) -> Optional[SavedView]:
     with _conn() as con:
         row = con.execute("SELECT * FROM saved_views WHERE id = ?", (view_id,)).fetchone()
-    return _row_to_saved_view(row) if row else None
+    return SavedView.from_row(row) if row else None
 
 
 @_with_retry
 def delete_saved_view(view_id: int, user_id: int) -> None:
     with _conn() as con:
         con.execute("DELETE FROM saved_views WHERE id = ? AND user_id = ?", (view_id, user_id))
-
-
-def _row_to_saved_view(row: sqlite3.Row) -> SavedView:
-    return SavedView(
-        id=row["id"], user_id=row["user_id"], name=row["name"],
-        view_type=row["view_type"], filters_json=row["filters_json"],
-        sort_json=row["sort_json"], group_by=row["group_by"],
-        created_at=datetime.fromisoformat(row["created_at"]),
-    )
 
 
 # ─── Dashboard Layouts (Phase 3) ────────────────────────────────────────────
@@ -4481,14 +3945,14 @@ def list_dashboards(user_id: int) -> List[DashboardLayout]:
             "SELECT * FROM dashboard_layouts WHERE user_id = ? ORDER BY created_at DESC",
             (user_id,),
         ).fetchall()
-    return [_row_to_dashboard_layout(r) for r in rows]
+    return [DashboardLayout.from_row(r) for r in rows]
 
 
 @_with_retry
 def get_dashboard(dashboard_id: int) -> Optional[DashboardLayout]:
     with _conn() as con:
         row = con.execute("SELECT * FROM dashboard_layouts WHERE id = ?", (dashboard_id,)).fetchone()
-    return _row_to_dashboard_layout(row) if row else None
+    return DashboardLayout.from_row(row) if row else None
 
 
 @_with_retry
@@ -4506,21 +3970,13 @@ def update_dashboard(dashboard_id: int, user_id: int, **kwargs) -> Optional[Dash
     with _conn() as con:
         con.execute(query, values)
         row = con.execute("SELECT * FROM dashboard_layouts WHERE id = ?", (dashboard_id,)).fetchone()
-    return _row_to_dashboard_layout(row) if row else None
+    return DashboardLayout.from_row(row) if row else None
 
 
 @_with_retry
 def delete_dashboard(dashboard_id: int, user_id: int) -> None:
     with _conn() as con:
         con.execute("DELETE FROM dashboard_layouts WHERE id = ? AND user_id = ?", (dashboard_id, user_id))
-
-
-def _row_to_dashboard_layout(row: sqlite3.Row) -> DashboardLayout:
-    return DashboardLayout(
-        id=row["id"], user_id=row["user_id"], name=row["name"],
-        widgets_json=row["widgets_json"],
-        created_at=datetime.fromisoformat(row["created_at"]),
-    )
 
 
 # ─── Goal Progress Timeline (Phase 3, Item 7) ───────────────────────────────
@@ -4533,7 +3989,7 @@ def get_goal_progress_timeline(goal_id: int) -> List[ProgressSnapshot]:
             "SELECT * FROM progress_snapshots WHERE goal_id = ? ORDER BY captured_at ASC",
             (goal_id,),
         ).fetchall()
-    return [_row_to_snapshot(r) for r in rows]
+    return [ProgressSnapshot.from_row(r) for r in rows]
 
 
 # ─── Burndown / Burnup Data (Phase 3, Item 10) ──────────────────────────────
@@ -4633,29 +4089,20 @@ def list_scheduled_reports(user_id: int) -> List[ScheduledReport]:
             "SELECT * FROM scheduled_reports WHERE user_id = ? ORDER BY created_at DESC",
             (user_id,),
         ).fetchall()
-    return [_row_to_scheduled_report(r) for r in rows]
+    return [ScheduledReport.from_row(r) for r in rows]
 
 
 @_with_retry
 def get_scheduled_report(report_id: int) -> Optional[ScheduledReport]:
     with _conn() as con:
         row = con.execute("SELECT * FROM scheduled_reports WHERE id = ?", (report_id,)).fetchone()
-    return _row_to_scheduled_report(row) if row else None
+    return ScheduledReport.from_row(row) if row else None
 
 
 @_with_retry
 def delete_scheduled_report(report_id: int, user_id: int) -> None:
     with _conn() as con:
         con.execute("DELETE FROM scheduled_reports WHERE id = ? AND user_id = ?", (report_id, user_id))
-
-
-def _row_to_scheduled_report(row: sqlite3.Row) -> ScheduledReport:
-    return ScheduledReport(
-        id=row["id"], user_id=row["user_id"], report_type=row["report_type"],
-        frequency=row["frequency"], recipients_json=row["recipients_json"],
-        created_at=datetime.fromisoformat(row["created_at"]),
-        last_sent_at=datetime.fromisoformat(row["last_sent_at"]) if row["last_sent_at"] else None,
-    )
 
 
 # ─── Phase 5: Integration Marketplace ────────────────────────────────────────
@@ -4683,23 +4130,14 @@ def list_integration_listings(category: Optional[str] = None) -> List[Integratio
             ).fetchall()
         else:
             rows = con.execute("SELECT * FROM integration_listings ORDER BY name").fetchall()
-    return [_row_to_integration_listing(r) for r in rows]
+    return [IntegrationListing.from_row(r) for r in rows]
 
 
 @_with_retry
 def get_integration_listing(listing_id: int) -> Optional[IntegrationListing]:
     with _conn() as con:
         row = con.execute("SELECT * FROM integration_listings WHERE id = ?", (listing_id,)).fetchone()
-    return _row_to_integration_listing(row) if row else None
-
-
-def _row_to_integration_listing(row: sqlite3.Row) -> IntegrationListing:
-    return IntegrationListing(
-        id=row["id"], name=row["name"], category=row["category"],
-        description=row["description"], icon_url=row["icon_url"],
-        auth_type=row["auth_type"], enabled=bool(row["enabled"]),
-        created_at=datetime.fromisoformat(row["created_at"]),
-    )
+    return IntegrationListing.from_row(row) if row else None
 
 
 # ─── OAuth Connections ───────────────────────────────────────────────────────
@@ -4727,7 +4165,7 @@ def get_oauth_connection(user_id: int, provider: str) -> Optional[OAuthConnectio
             "SELECT * FROM oauth_connections WHERE user_id = ? AND provider = ? ORDER BY id DESC LIMIT 1",
             (user_id, provider),
         ).fetchone()
-    return _row_to_oauth_connection(row) if row else None
+    return OAuthConnection.from_row(row) if row else None
 
 
 @_with_retry
@@ -4760,16 +4198,6 @@ def upsert_oauth_connection(oc: OAuthConnection) -> OAuthConnection:
     return oc
 
 
-def _row_to_oauth_connection(row: sqlite3.Row) -> OAuthConnection:
-    return OAuthConnection(
-        id=row["id"], user_id=row["user_id"], provider=row["provider"],
-        access_token_encrypted=row["access_token_encrypted"],
-        refresh_token_encrypted=row["refresh_token_encrypted"],
-        expires_at=datetime.fromisoformat(row["expires_at"]) if row["expires_at"] else None,
-        created_at=datetime.fromisoformat(row["created_at"]),
-    )
-
-
 # ─── Integration Templates ──────────────────────────────────────────────────
 
 @_with_retry
@@ -4790,23 +4218,14 @@ def create_integration_template(t: IntegrationTemplate) -> IntegrationTemplate:
 def list_integration_templates() -> List[IntegrationTemplate]:
     with _conn() as con:
         rows = con.execute("SELECT * FROM integration_templates ORDER BY name").fetchall()
-    return [_row_to_integration_template(r) for r in rows]
+    return [IntegrationTemplate.from_row(r) for r in rows]
 
 
 @_with_retry
 def get_integration_template(template_id: int) -> Optional[IntegrationTemplate]:
     with _conn() as con:
         row = con.execute("SELECT * FROM integration_templates WHERE id = ?", (template_id,)).fetchone()
-    return _row_to_integration_template(row) if row else None
-
-
-def _row_to_integration_template(row: sqlite3.Row) -> IntegrationTemplate:
-    return IntegrationTemplate(
-        id=row["id"], name=row["name"], description=row["description"],
-        source_service=row["source_service"], target_service=row["target_service"],
-        mapping_json=row["mapping_json"],
-        created_at=datetime.fromisoformat(row["created_at"]),
-    )
+    return IntegrationTemplate.from_row(row) if row else None
 
 
 # ─── Webhook Rules ──────────────────────────────────────────────────────────
@@ -4832,14 +4251,14 @@ def list_webhook_rules(user_id: int) -> List[WebhookRule]:
         rows = con.execute(
             "SELECT * FROM webhook_rules WHERE user_id = ? ORDER BY created_at DESC", (user_id,)
         ).fetchall()
-    return [_row_to_webhook_rule(r) for r in rows]
+    return [WebhookRule.from_row(r) for r in rows]
 
 
 @_with_retry
 def get_webhook_rule(rule_id: int) -> Optional[WebhookRule]:
     with _conn() as con:
         row = con.execute("SELECT * FROM webhook_rules WHERE id = ?", (rule_id,)).fetchone()
-    return _row_to_webhook_rule(row) if row else None
+    return WebhookRule.from_row(row) if row else None
 
 
 @_with_retry
@@ -4858,16 +4277,6 @@ def update_webhook_rule(wr: WebhookRule) -> WebhookRule:
 def delete_webhook_rule(rule_id: int, user_id: int) -> None:
     with _conn() as con:
         con.execute("DELETE FROM webhook_rules WHERE id = ? AND user_id = ?", (rule_id, user_id))
-
-
-def _row_to_webhook_rule(row: sqlite3.Row) -> WebhookRule:
-    return WebhookRule(
-        id=row["id"], user_id=row["user_id"], name=row["name"],
-        event_type=row["event_type"], filter_json=row["filter_json"],
-        target_url=row["target_url"], headers_json=row["headers_json"],
-        active=bool(row["active"]),
-        created_at=datetime.fromisoformat(row["created_at"]),
-    )
 
 
 # ─── Plugin Marketplace ─────────────────────────────────────────────────────
@@ -4890,29 +4299,20 @@ def create_plugin_listing(pl: PluginListing) -> PluginListing:
 def list_plugin_listings() -> List[PluginListing]:
     with _conn() as con:
         rows = con.execute("SELECT * FROM plugin_listings ORDER BY downloads DESC, name").fetchall()
-    return [_row_to_plugin_listing(r) for r in rows]
+    return [PluginListing.from_row(r) for r in rows]
 
 
 @_with_retry
 def get_plugin_listing(listing_id: int) -> Optional[PluginListing]:
     with _conn() as con:
         row = con.execute("SELECT * FROM plugin_listings WHERE id = ?", (listing_id,)).fetchone()
-    return _row_to_plugin_listing(row) if row else None
+    return PluginListing.from_row(row) if row else None
 
 
 @_with_retry
 def increment_plugin_downloads(listing_id: int) -> None:
     with _conn() as con:
         con.execute("UPDATE plugin_listings SET downloads = downloads + 1 WHERE id = ?", (listing_id,))
-
-
-def _row_to_plugin_listing(row: sqlite3.Row) -> PluginListing:
-    return PluginListing(
-        id=row["id"], name=row["name"], description=row["description"],
-        author=row["author"], version=row["version"], downloads=row["downloads"],
-        rating=row["rating"], manifest_json=row["manifest_json"],
-        created_at=datetime.fromisoformat(row["created_at"]),
-    )
 
 
 # ─── Custom Field Definitions ───────────────────────────────────────────────
@@ -4940,15 +4340,7 @@ def list_custom_field_definitions(plugin_id: Optional[int] = None) -> List[Custo
             ).fetchall()
         else:
             rows = con.execute("SELECT * FROM custom_field_definitions ORDER BY id").fetchall()
-    return [_row_to_custom_field_definition(r) for r in rows]
-
-
-def _row_to_custom_field_definition(row: sqlite3.Row) -> CustomFieldDefinition:
-    return CustomFieldDefinition(
-        id=row["id"], plugin_id=row["plugin_id"], field_type=row["field_type"],
-        label=row["label"], options_json=row["options_json"],
-        created_at=datetime.fromisoformat(row["created_at"]),
-    )
+    return [CustomFieldDefinition.from_row(r) for r in rows]
 
 
 # ─── Plugin Views ───────────────────────────────────────────────────────────
@@ -4976,15 +4368,7 @@ def list_plugin_views(plugin_id: Optional[int] = None) -> List[PluginView]:
             ).fetchall()
         else:
             rows = con.execute("SELECT * FROM plugin_views ORDER BY id").fetchall()
-    return [_row_to_plugin_view(r) for r in rows]
-
-
-def _row_to_plugin_view(row: sqlite3.Row) -> PluginView:
-    return PluginView(
-        id=row["id"], plugin_id=row["plugin_id"], name=row["name"],
-        view_type=row["view_type"], config_json=row["config_json"],
-        created_at=datetime.fromisoformat(row["created_at"]),
-    )
+    return [PluginView.from_row(r) for r in rows]
 
 
 # ─── Themes ─────────────────────────────────────────────────────────────────
@@ -5007,14 +4391,14 @@ def create_theme(theme: Theme) -> Theme:
 def list_themes() -> List[Theme]:
     with _conn() as con:
         rows = con.execute("SELECT * FROM themes ORDER BY name").fetchall()
-    return [_row_to_theme(r) for r in rows]
+    return [Theme.from_row(r) for r in rows]
 
 
 @_with_retry
 def get_active_theme() -> Optional[Theme]:
     with _conn() as con:
         row = con.execute("SELECT * FROM themes WHERE is_active = 1 LIMIT 1").fetchone()
-    return _row_to_theme(row) if row else None
+    return Theme.from_row(row) if row else None
 
 
 @_with_retry
@@ -5028,15 +4412,7 @@ def activate_theme(theme_id: int) -> None:
 def get_theme(theme_id: int) -> Optional[Theme]:
     with _conn() as con:
         row = con.execute("SELECT * FROM themes WHERE id = ?", (theme_id,)).fetchone()
-    return _row_to_theme(row) if row else None
-
-
-def _row_to_theme(row: sqlite3.Row) -> Theme:
-    return Theme(
-        id=row["id"], name=row["name"], author=row["author"],
-        css_variables_json=row["css_variables_json"], is_active=bool(row["is_active"]),
-        created_at=datetime.fromisoformat(row["created_at"]),
-    )
+    return Theme.from_row(row) if row else None
 
 
 # ─── Zapier Subscriptions ───────────────────────────────────────────────────
@@ -5115,7 +4491,7 @@ def export_project(goal_id: int) -> dict:
         goal = _row_to_goal(goal_row)
 
         task_rows = con.execute("SELECT * FROM tasks WHERE goal_id = ? ORDER BY order_index", (goal_id,)).fetchall()
-        tasks = [_row_to_task(r) for r in task_rows]
+        tasks = [Task.from_row(r) for r in task_rows]
 
         task_ids = [t.id for t in tasks]
         comments = []
@@ -5863,7 +5239,7 @@ def get_risk_assessment(task_id: int) -> Optional[TaskRisk]:
         ).fetchone()
     if not row:
         return None
-    return _row_to_task_risk(row)
+    return TaskRisk.from_row(row)
 
 
 def list_risk_assessments(goal_id: int) -> List[TaskRisk]:
@@ -5873,20 +5249,7 @@ def list_risk_assessments(goal_id: int) -> List[TaskRisk]:
             "SELECT * FROM risk_assessments WHERE goal_id = ? ORDER BY risk_score DESC",
             (goal_id,),
         ).fetchall()
-    return [_row_to_task_risk(r) for r in rows]
-
-
-def _row_to_task_risk(row: sqlite3.Row) -> TaskRisk:
-    return TaskRisk(
-        id=row["id"],
-        task_id=row["task_id"],
-        goal_id=row["goal_id"],
-        risk_score=row["risk_score"],
-        risk_factors=row["risk_factors"],
-        estimated_delay=row["estimated_delay"],
-        assessed_at=row["assessed_at"],
-        created_at=datetime.fromisoformat(row["created_at"]) if row["created_at"] else None,
-    )
+    return [TaskRisk.from_row(r) for r in rows]
 
 
 # ─── Task Schedule CRUD ─────────────────────────────────────────────────────
@@ -5922,7 +5285,7 @@ def list_task_schedules(goal_id: Optional[int] = None, user_id: Optional[int] = 
             ).fetchall()
         else:
             rows = con.execute("SELECT * FROM task_schedules ORDER BY scheduled_start").fetchall()
-    return [_row_to_task_schedule(r) for r in rows]
+    return [TaskSchedule.from_row(r) for r in rows]
 
 
 @_with_retry
@@ -5932,19 +5295,6 @@ def delete_task_schedules(goal_id: int) -> int:
     with _conn() as con:
         cur = con.execute("DELETE FROM task_schedules WHERE goal_id = ?", (goal_id,))
         return cur.rowcount
-
-
-def _row_to_task_schedule(row: sqlite3.Row) -> TaskSchedule:
-    return TaskSchedule(
-        id=row["id"],
-        task_id=row["task_id"],
-        goal_id=row["goal_id"],
-        user_id=row["user_id"],
-        scheduled_start=row["scheduled_start"],
-        scheduled_end=row["scheduled_end"],
-        calendar_slot=row["calendar_slot"],
-        created_at=datetime.fromisoformat(row["created_at"]) if row["created_at"] else None,
-    )
 
 
 # ─── Progress Report CRUD ───────────────────────────────────────────────────
@@ -5972,20 +5322,7 @@ def list_progress_reports(goal_id: int) -> List[ProgressReport]:
             "SELECT * FROM progress_reports WHERE goal_id = ? ORDER BY created_at DESC",
             (goal_id,),
         ).fetchall()
-    return [_row_to_progress_report(r) for r in rows]
-
-
-def _row_to_progress_report(row: sqlite3.Row) -> ProgressReport:
-    return ProgressReport(
-        id=row["id"],
-        goal_id=row["goal_id"],
-        user_id=row["user_id"],
-        summary=row["summary"],
-        metrics_json=row["metrics_json"],
-        blockers_json=row["blockers_json"],
-        next_actions_json=row["next_actions_json"],
-        created_at=datetime.fromisoformat(row["created_at"]) if row["created_at"] else None,
-    )
+    return [ProgressReport.from_row(r) for r in rows]
 
 
 # ─── Streak CRUD ─────────────────────────────────────────────────────────────
@@ -5998,7 +5335,7 @@ def get_or_create_streak(user_id: int, streak_type: str = "daily") -> Streak:
             (user_id, streak_type),
         ).fetchone()
         if row:
-            return _row_to_streak(row)
+            return Streak.from_row(row)
         now = datetime.now(timezone.utc).isoformat()
         cur = con.execute(
             """INSERT INTO streaks (user_id, current_streak, longest_streak, last_activity_date, streak_type, created_at, updated_at)
@@ -6046,19 +5383,6 @@ def update_streak(user_id: int, streak_type: str = "daily") -> Streak:
     return get_or_create_streak(user_id, streak_type)
 
 
-def _row_to_streak(row: sqlite3.Row) -> Streak:
-    return Streak(
-        id=row["id"],
-        user_id=row["user_id"],
-        current_streak=row["current_streak"],
-        longest_streak=row["longest_streak"],
-        last_activity_date=row["last_activity_date"],
-        streak_type=row["streak_type"],
-        created_at=datetime.fromisoformat(row["created_at"]) if row["created_at"] else None,
-        updated_at=datetime.fromisoformat(row["updated_at"]) if row["updated_at"] else None,
-    )
-
-
 # ─── Leaderboard CRUD ───────────────────────────────────────────────────────
 
 def get_leaderboard(period: str = "weekly", limit: int = 20) -> List[LeaderboardEntry]:
@@ -6068,7 +5392,7 @@ def get_leaderboard(period: str = "weekly", limit: int = 20) -> List[Leaderboard
             "SELECT * FROM leaderboard WHERE period = ? ORDER BY score DESC LIMIT ?",
             (period, limit),
         ).fetchall()
-    entries = [_row_to_leaderboard(r) for r in rows]
+    entries = [LeaderboardEntry.from_row(r) for r in rows]
     for i, entry in enumerate(entries):
         entry.rank = i + 1
     return entries
@@ -6099,17 +5423,6 @@ def update_leaderboard(user_id: int, score: int, period: str = "weekly") -> Lead
                             created_at=datetime.fromisoformat(now))
 
 
-def _row_to_leaderboard(row: sqlite3.Row) -> LeaderboardEntry:
-    return LeaderboardEntry(
-        id=row["id"],
-        user_id=row["user_id"],
-        score=row["score"],
-        rank=row["rank"],
-        period=row["period"],
-        created_at=datetime.fromisoformat(row["created_at"]) if row["created_at"] else None,
-    )
-
-
 # ─── Team Challenge CRUD ────────────────────────────────────────────────────
 
 @_with_retry
@@ -6137,7 +5450,7 @@ def get_team_challenge(challenge_id: int) -> Optional[TeamChallenge]:
         row = con.execute("SELECT * FROM team_challenges WHERE id = ?", (challenge_id,)).fetchone()
     if not row:
         return None
-    return _row_to_team_challenge(row)
+    return TeamChallenge.from_row(row)
 
 
 def list_team_challenges(status: Optional[str] = None) -> List[TeamChallenge]:
@@ -6150,7 +5463,7 @@ def list_team_challenges(status: Optional[str] = None) -> List[TeamChallenge]:
             ).fetchall()
         else:
             rows = con.execute("SELECT * FROM team_challenges ORDER BY created_at DESC").fetchall()
-    return [_row_to_team_challenge(r) for r in rows]
+    return [TeamChallenge.from_row(r) for r in rows]
 
 
 @_with_retry
@@ -6167,23 +5480,6 @@ def update_team_challenge_progress(challenge_id: int, increment: int = 1) -> Opt
             (new_value, new_status, challenge_id),
         )
     return get_team_challenge(challenge_id)
-
-
-def _row_to_team_challenge(row: sqlite3.Row) -> TeamChallenge:
-    return TeamChallenge(
-        id=row["id"],
-        title=row["title"],
-        description=row["description"],
-        goal_type=row["goal_type"],
-        target_value=row["target_value"],
-        current_value=row["current_value"],
-        status=row["status"],
-        creator_id=row["creator_id"],
-        participants_json=row["participants_json"],
-        start_date=row["start_date"],
-        end_date=row["end_date"],
-        created_at=datetime.fromisoformat(row["created_at"]) if row["created_at"] else None,
-    )
 
 
 # ─── Content Blocks (recursive block-based content model) ────────────────────
@@ -6238,14 +5534,14 @@ def list_content_blocks(entity_type: str, entity_id: int, parent_block_id: Optio
                    ORDER BY order_index""",
                 (entity_type, entity_id),
             ).fetchall()
-    return [_row_to_content_block(r) for r in rows]
+    return [ContentBlock.from_row(r) for r in rows]
 
 
 def get_content_block(block_id: int) -> Optional[ContentBlock]:
     """Get a single content block by id."""
     with _conn() as con:
         row = con.execute("SELECT * FROM content_blocks WHERE id = ?", (block_id,)).fetchone()
-    return _row_to_content_block(row) if row else None
+    return ContentBlock.from_row(row) if row else None
 
 
 @_with_retry
@@ -6323,21 +5619,6 @@ def get_content_block_tree(entity_type: str, entity_id: int) -> List[dict]:
     return _build_tree(None)
 
 
-def _row_to_content_block(row: sqlite3.Row) -> ContentBlock:
-    return ContentBlock(
-        id=row["id"],
-        entity_type=row["entity_type"],
-        entity_id=row["entity_id"],
-        block_type=row["block_type"],
-        content=row["content"],
-        properties_json=row["properties_json"],
-        parent_block_id=row["parent_block_id"],
-        order_index=row["order_index"],
-        created_at=datetime.fromisoformat(row["created_at"]) if row["created_at"] else None,
-        updated_at=datetime.fromisoformat(row["updated_at"]) if row["updated_at"] else None,
-    )
-
-
 # ─── Cross-goal task queries (for portfolio views) ──────────────────────────
 
 
@@ -6407,4 +5688,4 @@ def list_user_tasks(
 
     with _conn() as con:
         rows = con.execute(query, params).fetchall()
-    return [_row_to_task(r) for r in rows]
+    return [Task.from_row(r) for r in rows]
