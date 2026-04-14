@@ -1,0 +1,114 @@
+<style>
+.wrap{font-size:13px;color:var(--color-text-primary);line-height:1.7}
+.sec{font-size:11px;font-weight:500;text-transform:uppercase;letter-spacing:.06em;color:var(--color-text-secondary);margin:1.4rem 0 .5rem}
+.verdict{border-radius:var(--border-radius-lg);padding:14px 18px;margin-bottom:10px}
+.v-yes{background:#EAF3DE;border:0.5px solid #97C459}
+.v-no{background:#FCEBEB;border:0.5px solid #F09595}
+.v-warn{background:#FAEEDA;border:0.5px solid #FAC775}
+@media(prefers-color-scheme:dark){
+  .v-yes{background:#173404;border-color:#3B6D11}
+  .v-no{background:#501313;border-color:#791F1F}
+  .v-warn{background:#412402;border-color:#633806}
+}
+.v-head{display:flex;align-items:center;gap:10px;margin-bottom:6px}
+.v-title{font-weight:500;font-size:13px}
+.v-yes .v-title{color:#27500A}
+.v-no  .v-title{color:#791F1F}
+.v-warn .v-title{color:#633806}
+@media(prefers-color-scheme:dark){
+  .v-yes .v-title{color:#C0DD97}
+  .v-no  .v-title{color:#F7C1C1}
+  .v-warn .v-title{color:#FAC775}
+}
+.v-body{font-size:12px;color:var(--color-text-secondary);line-height:1.6}
+.score-row{display:flex;align-items:center;gap:10px;margin-bottom:6px;font-size:12px}
+.score-label{width:160px;flex-shrink:0;color:var(--color-text-secondary)}
+.score-track{flex:1;height:8px;background:var(--color-border-tertiary);border-radius:4px;position:relative}
+.score-fill{height:8px;border-radius:4px;position:absolute;top:0;left:0}
+.score-val{width:30px;text-align:right;font-family:var(--font-mono);font-size:11px;color:var(--color-text-primary);font-weight:500}
+.tag{font-size:10px;font-weight:500;padding:2px 7px;border-radius:20px}
+.t-y{background:#EAF3DE;color:#3B6D11}
+.t-n{background:#FCEBEB;color:#A32D2D}
+.t-w{background:#FAEEDA;color:#854F0B}
+@media(prefers-color-scheme:dark){
+  .t-y{background:#27500A;color:#C0DD97}
+  .t-n{background:#791F1F;color:#F7C1C1}
+  .t-w{background:#633806;color:#FAC775}
+}
+.machine{background:var(--color-background-secondary);border:0.5px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);padding:10px 14px;font-size:12px;line-height:1.8;font-family:var(--font-mono);margin:8px 0}
+.final{border:2px solid var(--color-border-primary);border-radius:var(--border-radius-lg);padding:16px 20px;margin-top:16px}
+.rating{font-size:36px;font-weight:500;letter-spacing:-.02em;margin-bottom:4px}
+</style>
+<div class="wrap">
+
+<div class="sec">reference machines — 1970s baseline</div>
+<div class="machine">
+PDP-11/40   · 1973 · 16-bit · 56 KB RAM max · no MMU · ~1 MIPS<br>
+VAX-11/780  · 1977 · 32-bit · 512 KB RAM typical · first "modern" Unix host<br>
+Intel 8080  · 1974 · 8-bit  · 64 KB addressable · CP/M era<br>
+IBM System/370 · 1970 · 32-bit · mainframe · 1–2 MB RAM possible<br>
+<br>
+C itself was written for PDP-11. Unix ran in 64 KB. This is the target.
+</div>
+
+<div class="sec">architecture layer audit</div>
+
+<div class="verdict v-yes">
+  <div class="v-head"><span class="v-title">File structure + module boundaries</span><span class="tag t-y">passes</span></div>
+  <div class="v-body">200-line cap, 2-in/1-out, flat includes, no transitive deps — this is exactly how C was written on PDP-11. K&R C was designed around this constraint because the machines had no choice. A PDP-11 linker could handle this file structure without modification. The header/.c split maps directly to how early Unix libraries were distributed on tape.</div>
+</div>
+
+<div class="verdict v-yes">
+  <div class="v-head"><span class="v-title">C99 language standard</span><span class="tag t-w">mostly passes — with a downgrade</span></div>
+  <div class="v-body">C99 didn't exist in 1970 — K&R C (1978) and then ANSI C89 were the standards. However C99 is a strict superset and the features you're using (<code>stdint.h</code>, <code>bool</code>, <code>uint64_t</code>) are conservative additions. On a 16-bit PDP-11 you would replace <code>int64_t</code> with two <code>uint32_t</code> words and write explicit carry arithmetic. The architecture survives — the integer types need a hardware-aware typedef layer.</div>
+</div>
+
+<div class="verdict v-yes">
+  <div class="v-head"><span class="v-title">AgentMsg tagged union / channel.h</span><span class="tag t-y">passes — this is 1970s idiom</span></div>
+  <div class="v-body">Tagged unions (<code>struct { enum tag; union payload; }</code>) are pure K&R C. Message-passing via typed queues was the standard IPC model on early minicomputers before sockets existed. The channel design is closer to 1970s thinking than modern microservice design. A VAX engineer would recognise this immediately.</div>
+</div>
+
+<div class="verdict v-warn">
+  <div class="v-head"><span class="v-title">SQLite / db layer</span><span class="tag t-w">fails as-is — concept survives</span></div>
+  <div class="v-body">SQLite as a library is a 2000s artifact — 140 KB of compiled code, WAL journaling, B-tree pages. A PDP-11 with 56 KB RAM cannot load SQLite. The <em>concept</em> — typed query structs in, typed row structs out — maps directly onto flat-file or ISAM databases of the era (VSAM on IBM, dbm on Unix). The interface contract survives; the implementation does not.</div>
+</div>
+
+<div class="verdict v-no">
+  <div class="v-head"><span class="v-title">Argon2id / ChaCha20-Poly1305</span><span class="tag t-n">fails — era mismatch</span></div>
+  <div class="v-body">Argon2 requires intentionally large memory (64 MB default) — a PDP-11 has 56 KB total. ChaCha20 was designed in 2008. Neither existed nor could run. 1970s equivalent: DES (1975, NSA), or for purely military machines, KL-7 cipher hardware. The <em>vault.c interface</em> (bytes + key → ciphertext) survives perfectly — swap the algorithm, keep the contract.</div>
+</div>
+
+<div class="verdict v-no">
+  <div class="v-head"><span class="v-title">HTTP client / exec layer</span><span class="tag t-n">fails — TCP/IP didn't exist yet</span></div>
+  <div class="v-body">TCP/IP was standardised in 1974 (ARPANET), but HTTP is 1991. A 1970s machine doing "HTTP requests" would be doing serial RS-232 or BISYNC messages to a mainframe. The <code>HttpReq → HttpResult</code> interface shape is sound — it's just called something different. A 1970s rewrite replaces it with a serial message frame struct. The module boundary is correct; the protocol is wrong.</div>
+</div>
+
+<div class="verdict v-no">
+  <div class="v-head"><span class="v-title">AI agent orchestration (the whole point of teb)</span><span class="tag t-n">fundamentally impossible</span></div>
+  <div class="v-body">A PDP-11 running at 1 MIPS with 56 KB RAM cannot run an LLM. GPT-4 inference requires ~700 GB of weight memory. Claude requires similar. The multi-agent coordinator, the AI decomposition engine, the coaching layer — none of these run locally on 1970s iron. What <em>could</em> run: the task queue, the rule-based nudge system, the financial pipeline arithmetic, the credential vault (with DES), the HTTP-equivalent serial comms. teb without AI is a structured task tracker — and that absolutely runs on a VAX.</div>
+</div>
+
+<div class="sec">scorecard</div>
+<div class="score-row"><span class="score-label">File architecture</span><div class="score-track"><div class="score-fill" style="width:95%;background:#1D9E75"></div></div><span class="score-val">95</span></div>
+<div class="score-row"><span class="score-label">I/O contract design</span><div class="score-track"><div class="score-fill" style="width:92%;background:#1D9E75"></div></div><span class="score-val">92</span></div>
+<div class="score-row"><span class="score-label">Language (C99→K&R)</span><div class="score-track"><div class="score-fill" style="width:78%;background:#639922"></div></div><span class="score-val">78</span></div>
+<div class="score-row"><span class="score-label">Data layer</span><div class="score-track"><div class="score-fill" style="width:45%;background:#BA7517"></div></div><span class="score-val">45</span></div>
+<div class="score-row"><span class="score-label">Crypto layer</span><div class="score-track"><div class="score-fill" style="width:20%;background:#E24B4A"></div></div><span class="score-val">20</span></div>
+<div class="score-row"><span class="score-label">Comms layer</span><div class="score-track"><div class="score-fill" style="width:18%;background:#E24B4A"></div></div><span class="score-val">18</span></div>
+<div class="score-row"><span class="score-label">AI inference layer</span><div class="score-track"><div class="score-fill" style="width:0%;background:#E24B4A"></div></div><span class="score-val">0</span></div>
+
+<div class="final">
+  <div class="rating">61 / 100</div>
+  <div style="font-size:13px;font-weight:500;margin-bottom:8px;color:var(--color-text-primary)">Honest verdict: the skeleton is 1970s. the organs are not.</div>
+  <div style="font-size:12px;color:var(--color-text-secondary);line-height:1.7">
+    The architectural principles — flat modules, typed I/O contracts, message-passing agents, compile-time error enforcement, no transitive deps — are not modern ideas dressed up in retro clothing. They are genuinely how disciplined systems were built on PDP-11 and VAX iron, because the machines gave you no alternative. You rediscovered them from first principles by treating the AI context window as the hard constraint, which is the same pressure the 64 KB RAM limit applied in 1973.<br><br>
+    What fails is entirely the <em>implementation stack</em>, not the design. SQLite, Argon2, ChaCha20, HTTP, and LLM inference are all post-1990 artifacts. Replace them with era-appropriate equivalents — flat file I/O, DES, serial framing, rule-based expert systems — and the architecture runs unchanged on a VAX-11/780.<br><br>
+    The most honest statement: <strong style="color:var(--color-text-primary)">a 1970s engineer handed this architecture document would nod and start coding. a 1970s engineer handed the implementation dependencies would not recognise them.</strong>
+  </div>
+</div>
+
+<div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap">
+  <button onclick="sendPrompt('What would the teb2 stack look like with fully 1970s-compatible implementations — DES, flat files, serial comms, rule-based agents?')">full 1970s stack ↗</button>
+  <button onclick="sendPrompt('How would you replace SQLite with a flat-file ISAM equivalent that fits the db layer I/O contract?')">1970s db layer ↗</button>
+</div>
+</div>

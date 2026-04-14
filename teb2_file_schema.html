@@ -1,0 +1,208 @@
+<h2 class="sr-only">teb2 file relationship schema showing modules as clusters with minimal inter-file communication lines</h2>
+<style>
+svg text { pointer-events: none; }
+.node-file { cursor: pointer; }
+.node-file:hover rect { opacity: 0.85; }
+#tooltip {
+  position: absolute; background: var(--color-background-primary);
+  border: 0.5px solid var(--color-border-secondary);
+  border-radius: var(--border-radius-md);
+  padding: 8px 12px; font-size: 12px; line-height: 1.6;
+  color: var(--color-text-primary); pointer-events: none;
+  opacity: 0; transition: opacity .15s; max-width: 220px;
+}
+</style>
+<div style="position:relative">
+<div id="tooltip"></div>
+<svg id="schema" width="100%" viewBox="0 0 680 520" role="img">
+<title>teb2 file relationship schema</title>
+<desc>Modules shown as labeled clusters. Lines between files represent direct #include relationships only. core/types.h and core/errors.h are the only files included by all modules.</desc>
+<defs>
+  <marker id="arr" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse">
+    <path d="M2 1L8 5L2 9" fill="none" stroke="context-stroke" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+  </marker>
+</defs>
+
+<!-- ── CORE (centre top) ───────────────────────────── -->
+<g id="mod-core">
+  <rect x="255" y="30" width="170" height="26" rx="14" fill="none" stroke="var(--color-border-secondary)" stroke-width="0.5" stroke-dasharray="4 3"/>
+  <text x="340" y="47" text-anchor="middle" font-size="11" font-weight="500" fill="var(--color-text-secondary)" font-family="var(--font-sans)">core</text>
+</g>
+
+<!-- core files -->
+<g class="node-file" data-tip="Included by every module. Domain structs, enums, typedefs. Never includes anything else.">
+  <rect x="264" y="62" width="84" height="28" rx="5" fill="#E1F5EE" stroke="#1D9E75" stroke-width="0.5"/>
+  <text x="306" y="80" text-anchor="middle" font-size="11" font-weight="500" fill="#085041" font-family="var(--font-sans)">types.h</text>
+</g>
+<g class="node-file" data-tip="Error enum used by every fallible function. Includes nothing.">
+  <rect x="356" y="62" width="84" height="28" rx="5" fill="#E1F5EE" stroke="#1D9E75" stroke-width="0.5"/>
+  <text x="398" y="80" text-anchor="middle" font-size="11" font-weight="500" fill="#085041" font-family="var(--font-sans)">errors.h</text>
+</g>
+
+<!-- ── AUTH (left) ────────────────────────────────── -->
+<g id="mod-auth">
+  <rect x="40" y="148" width="155" height="26" rx="14" fill="none" stroke="var(--color-border-secondary)" stroke-width="0.5" stroke-dasharray="4 3"/>
+  <text x="118" y="165" text-anchor="middle" font-size="11" font-weight="500" fill="var(--color-text-secondary)" font-family="var(--font-sans)">auth</text>
+</g>
+<g class="node-file" data-tip="Argon2id hash/verify. Includes: types.h, errors.h.">
+  <rect x="44" y="182" width="68" height="28" rx="5" fill="#EEEDFE" stroke="#534AB7" stroke-width="0.5"/>
+  <text x="78" y="200" text-anchor="middle" font-size="11" font-weight="500" fill="#3C3489" font-family="var(--font-sans)">hash.c</text>
+</g>
+<g class="node-file" data-tip="JWT sign/verify. Algorithm pinned at compile time. Includes: types.h, errors.h.">
+  <rect x="120" y="182" width="70" height="28" rx="5" fill="#EEEDFE" stroke="#534AB7" stroke-width="0.5"/>
+  <text x="155" y="200" text-anchor="middle" font-size="11" font-weight="500" fill="#3C3489" font-family="var(--font-sans)">token.c</text>
+</g>
+<g class="node-file" data-tip="Role checks. Pure functions, no I/O. Includes: types.h.">
+  <rect x="44" y="222" width="68" height="28" rx="5" fill="#EEEDFE" stroke="#534AB7" stroke-width="0.5"/>
+  <text x="78" y="240" text-anchor="middle" font-size="11" font-weight="500" fill="#3C3489" font-family="var(--font-sans)">rbac.c</text>
+</g>
+<g class="node-file" data-tip="Public interface. What api/ sees. Declares only — no logic.">
+  <rect x="120" y="222" width="70" height="28" rx="5" fill="#EEEDFE" stroke="#7F77DD" stroke-width="1"/>
+  <text x="155" y="240" text-anchor="middle" font-size="11" font-weight="500" fill="#3C3489" font-family="var(--font-sans)">auth.h</text>
+</g>
+
+<!-- ── DB (right) ─────────────────────────────────── -->
+<g id="mod-db">
+  <rect x="490" y="148" width="155" height="26" rx="14" fill="none" stroke="var(--color-border-secondary)" stroke-width="0.5" stroke-dasharray="4 3"/>
+  <text x="567" y="165" text-anchor="middle" font-size="11" font-weight="500" fill="var(--color-text-secondary)" font-family="var(--font-sans)">db</text>
+</g>
+<g class="node-file" data-tip="SQLite schema. Compile-time verified by sqlx equivalent. Single source of truth.">
+  <rect x="495" y="182" width="80" height="28" rx="5" fill="#FAEEDA" stroke="#BA7517" stroke-width="0.5"/>
+  <text x="535" y="200" text-anchor="middle" font-size="11" font-weight="500" fill="#633806" font-family="var(--font-sans)">schema.sql</text>
+</g>
+<g class="node-file" data-tip="Goal queries only. Includes: types.h, errors.h, db.h.">
+  <rect x="495" y="222" width="60" height="28" rx="5" fill="#FAEEDA" stroke="#BA7517" stroke-width="0.5"/>
+  <text x="525" y="240" text-anchor="middle" font-size="11" font-weight="500" fill="#633806" font-family="var(--font-sans)">goals.c</text>
+</g>
+<g class="node-file" data-tip="Task queries only. Includes: types.h, errors.h, db.h.">
+  <rect x="563" y="222" width="60" height="28" rx="5" fill="#FAEEDA" stroke="#BA7517" stroke-width="0.5"/>
+  <text x="593" y="240" text-anchor="middle" font-size="11" font-weight="500" fill="#633806" font-family="var(--font-sans)">tasks.c</text>
+</g>
+<g class="node-file" data-tip="Public db interface. Includes: types.h. Seen by agents and api.">
+  <rect x="495" y="262" width="60" height="28" rx="5" fill="#FAEEDA" stroke="#EF9F27" stroke-width="1"/>
+  <text x="525" y="280" text-anchor="middle" font-size="11" font-weight="500" fill="#633806" font-family="var(--font-sans)">db.h</text>
+</g>
+
+<!-- ── EXEC (lower left) ──────────────────────────── -->
+<g id="mod-exec">
+  <rect x="40" y="318" width="155" height="26" rx="14" fill="none" stroke="var(--color-border-secondary)" stroke-width="0.5" stroke-dasharray="4 3"/>
+  <text x="118" y="335" text-anchor="middle" font-size="11" font-weight="500" fill="var(--color-text-secondary)" font-family="var(--font-sans)">exec</text>
+</g>
+<g class="node-file" data-tip="ChaCha20-Poly1305 encrypt/decrypt. Includes: types.h, errors.h. Nothing else.">
+  <rect x="44" y="352" width="65" height="28" rx="5" fill="#FAECE7" stroke="#993C1D" stroke-width="0.5"/>
+  <text x="77" y="370" text-anchor="middle" font-size="11" font-weight="500" fill="#712B13" font-family="var(--font-sans)">vault.c</text>
+</g>
+<g class="node-file" data-tip="HTTP client wrapper. Includes: types.h, errors.h. No agent logic.">
+  <rect x="117" y="352" width="68" height="28" rx="5" fill="#FAECE7" stroke="#993C1D" stroke-width="0.5"/>
+  <text x="151" y="370" text-anchor="middle" font-size="11" font-weight="500" fill="#712B13" font-family="var(--font-sans)">http.c</text>
+</g>
+<g class="node-file" data-tip="Public exec interface. Seen by agents only.">
+  <rect x="44" y="392" width="65" height="28" rx="5" fill="#FAECE7" stroke="#D85A30" stroke-width="1"/>
+  <text x="77" y="410" text-anchor="middle" font-size="11" font-weight="500" fill="#712B13" font-family="var(--font-sans)">exec.h</text>
+</g>
+
+<!-- ── AGENTS (centre) ────────────────────────────── -->
+<g id="mod-agents">
+  <rect x="240" y="318" width="200" height="26" rx="14" fill="none" stroke="var(--color-border-secondary)" stroke-width="0.5" stroke-dasharray="4 3"/>
+  <text x="340" y="335" text-anchor="middle" font-size="11" font-weight="500" fill="var(--color-text-secondary)" font-family="var(--font-sans)">agents</text>
+</g>
+<g class="node-file" data-tip="Typed message enum. The ONLY way agents communicate. Includes: types.h.">
+  <rect x="270" y="352" width="76" height="28" rx="5" fill="#E6F1FB" stroke="#378ADD" stroke-width="1"/>
+  <text x="308" y="370" text-anchor="middle" font-size="11" font-weight="500" fill="#0C447C" font-family="var(--font-sans)">channel.h</text>
+</g>
+<g class="node-file" data-tip="Coordinator agent. Includes: channel.h, types.h, errors.h.">
+  <rect x="354" y="352" width="78" height="28" rx="5" fill="#E6F1FB" stroke="#185FA5" stroke-width="0.5"/>
+  <text x="393" y="370" text-anchor="middle" font-size="11" font-weight="500" fill="#0C447C" font-family="var(--font-sans)">coord.c</text>
+</g>
+<g class="node-file" data-tip="Finance agent. Includes: channel.h, exec.h, db.h, types.h. int64_t cents only.">
+  <rect x="270" y="392" width="76" height="28" rx="5" fill="#E6F1FB" stroke="#185FA5" stroke-width="0.5"/>
+  <text x="308" y="410" text-anchor="middle" font-size="11" font-weight="500" fill="#0C447C" font-family="var(--font-sans)">finance.c</text>
+</g>
+<g class="node-file" data-tip="Outreach agent. Includes: channel.h, exec.h, types.h.">
+  <rect x="354" y="392" width="78" height="28" rx="5" fill="#E6F1FB" stroke="#185FA5" stroke-width="0.5"/>
+  <text x="393" y="410" text-anchor="middle" font-size="11" font-weight="500" fill="#0C447C" font-family="var(--font-sans)">outreach.c</text>
+</g>
+
+<!-- ── API (lower right) ──────────────────────────── -->
+<g id="mod-api">
+  <rect x="490" y="318" width="155" height="26" rx="14" fill="none" stroke="var(--color-border-secondary)" stroke-width="0.5" stroke-dasharray="4 3"/>
+  <text x="567" y="335" text-anchor="middle" font-size="11" font-weight="500" fill="var(--color-text-secondary)" font-family="var(--font-sans)">api</text>
+</g>
+<g class="node-file" data-tip="Goal HTTP routes. Thin layer — validates input, calls db, returns JSON. Includes: auth.h, db.h, types.h.">
+  <rect x="495" y="352" width="60" height="28" rx="5" fill="#F1EFE8" stroke="#5F5E5A" stroke-width="0.5"/>
+  <text x="525" y="370" text-anchor="middle" font-size="11" font-weight="500" fill="#2C2C2A" font-family="var(--font-sans)">goals.c</text>
+</g>
+<g class="node-file" data-tip="Task HTTP routes. Same pattern as goals.c. Includes: auth.h, db.h, types.h.">
+  <rect x="563" y="352" width="60" height="28" rx="5" fill="#F1EFE8" stroke="#5F5E5A" stroke-width="0.5"/>
+  <text x="593" y="370" text-anchor="middle" font-size="11" font-weight="500" fill="#2C2C2A" font-family="var(--font-sans)">tasks.c</text>
+</g>
+
+<!-- ══ EDGES — only direct includes, no transitive ══ -->
+
+<!-- core → auth -->
+<line x1="306" y1="90" x2="155" y2="182" stroke="#1D9E75" stroke-width="0.5" stroke-opacity="0.5" marker-end="url(#arr)"/>
+<line x1="398" y1="90" x2="165" y2="182" stroke="#1D9E75" stroke-width="0.5" stroke-opacity="0.5" marker-end="url(#arr)"/>
+
+<!-- core → db -->
+<line x1="340" y1="90" x2="535" y2="182" stroke="#1D9E75" stroke-width="0.5" stroke-opacity="0.5" marker-end="url(#arr)"/>
+<line x1="398" y1="90" x2="583" y2="182" stroke="#1D9E75" stroke-width="0.5" stroke-opacity="0.5" marker-end="url(#arr)"/>
+
+<!-- core → exec -->
+<line x1="290" y1="90" x2="100" y2="352" stroke="#1D9E75" stroke-width="0.5" stroke-opacity="0.4" stroke-dasharray="3 3" marker-end="url(#arr)"/>
+
+<!-- core → agents/channel -->
+<line x1="340" y1="90" x2="308" y2="352" stroke="#1D9E75" stroke-width="0.5" stroke-opacity="0.4" stroke-dasharray="3 3" marker-end="url(#arr)"/>
+
+<!-- auth.h → api -->
+<line x1="190" y1="236" x2="495" y2="366" stroke="#7F77DD" stroke-width="0.8" stroke-opacity="0.6" marker-end="url(#arr)"/>
+
+<!-- db.h → api -->
+<line x1="525" y1="290" x2="525" y2="352" stroke="#EF9F27" stroke-width="0.8" stroke-opacity="0.6" marker-end="url(#arr)"/>
+<line x1="555" y1="290" x2="563" y2="352" stroke="#EF9F27" stroke-width="0.8" stroke-opacity="0.6" marker-end="url(#arr)"/>
+
+<!-- db.h → agents/finance -->
+<line x1="510" y1="290" x2="340" y2="392" stroke="#EF9F27" stroke-width="0.8" stroke-opacity="0.5" stroke-dasharray="3 3" marker-end="url(#arr)"/>
+
+<!-- exec.h → agents -->
+<line x1="109" y1="406" x2="270" y2="406" stroke="#D85A30" stroke-width="0.8" stroke-opacity="0.6" marker-end="url(#arr)"/>
+
+<!-- channel.h → agent files -->
+<line x1="346" y1="366" x2="354" y2="366" stroke="#378ADD" stroke-width="0.8" stroke-opacity="0.7" marker-end="url(#arr)"/>
+<line x1="308" y1="380" x2="308" y2="392" stroke="#378ADD" stroke-width="0.8" stroke-opacity="0.7" marker-end="url(#arr)"/>
+<line x1="346" y1="380" x2="393" y2="392" stroke="#378ADD" stroke-width="0.8" stroke-opacity="0.7" marker-end="url(#arr)"/>
+
+<!-- legend -->
+<rect x="40" y="455" width="600" height="50" rx="8" fill="var(--color-background-secondary)" stroke="var(--color-border-tertiary)" stroke-width="0.5"/>
+<line x1="60" y1="475" x2="90" y2="475" stroke="#1D9E75" stroke-width="0.5" stroke-opacity="0.5"/>
+<text x="96" y="479" font-size="11" fill="var(--color-text-secondary)" font-family="var(--font-sans)">core broadcast</text>
+<line x1="185" y1="475" x2="215" y2="475" stroke="#7F77DD" stroke-width="0.8"/>
+<text x="221" y="479" font-size="11" fill="var(--color-text-secondary)" font-family="var(--font-sans)">interface boundary</text>
+<line x1="340" y1="475" x2="370" y2="475" stroke="#888780" stroke-width="0.5" stroke-dasharray="3 3"/>
+<text x="376" y="479" font-size="11" fill="var(--color-text-secondary)" font-family="var(--font-sans)">optional include</text>
+<rect x="490" y="468" width="10" height="10" rx="2" fill="#EEEDFE" stroke="#7F77DD" stroke-width="1"/>
+<text x="506" y="479" font-size="11" fill="var(--color-text-secondary)" font-family="var(--font-sans)">public interface file</text>
+<text x="340" y="496" font-size="10" fill="var(--color-text-tertiary)" text-anchor="middle" font-family="var(--font-sans)">hover any file for its include contract</text>
+</svg>
+</div>
+
+<script>
+const tt = document.getElementById('tooltip');
+const svg = document.getElementById('schema');
+const nodes = svg.querySelectorAll('.node-file');
+nodes.forEach(n => {
+  n.addEventListener('mouseenter', e => {
+    const tip = n.getAttribute('data-tip');
+    if (!tip) return;
+    tt.textContent = tip;
+    tt.style.opacity = '1';
+  });
+  n.addEventListener('mousemove', e => {
+    const box = svg.getBoundingClientRect();
+    const px = e.clientX - box.left;
+    const py = e.clientY - box.top;
+    tt.style.left = (px + 12) + 'px';
+    tt.style.top  = (py + 12) + 'px';
+  });
+  n.addEventListener('mouseleave', () => { tt.style.opacity = '0'; });
+});
+</script>

@@ -1,0 +1,239 @@
+<h2 class="sr-only">teb2 file schema with strict I/O contracts: max 2 inputs, 1 output per file, shown as typed ports on each module</h2>
+<style>
+.wrap { font-size:13px; color:var(--color-text-primary); }
+.sec { font-size:11px;font-weight:500;text-transform:uppercase;letter-spacing:.06em;color:var(--color-text-secondary);margin:1.2rem 0 .4rem; }
+.pkg { background:var(--color-background-secondary);border:0.5px solid var(--color-border-tertiary);border-radius:var(--border-radius-lg);padding:12px 14px;margin-bottom:10px; }
+.pkg-head { display:flex;align-items:center;gap:8px;margin-bottom:10px; }
+.pkg-name { font-size:13px;font-weight:500; }
+.pkg-rule { font-size:11px;color:var(--color-text-secondary);font-family:var(--font-mono); }
+.file-row { display:grid;grid-template-columns:110px 1fr 24px 1fr;gap:8px;align-items:center;padding:6px 0;border-top:0.5px solid var(--color-border-tertiary);font-size:12px; }
+.file-name { font-family:var(--font-mono);font-size:11px;font-weight:500;color:var(--color-text-primary); }
+.ports { display:flex;flex-direction:column;gap:3px; }
+.port { display:flex;align-items:center;gap:5px;font-size:11px; }
+.port-dot { width:7px;height:7px;border-radius:50%;flex-shrink:0; }
+.port-in  { background:#378ADD; }
+.port-out { background:#1D9E75; }
+.port-none{ background:var(--color-border-secondary); }
+.arrow-col { text-align:center;font-size:14px;color:var(--color-text-tertiary); }
+.type-tag { font-family:var(--font-mono);font-size:10px;padding:1px 5px;border-radius:3px;background:var(--color-background-primary);border:0.5px solid var(--color-border-tertiary);color:var(--color-text-secondary); }
+.violation { background:#FCEBEB;border-color:#F09595; }
+.violation .pkg-name { color:#A32D2D; }
+@media(prefers-color-scheme:dark){
+  .violation { background:#501313;border-color:#791F1F; }
+  .violation .pkg-name { color:#F7C1C1; }
+}
+.law-box { border:0.5px solid var(--color-border-tertiary);border-radius:var(--border-radius-md);padding:10px 14px;font-size:12px;line-height:1.7;margin-bottom:14px; }
+.law-line { display:flex;gap:8px;align-items:baseline;margin-bottom:2px; }
+.law-code { font-family:var(--font-mono);font-size:11px;color:var(--color-text-secondary); }
+</style>
+
+<div class="wrap">
+<div class="sec">Interface laws — enforced at compile time</div>
+<div class="law-box">
+  <div class="law-line"><span style="color:var(--color-text-secondary);width:16px">1.</span><span>Every file exposes <strong>max 2 inputs, exactly 1 output</strong>. No exceptions. If you need 3 inputs, the file has not been decomposed enough — split it.</span></div>
+  <div class="law-line"><span style="color:var(--color-text-secondary);width:16px">2.</span><span><strong>Input</strong> = a typed struct passed by pointer or a primitive scalar. Never a raw pointer to an untyped buffer. Never a global.</span></div>
+  <div class="law-line"><span style="color:var(--color-text-secondary);width:16px">3.</span><span><strong>Output</strong> = return value only. Never a side-channel write through a global. Error state is encoded in the return type, not a separate <code>errno</code>-style global.</span></div>
+  <div class="law-line"><span style="color:var(--color-text-secondary);width:16px">4.</span><span><code>types.h</code> and <code>errors.h</code> are exempt — they are vocabulary, not interfaces.</span></div>
+</div>
+
+<div class="sec">core — zero inputs, vocabulary only</div>
+<div class="pkg">
+  <div class="pkg-head">
+    <span class="pkg-name">core</span>
+    <span class="pkg-rule">in: 0 · out: 0 · no logic, no functions</span>
+  </div>
+  <div class="file-row" style="border-top:none;font-weight:500;font-size:11px;color:var(--color-text-secondary)">
+    <div>file</div><div>inputs</div><div></div><div>output</div>
+  </div>
+  <div class="file-row">
+    <div class="file-name">types.h</div>
+    <div class="ports"><div class="port"><div class="port-dot port-none"></div><span style="color:var(--color-text-tertiary)">none — declarations only</span></div></div>
+    <div class="arrow-col"></div>
+    <div class="ports"><div class="port"><div class="port-dot port-none"></div><span style="color:var(--color-text-tertiary)">none — declarations only</span></div></div>
+  </div>
+  <div class="file-row">
+    <div class="file-name">errors.h</div>
+    <div class="ports"><div class="port"><div class="port-dot port-none"></div><span style="color:var(--color-text-tertiary)">none — enum only</span></div></div>
+    <div class="arrow-col"></div>
+    <div class="ports"><div class="port"><div class="port-dot port-none"></div><span style="color:var(--color-text-tertiary)">none — enum only</span></div></div>
+  </div>
+  <div class="file-row">
+    <div class="file-name">config.c</div>
+    <div class="ports"><div class="port"><div class="port-dot port-in"></div><span><span class="type-tag">const char*</span> env_path</span></div></div>
+    <div class="arrow-col">→</div>
+    <div class="ports"><div class="port"><div class="port-dot port-out"></div><span><span class="type-tag">Config</span></span></div></div>
+  </div>
+</div>
+
+<div class="sec">auth — 2 in, 1 out per file</div>
+<div class="pkg">
+  <div class="pkg-head">
+    <span class="pkg-name">auth</span>
+    <span class="pkg-rule">max 2 in · 1 out · no db access, no http</span>
+  </div>
+  <div class="file-row" style="border-top:none;font-weight:500;font-size:11px;color:var(--color-text-secondary)">
+    <div>file</div><div>inputs</div><div></div><div>output</div>
+  </div>
+  <div class="file-row">
+    <div class="file-name">hash.c</div>
+    <div class="ports">
+      <div class="port"><div class="port-dot port-in"></div><span><span class="type-tag">const char*</span> password</span></div>
+      <div class="port"><div class="port-dot port-in"></div><span><span class="type-tag">HashConfig</span> cfg</span></div>
+    </div>
+    <div class="arrow-col">→</div>
+    <div class="ports"><div class="port"><div class="port-dot port-out"></div><span><span class="type-tag">HashResult</span> {hash, err}</span></div></div>
+  </div>
+  <div class="file-row">
+    <div class="file-name">token.c</div>
+    <div class="ports">
+      <div class="port"><div class="port-dot port-in"></div><span><span class="type-tag">UserClaims</span> claims</span></div>
+      <div class="port"><div class="port-dot port-in"></div><span><span class="type-tag">const char*</span> secret</span></div>
+    </div>
+    <div class="arrow-col">→</div>
+    <div class="ports"><div class="port"><div class="port-dot port-out"></div><span><span class="type-tag">TokenResult</span> {jwt, err}</span></div></div>
+  </div>
+  <div class="file-row">
+    <div class="file-name">rbac.c</div>
+    <div class="ports">
+      <div class="port"><div class="port-dot port-in"></div><span><span class="type-tag">UserRole</span> role</span></div>
+      <div class="port"><div class="port-dot port-in"></div><span><span class="type-tag">Permission</span> required</span></div>
+    </div>
+    <div class="arrow-col">→</div>
+    <div class="ports"><div class="port"><div class="port-dot port-out"></div><span><span class="type-tag">bool</span> allowed</span></div></div>
+  </div>
+</div>
+
+<div class="sec">db — schema in, typed row out</div>
+<div class="pkg">
+  <div class="pkg-head">
+    <span class="pkg-name">db</span>
+    <span class="pkg-rule">max 2 in · 1 out · no business logic, pure query</span>
+  </div>
+  <div class="file-row" style="border-top:none;font-weight:500;font-size:11px;color:var(--color-text-secondary)">
+    <div>file</div><div>inputs</div><div></div><div>output</div>
+  </div>
+  <div class="file-row">
+    <div class="file-name">goals.c</div>
+    <div class="ports">
+      <div class="port"><div class="port-dot port-in"></div><span><span class="type-tag">Db*</span> conn</span></div>
+      <div class="port"><div class="port-dot port-in"></div><span><span class="type-tag">GoalQuery</span> q</span></div>
+    </div>
+    <div class="arrow-col">→</div>
+    <div class="ports"><div class="port"><div class="port-dot port-out"></div><span><span class="type-tag">GoalResult</span> {rows, err}</span></div></div>
+  </div>
+  <div class="file-row">
+    <div class="file-name">tasks.c</div>
+    <div class="ports">
+      <div class="port"><div class="port-dot port-in"></div><span><span class="type-tag">Db*</span> conn</span></div>
+      <div class="port"><div class="port-dot port-in"></div><span><span class="type-tag">TaskQuery</span> q</span></div>
+    </div>
+    <div class="arrow-col">→</div>
+    <div class="ports"><div class="port"><div class="port-dot port-out"></div><span><span class="type-tag">TaskResult</span> {rows, err}</span></div></div>
+  </div>
+</div>
+
+<div class="sec">exec — credential in, response out</div>
+<div class="pkg">
+  <div class="pkg-head">
+    <span class="pkg-name">exec</span>
+    <span class="pkg-rule">max 2 in · 1 out · no agent logic, no routing</span>
+  </div>
+  <div class="file-row" style="border-top:none;font-weight:500;font-size:11px;color:var(--color-text-secondary)">
+    <div>file</div><div>inputs</div><div></div><div>output</div>
+  </div>
+  <div class="file-row">
+    <div class="file-name">vault.c</div>
+    <div class="ports">
+      <div class="port"><div class="port-dot port-in"></div><span><span class="type-tag">Bytes</span> plaintext</span></div>
+      <div class="port"><div class="port-dot port-in"></div><span><span class="type-tag">Key32</span> key</span></div>
+    </div>
+    <div class="arrow-col">→</div>
+    <div class="ports"><div class="port"><div class="port-dot port-out"></div><span><span class="type-tag">CipherResult</span> {ct, err}</span></div></div>
+  </div>
+  <div class="file-row">
+    <div class="file-name">http.c</div>
+    <div class="ports">
+      <div class="port"><div class="port-dot port-in"></div><span><span class="type-tag">HttpReq</span> req</span></div>
+      <div class="port"><div class="port-dot port-in"></div><span><span class="type-tag">Cred*</span> cred</span></div>
+    </div>
+    <div class="arrow-col">→</div>
+    <div class="ports"><div class="port"><div class="port-dot port-out"></div><span><span class="type-tag">HttpResult</span> {body, status, err}</span></div></div>
+  </div>
+</div>
+
+<div class="sec">agents — message in, message out</div>
+<div class="pkg">
+  <div class="pkg-head">
+    <span class="pkg-name">agents</span>
+    <span class="pkg-rule">1 in · 1 out · all comms through channel only</span>
+  </div>
+  <div class="file-row" style="border-top:none;font-weight:500;font-size:11px;color:var(--color-text-secondary)">
+    <div>file</div><div>inputs</div><div></div><div>output</div>
+  </div>
+  <div class="file-row">
+    <div class="file-name">channel.h</div>
+    <div class="ports"><div class="port"><div class="port-dot port-none"></div><span style="color:var(--color-text-tertiary)">enum declaration only</span></div></div>
+    <div class="arrow-col"></div>
+    <div class="ports"><div class="port"><div class="port-dot port-none"></div><span style="color:var(--color-text-tertiary)">AgentMsg tagged union</span></div></div>
+  </div>
+  <div class="file-row">
+    <div class="file-name">coord.c</div>
+    <div class="ports">
+      <div class="port"><div class="port-dot port-in"></div><span><span class="type-tag">AgentMsg</span> in</span></div>
+    </div>
+    <div class="arrow-col">→</div>
+    <div class="ports"><div class="port"><div class="port-dot port-out"></div><span><span class="type-tag">AgentMsg</span> out</span></div></div>
+  </div>
+  <div class="file-row">
+    <div class="file-name">finance.c</div>
+    <div class="ports">
+      <div class="port"><div class="port-dot port-in"></div><span><span class="type-tag">AgentMsg</span> in</span></div>
+    </div>
+    <div class="arrow-col">→</div>
+    <div class="ports"><div class="port"><div class="port-dot port-out"></div><span><span class="type-tag">AgentMsg</span> out</span></div></div>
+  </div>
+  <div class="file-row">
+    <div class="file-name">outreach.c</div>
+    <div class="ports">
+      <div class="port"><div class="port-dot port-in"></div><span><span class="type-tag">AgentMsg</span> in</span></div>
+    </div>
+    <div class="arrow-col">→</div>
+    <div class="ports"><div class="port"><div class="port-dot port-out"></div><span><span class="type-tag">AgentMsg</span> out</span></div></div>
+  </div>
+</div>
+
+<div class="sec">api — request in, response out</div>
+<div class="pkg">
+  <div class="pkg-head">
+    <span class="pkg-name">api</span>
+    <span class="pkg-rule">2 in · 1 out · thin layer, no business logic</span>
+  </div>
+  <div class="file-row" style="border-top:none;font-weight:500;font-size:11px;color:var(--color-text-secondary)">
+    <div>file</div><div>inputs</div><div></div><div>output</div>
+  </div>
+  <div class="file-row">
+    <div class="file-name">goals.c</div>
+    <div class="ports">
+      <div class="port"><div class="port-dot port-in"></div><span><span class="type-tag">HttpReq</span> req</span></div>
+      <div class="port"><div class="port-dot port-in"></div><span><span class="type-tag">Ctx*</span> ctx</span></div>
+    </div>
+    <div class="arrow-col">→</div>
+    <div class="ports"><div class="port"><div class="port-dot port-out"></div><span><span class="type-tag">HttpResp</span> resp</span></div></div>
+  </div>
+  <div class="file-row">
+    <div class="file-name">tasks.c</div>
+    <div class="ports">
+      <div class="port"><div class="port-dot port-in"></div><span><span class="type-tag">HttpReq</span> req</span></div>
+      <div class="port"><div class="port-dot port-in"></div><span><span class="type-tag">Ctx*</span> ctx</span></div>
+    </div>
+    <div class="arrow-col">→</div>
+    <div class="ports"><div class="port"><div class="port-dot port-out"></div><span><span class="type-tag">HttpResp</span> resp</span></div></div>
+  </div>
+</div>
+
+<div style="margin-top:14px;display:flex;gap:8px;flex-wrap:wrap">
+  <button onclick="sendPrompt('Show me what the C99 header for AgentMsg tagged union in channel.h looks like')">channel.h in C99 ↗</button>
+  <button onclick="sendPrompt('Show me what GoalQuery and GoalResult structs look like in C99 types.h')">GoalQuery struct ↗</button>
+  <button onclick="sendPrompt('Write a C99 lint script that scans all .h files and errors if any function signature has more than 2 parameters')">write the lint rule ↗</button>
+</div>
+</div>

@@ -1,0 +1,156 @@
+<style>
+.wrap { font-size:13px; color:var(--color-text-primary); }
+.sec { font-size:11px;font-weight:500;text-transform:uppercase;letter-spacing:.06em;color:var(--color-text-secondary);margin:1.4rem 0 .5rem; }
+.axis-row { display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px; }
+.axis { flex:1;min-width:160px;background:var(--color-background-secondary);border-radius:var(--border-radius-md);padding:10px 12px; }
+.axis-name { font-weight:500;font-size:13px;margin-bottom:3px; }
+.axis-desc { font-size:12px;color:var(--color-text-secondary);line-height:1.5; }
+.formula { font-family:var(--font-mono);font-size:12px;background:var(--color-background-secondary);border-radius:var(--border-radius-md);padding:10px 14px;margin:8px 0 14px;line-height:2; }
+.file-list { width:100%;border-collapse:collapse;font-size:12px; }
+.file-list th { color:var(--color-text-secondary);font-weight:500;padding:5px 8px;border-bottom:0.5px solid var(--color-border-tertiary);text-align:left; }
+.file-list td { padding:6px 8px;border-bottom:0.5px solid var(--color-border-tertiary);vertical-align:middle; }
+.score-bar { height:6px;border-radius:3px;background:var(--color-border-tertiary);position:relative; }
+.score-fill { height:6px;border-radius:3px;position:absolute;top:0;left:0; }
+.pill { font-size:10px;font-weight:500;padding:2px 7px;border-radius:20px;display:inline-block;white-space:nowrap; }
+.p0{background:#FCEBEB;color:#A32D2D}
+.p1{background:#FAEEDA;color:#854F0B}
+.p2{background:#EAF3DE;color:#3B6D11}
+.p3{background:#E1F5EE;color:#0F6E56}
+.p4{background:#E6F1FB;color:#185FA5}
+.slider-row{display:flex;align-items:center;gap:10px;margin-bottom:8px;font-size:12px}
+.slider-row label{width:130px;color:var(--color-text-secondary);flex-shrink:0}
+.slider-row input{flex:1}
+.slider-row span{width:32px;text-align:right;color:var(--color-text-primary);font-weight:500}
+@media(prefers-color-scheme:dark){
+  .p0{background:#791F1F;color:#F7C1C1}
+  .p1{background:#633806;color:#FAC775}
+  .p2{background:#27500A;color:#C0DD97}
+  .p3{background:#085041;color:#9FE1CB}
+  .p4{background:#0C447C;color:#B5D4F4}
+}
+</style>
+<div class="wrap">
+
+<div class="sec">The four axes — what shapes the surface</div>
+<div class="axis-row">
+  <div class="axis">
+    <div class="axis-name">Dependency depth</div>
+    <div class="axis-desc">How many other files depend on this one. <code>core/types.h</code> = maximum. A leaf agent file = zero. Deeper = higher on the surface = touch last.</div>
+  </div>
+  <div class="axis">
+    <div class="axis-name">Context cost</div>
+    <div class="axis-desc">Lines of code + number of direct includes. Proxy for how much context an agent must load to work on this file. Smaller = lower on surface = easier to reach.</div>
+  </div>
+  <div class="axis">
+    <div class="axis-name">Completion delta</div>
+    <div class="axis-desc">How many unresolved symbols this file exports that others are waiting on. High delta = blocking others = urgent = low on surface despite risk.</div>
+  </div>
+  <div class="axis">
+    <div class="axis-name">Churn rate</div>
+    <div class="axis-desc">How often this file changes relative to its dependents. High churn on a high-dependency file = dangerous = push it high on surface.</div>
+  </div>
+</div>
+
+<div class="sec">Score formula — the surface height function</div>
+<div class="formula">
+height(f) = (dep_depth × W₁) + (context_cost × W₂) − (completion_delta × W₃) + (churn × W₄)<br>
+<br>
+ball rolls to:  argmin height(f)  where f is not yet complete<br>
+gaussian shape: nearby files cluster — touching auth/token.c pulls auth/hash.c into the valley too
+</div>
+
+<div class="sec">Live sorter — adjust weights, ball finds the next file</div>
+<div class="slider-row"><label>W₁ dependency depth</label><input type="range" min="0" max="10" value="7" step="1" id="w1"><span id="w1v">7</span></div>
+<div class="slider-row"><label>W₂ context cost</label><input type="range" min="0" max="10" value="5" step="1" id="w2"><span id="w2v">5</span></div>
+<div class="slider-row"><label>W₃ completion delta</label><input type="range" min="0" max="10" value="8" step="1" id="w3"><span id="w3v">8</span></div>
+<div class="slider-row"><label>W₄ churn risk</label><input type="range" min="0" max="10" value="4" step="1" id="w4"><span id="w4v">4</span></div>
+
+<div class="sec">File surface — sorted low to high (ball starts at top)</div>
+<table class="file-list" id="ftable">
+  <tr><th>#</th><th>File</th><th>Height score</th><th>Surface</th><th>Status</th></tr>
+</table>
+
+<div style="margin-top:14px;font-size:12px;color:var(--color-text-secondary);line-height:1.7" id="insight"></div>
+
+<div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap">
+  <button onclick="sendPrompt('Design the actual scoring algorithm for the gaussian file sorter as a small C99 tool that reads the teb2 repo and outputs a sorted work queue')">build this as a C99 tool ↗</button>
+  <button onclick="sendPrompt('How does the gaussian clustering work — why do nearby files group into the same valley?')">explain clustering ↗</button>
+</div>
+
+</div>
+<script>
+const files = [
+  { name:"core/types.h",      dep:10, ctx:2, delta:0, churn:1 },
+  { name:"core/errors.h",     dep:8,  ctx:2, delta:1, churn:1 },
+  { name:"core/config.c",     dep:3,  ctx:3, delta:2, churn:2 },
+  { name:"db/schema.sql",     dep:9,  ctx:1, delta:3, churn:1 },
+  { name:"db/goals.c",        dep:4,  ctx:5, delta:6, churn:3 },
+  { name:"db/tasks.c",        dep:4,  ctx:5, delta:5, churn:3 },
+  { name:"auth/hash.c",       dep:2,  ctx:3, delta:7, churn:2 },
+  { name:"auth/token.c",      dep:3,  ctx:4, delta:6, churn:3 },
+  { name:"auth/rbac.c",       dep:2,  ctx:3, delta:4, churn:2 },
+  { name:"exec/vault.c",      dep:2,  ctx:3, delta:5, churn:2 },
+  { name:"exec/http.c",       dep:3,  ctx:5, delta:5, churn:4 },
+  { name:"agents/channel.c",  dep:5,  ctx:4, delta:8, churn:3 },
+  { name:"agents/finance.c",  dep:2,  ctx:6, delta:3, churn:5 },
+  { name:"agents/coordinator.c",dep:4,ctx:7, delta:4, churn:5 },
+  { name:"api/goals.c",       dep:1,  ctx:5, delta:2, churn:4 },
+  { name:"api/tasks.c",       dep:1,  ctx:5, delta:2, churn:4 },
+];
+
+const colors = ["#E24B4A","#D85A30","#BA7517","#639922","#1D9E75","#185FA5"];
+const pills  = ["p0","p1","p2","p3","p4","p4"];
+const labels = ["critical","high","elevated","moderate","low","minimal"];
+
+function score(f, w1,w2,w3,w4) {
+  return (f.dep*w1) + (f.ctx*w2) - (f.delta*w3) + (f.churn*w4);
+}
+
+function render() {
+  const w1=+document.getElementById('w1').value;
+  const w2=+document.getElementById('w2').value;
+  const w3=+document.getElementById('w3').value;
+  const w4=+document.getElementById('w4').value;
+  document.getElementById('w1v').textContent=w1;
+  document.getElementById('w2v').textContent=w2;
+  document.getElementById('w3v').textContent=w3;
+  document.getElementById('w4v').textContent=w4;
+
+  const scored = files.map(f=>({...f, h: score(f,w1,w2,w3,w4)}));
+  scored.sort((a,b)=>a.h-b.h);
+  const min=scored[0].h, max=scored[scored.length-1].h;
+  const range=max-min||1;
+
+  const tier = h => {
+    const t = Math.floor(((h-min)/range)*5);
+    return Math.min(t,5);
+  };
+
+  let rows = '<tr><th>#</th><th>File</th><th>Height score</th><th>Surface</th><th>Priority</th></tr>';
+  scored.forEach((f,i)=>{
+    const t=tier(f.h);
+    const pct=Math.round(((f.h-min)/range)*100);
+    rows+=`<tr>
+      <td style="color:var(--color-text-secondary)">${i+1}</td>
+      <td style="font-family:var(--font-mono);font-size:11px">${f.name}</td>
+      <td style="font-family:var(--font-mono)">${f.h}</td>
+      <td style="width:120px">
+        <div class="score-bar"><div class="score-fill" style="width:${pct}%;background:${colors[t]}"></div></div>
+      </td>
+      <td><span class="pill ${pills[t]}">${labels[t]}</span></td>
+    </tr>`;
+  });
+  document.getElementById('ftable').innerHTML=rows;
+
+  const ball=scored[0];
+  const cluster=scored.filter(f=>f.h<=scored[0].h+w1).map(f=>f.name.split('/')[0]);
+  const uniq=[...new Set(cluster)];
+  document.getElementById('insight').innerHTML=
+    `<strong style="color:var(--color-text-primary)">Ball lands on:</strong> <code>${ball.name}</code> — score ${ball.h}. `+
+    `Gaussian neighborhood pulls in the <strong style="color:var(--color-text-primary)">${uniq.join(', ')}</strong> module${uniq.length>1?'s':''} as the next work cluster. `+
+    `Complete these before the surface reshapes.`;
+}
+
+['w1','w2','w3','w4'].forEach(id=>document.getElementById(id).addEventListener('input',render));
+render();
+</script>

@@ -1,0 +1,136 @@
+<h2 class="sr-only">Interactive comparison of systems languages by memory safety, type strictness, performance, and modern compatibility</h2>
+<style>
+.lang-card { background: var(--color-background-secondary); border: 0.5px solid var(--color-border-tertiary); border-radius: var(--border-radius-lg); padding: 14px 16px; cursor: pointer; transition: border-color .15s; }
+.lang-card:hover { border-color: var(--color-border-primary); }
+.lang-card.selected { border: 2px solid var(--color-border-info); background: var(--color-background-info); }
+.bar-track { background: var(--color-border-tertiary); border-radius: 4px; height: 7px; flex: 1; }
+.bar-fill { height: 7px; border-radius: 4px; transition: width .4s; }
+.badge { font-size: 11px; padding: 2px 8px; border-radius: 20px; font-weight: 500; display: inline-block; }
+.badge-green { background: #EAF3DE; color: #3B6D11; }
+.badge-amber { background: #FAEEDA; color: #854F0B; }
+.badge-red { background: #FCEBEB; color: #A32D2D; }
+.badge-blue { background: #E6F1FB; color: #185FA5; }
+.badge-purple { background: #EEEDFE; color: #534AB7; }
+@media (prefers-color-scheme: dark) {
+  .badge-green { background: #27500A; color: #C0DD97; }
+  .badge-amber { background: #633806; color: #FAC775; }
+  .badge-red { background: #791F1F; color: #F7C1C1; }
+  .badge-blue { background: #0C447C; color: #B5D4F4; }
+  .badge-purple { background: #3C3489; color: #CECBF6; }
+}
+</style>
+
+<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-bottom:20px" id="cards"></div>
+
+<div id="detail" style="background:var(--color-background-secondary);border:0.5px solid var(--color-border-tertiary);border-radius:var(--border-radius-lg);padding:18px 20px;min-height:220px"></div>
+
+<script>
+const langs = [
+  {
+    name: "Rust", year: 2015, badge: "badge-green", badgeText: "safest",
+    mem: 100, types: 98, perf: 95, compat: 88,
+    verdict: "The current gold standard for robust systems code. Memory safety is enforced at compile time with zero runtime cost — no GC, no garbage. The borrow checker eliminates entire classes of bugs (use-after-free, data races) by construction.",
+    tradeoffs: "Steep learning curve. Compile times are long. Ecosystem younger than C/C++. FFI with C is possible but requires unsafe blocks.",
+    sweetspot: "New systems software, WebAssembly, OS components, network daemons, security-critical code.",
+    useInstead: "Use instead of C when starting fresh and memory safety is a priority."
+  },
+  {
+    name: "C99", year: 1999, badge: "badge-amber", badgeText: "classic",
+    mem: 20, types: 55, perf: 100, compat: 100,
+    verdict: "Maximum control, maximum compatibility. The shared lingua franca of all platforms. With strict flags (-std=c99 -Wall -Wextra -Werror), you get a tight, explicit, deterministic language that compiles everywhere.",
+    tradeoffs: "Memory management is entirely manual. No bounds checking. Type system is weak by modern standards. Easy to shoot yourself in the foot.",
+    sweetspot: "Embedded, kernel code, existing C codebases, platform-universal libraries, POSIX tooling.",
+    useInstead: "Choose this when you need to run on everything or interface with everything."
+  },
+  {
+    name: "C++20", year: 2020, badge: "badge-amber", badgeText: "powerful",
+    mem: 35, types: 75, perf: 98, compat: 90,
+    verdict: "Vastly more expressive than C, but complexity is the price. C++20 adds concepts, ranges, coroutines, and modules — reducing footguns significantly. Still no memory safety guarantees.",
+    tradeoffs: "Enormous complexity surface. Undefined behavior is pervasive. Build systems are a pain. Legacy C++ code drags safety backward.",
+    sweetspot: "Game engines, graphics, high-performance computing, existing C++ codebases.",
+    useInstead: "Choose over C when you need abstractions but can't move to Rust."
+  },
+  {
+    name: "Zig", year: 2016, badge: "badge-blue", badgeText: "modern C",
+    mem: 65, types: 80, perf: 97, compat: 82,
+    verdict: "A serious C alternative designed for correctness and clarity. No hidden control flow, no macros, no undefined behavior by design. Comptime (compile-time execution) replaces macros/templates cleanly. Excellent C interop.",
+    tradeoffs: "Pre-1.0, API stability not guaranteed. Smaller ecosystem. Less tooling than C or Rust.",
+    sweetspot: "New embedded/systems projects, C replacement, cross-compilation targets.",
+    useInstead: "Choose over C if starting fresh and Rust feels too complex."
+  },
+  {
+    name: "Ada", year: 1983, badge: "badge-purple", badgeText: "strictest",
+    mem: 70, types: 100, perf: 88, compat: 65,
+    verdict: "The most restrictive mainstream language ever deployed. Used in aviation (SPARK Ada), military, medical devices. Range-constrained subtypes, mandatory overflow checks, no implicit conversions. SPARK subset allows formal proof of correctness.",
+    tradeoffs: "Small ecosystem, limited web/app tooling, verbose syntax, niche hiring pool. Not suitable for general-purpose modern apps.",
+    sweetspot: "Safety-critical real-time systems, avionics, medical devices, defense.",
+    useInstead: "Choose when lives depend on the code and a bug is unacceptable."
+  },
+  {
+    name: "Go", year: 2009, badge: "badge-green", badgeText: "pragmatic",
+    mem: 72, types: 70, perf: 80, compat: 95,
+    verdict: "Memory-safe by default via GC. Simple type system, built-in concurrency (goroutines). Not as strict as Rust but far safer than C. Excellent for network services, CLIs, and cloud tooling.",
+    tradeoffs: "GC means latency spikes — not suitable for hard real-time. Generics only arrived in 1.18. Less control over memory layout.",
+    sweetspot: "Network services, CLIs, cloud infrastructure, DevOps tooling.",
+    useInstead: "Choose when you want safety + simplicity + great standard library without Rust's complexity."
+  }
+];
+
+const axes = [
+  { key: "mem",   label: "Memory safety",   color: "#1D9E75" },
+  { key: "types", label: "Type strictness",  color: "#534AB7" },
+  { key: "perf",  label: "Raw performance",  color: "#D85A30" },
+  { key: "compat",label: "Ecosystem compat", color: "#378ADD" },
+];
+
+let selected = langs[0];
+
+function renderCards() {
+  document.getElementById("cards").innerHTML = langs.map(l => `
+    <div class="lang-card${l.name===selected.name?' selected':''}" onclick="select('${l.name}')">
+      <div style="font-size:15px;font-weight:500;color:var(--color-text-primary);margin-bottom:5px">${l.name}</div>
+      <div style="display:flex;align-items:center;gap:6px;margin-bottom:8px">
+        <span class="badge ${l.badge}">${l.badgeText}</span>
+        <span style="font-size:11px;color:var(--color-text-secondary)">${l.year}</span>
+      </div>
+      ${axes.map(a=>`
+        <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px">
+          <div class="bar-track"><div class="bar-fill" style="width:${l[a.key]}%;background:${a.color}"></div></div>
+        </div>
+      `).join("")}
+    </div>
+  `).join("");
+}
+
+function renderDetail() {
+  const l = selected;
+  document.getElementById("detail").innerHTML = `
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px">
+      <span style="font-size:20px;font-weight:500;color:var(--color-text-primary)">${l.name}</span>
+      <span class="badge ${l.badge}">${l.badgeText}</span>
+    </div>
+    ${axes.map(a=>`
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
+        <span style="font-size:12px;color:var(--color-text-secondary);width:120px;flex-shrink:0">${a.label}</span>
+        <div class="bar-track"><div class="bar-fill" style="width:${l[a.key]}%;background:${a.color}"></div></div>
+        <span style="font-size:12px;color:var(--color-text-secondary);min-width:28px;text-align:right">${l[a.key]}</span>
+      </div>
+    `).join("")}
+    <div style="margin-top:14px;font-size:13px;color:var(--color-text-primary);line-height:1.6">${l.verdict}</div>
+    <div style="margin-top:10px;font-size:12px;color:var(--color-text-secondary);line-height:1.6"><strong style="color:var(--color-text-primary)">Tradeoffs:</strong> ${l.tradeoffs}</div>
+    <div style="margin-top:8px;font-size:12px;color:var(--color-text-secondary);line-height:1.6"><strong style="color:var(--color-text-primary)">Sweet spot:</strong> ${l.sweetspot}</div>
+    <div style="margin-top:10px">
+      <button onclick="sendPrompt('Compare ${l.name} vs C99 in detail')" style="font-size:12px;padding:5px 12px">Compare ${l.name} vs C99 ↗</button>
+    </div>
+  `;
+}
+
+function select(name) {
+  selected = langs.find(l => l.name === name);
+  renderCards();
+  renderDetail();
+}
+
+renderCards();
+renderDetail();
+</script>

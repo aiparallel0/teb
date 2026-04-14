@@ -1,0 +1,264 @@
+<style>
+.wrap { font-size:13px; color:var(--color-text-primary); }
+.mod-head { display:flex; align-items:center; gap:10px; padding:10px 0 6px; border-bottom:0.5px solid var(--color-border-tertiary); margin-bottom:2px; }
+.mod-name { font-size:13px; font-weight:500; font-family:var(--font-mono); }
+.mod-desc { font-size:11px; color:var(--color-text-secondary); }
+table { width:100%; border-collapse:collapse; margin-bottom:18px; }
+th { font-size:11px; font-weight:500; color:var(--color-text-secondary); text-transform:uppercase; letter-spacing:.05em; padding:5px 8px; border-bottom:0.5px solid var(--color-border-tertiary); text-align:left; }
+td { padding:7px 8px; border-bottom:0.5px solid var(--color-border-tertiary); vertical-align:top; font-size:12px; }
+tr:last-child td { border-bottom:none; }
+.fn { font-family:var(--font-mono); font-weight:500; color:var(--color-text-primary); white-space:nowrap; }
+.io { font-family:var(--font-mono); font-size:11px; color:var(--color-text-secondary); white-space:nowrap; }
+.inc { font-size:11px; line-height:1.9; }
+.chip { display:inline-block; font-family:var(--font-mono); font-size:10px; padding:1px 6px; border-radius:3px; margin:1px 2px 1px 0; border:0.5px solid; }
+.c-tl  { background:#E1F5EE; color:#085041; border-color:#5DCAA5; }
+.c-pu  { background:#EEEDFE; color:#3C3489; border-color:#AFA9EC; }
+.c-am  { background:#FAEEDA; color:#633806; border-color:#EF9F27; }
+.c-co  { background:#FAECE7; color:#712B13; border-color:#F0997B; }
+.c-bl  { background:#E6F1FB; color:#0C447C; border-color:#85B7EB; }
+.c-gy  { background:#F1EFE8; color:#444441; border-color:#B4B2A9; }
+.c-sq  { background:#F1EFE8; color:#444441; border-color:#B4B2A9; font-style:italic; }
+@media(prefers-color-scheme:dark){
+  .c-tl{background:#085041;color:#9FE1CB;border-color:#0F6E56}
+  .c-pu{background:#26215C;color:#CECBF6;border-color:#534AB7}
+  .c-am{background:#412402;color:#FAC775;border-color:#854F0B}
+  .c-co{background:#4A1B0C;color:#F5C4B3;border-color:#993C1D}
+  .c-bl{background:#042C53;color:#B5D4F4;border-color:#185FA5}
+  .c-gy{background:#2C2C2A;color:#D3D1C7;border-color:#5F5E5A}
+  .c-sq{background:#2C2C2A;color:#B4B2A9;border-color:#5F5E5A}
+}
+.note { font-size:11px; color:var(--color-text-secondary); font-style:italic; }
+.dot { width:8px;height:8px;border-radius:50%;display:inline-block;flex-shrink:0; }
+</style>
+<div class="wrap">
+
+<div class="mod-head">
+  <span class="dot" style="background:#1D9E75"></span>
+  <span class="mod-name">core/</span>
+  <span class="mod-desc">vocabulary only — no logic, no functions, no includes of their own</span>
+</div>
+<table>
+<tr><th>file</th><th>I/O</th><th>includes</th><th>role</th></tr>
+<tr>
+  <td class="fn">types.h</td>
+  <td class="io">0 → 0</td>
+  <td class="inc"><span class="note">nothing</span></td>
+  <td class="note">all domain structs: Goal, Task, User, Ticket, AgentMsg, Config, Bytes, Key8, HttpReq, HttpResp, SerialReq, GoalQuery, TaskQuery and their Result variants</td>
+</tr>
+<tr>
+  <td class="fn">errors.h</td>
+  <td class="io">0 → 0</td>
+  <td class="inc"><span class="note">nothing</span></td>
+  <td class="note">single Err enum — ERR_OK, ERR_NOT_FOUND, ERR_AUTH, ERR_DB, ERR_IO, ERR_CRYPTO, ERR_LIMIT, ERR_UNKNOWN</td>
+</tr>
+<tr>
+  <td class="fn">config.h</td>
+  <td class="io">0 → 0</td>
+  <td class="inc"><span class="chip c-tl">types.h</span></td>
+  <td class="note">declares load_config() — public interface only</td>
+</tr>
+<tr>
+  <td class="fn">config.c</td>
+  <td class="io">1 → 1</td>
+  <td class="inc"><span class="chip c-tl">types.h</span><span class="chip c-tl">errors.h</span><span class="chip c-tl">config.h</span></td>
+  <td class="note">in: char* env_path · out: Config</td>
+</tr>
+</table>
+
+<div class="mod-head">
+  <span class="dot" style="background:#7F77DD"></span>
+  <span class="mod-name">auth/</span>
+  <span class="mod-desc">identity — no db access, no I/O, pure computation</span>
+</div>
+<table>
+<tr><th>file</th><th>I/O</th><th>includes</th><th>role</th></tr>
+<tr>
+  <td class="fn">auth.h</td>
+  <td class="io">0 → 0</td>
+  <td class="inc"><span class="chip c-tl">types.h</span><span class="chip c-tl">errors.h</span></td>
+  <td class="note">public interface — declares hash_password(), make_ticket(), check_ticket(), rbac_allow(). what api/ sees.</td>
+</tr>
+<tr>
+  <td class="fn">hash.c</td>
+  <td class="io">2 → 1</td>
+  <td class="inc"><span class="chip c-tl">types.h</span><span class="chip c-tl">errors.h</span><span class="chip c-pu">auth.h</span></td>
+  <td class="note">in: char* password, HashConfig cfg · out: HashResult · crypt() / DES-based</td>
+</tr>
+<tr>
+  <td class="fn">token.c</td>
+  <td class="io">2 → 1</td>
+  <td class="inc"><span class="chip c-tl">types.h</span><span class="chip c-tl">errors.h</span><span class="chip c-pu">auth.h</span></td>
+  <td class="note">in: UserClaims claims, char* secret · out: Ticket · binary struct + DES MAC, no JSON</td>
+</tr>
+<tr>
+  <td class="fn">rbac.c</td>
+  <td class="io">2 → 1</td>
+  <td class="inc"><span class="chip c-tl">types.h</span><span class="chip c-pu">auth.h</span></td>
+  <td class="note">in: UserRole role, Permission required · out: int (1/0) · pure lookup, no I/O</td>
+</tr>
+</table>
+
+<div class="mod-head">
+  <span class="dot" style="background:#BA7517"></span>
+  <span class="mod-name">db/</span>
+  <span class="mod-desc">persistence — pure query, no business logic, no agent calls</span>
+</div>
+<table>
+<tr><th>file</th><th>I/O</th><th>includes</th><th>role</th></tr>
+<tr>
+  <td class="fn">schema.sql</td>
+  <td class="io">— → —</td>
+  <td class="inc"><span class="note">nothing</span></td>
+  <td class="note">single source of truth for all tables: users, goals, tasks, tickets, nudges, outcomes. applied once at init.</td>
+</tr>
+<tr>
+  <td class="fn">db.h</td>
+  <td class="io">0 → 0</td>
+  <td class="inc"><span class="chip c-tl">types.h</span><span class="chip c-tl">errors.h</span></td>
+  <td class="note">public interface — declares db_open(), db_close(), fetch_goal(), store_goal(), fetch_task(), store_task(). what agents/ and api/ see.</td>
+</tr>
+<tr>
+  <td class="fn">goals.c</td>
+  <td class="io">2 → 1</td>
+  <td class="inc"><span class="chip c-tl">types.h</span><span class="chip c-tl">errors.h</span><span class="chip c-am">db.h</span></td>
+  <td class="note">in: Db* conn, GoalQuery q · out: GoalResult · dbm_fetch/store, no SQL at runtime</td>
+</tr>
+<tr>
+  <td class="fn">tasks.c</td>
+  <td class="io">2 → 1</td>
+  <td class="inc"><span class="chip c-tl">types.h</span><span class="chip c-tl">errors.h</span><span class="chip c-am">db.h</span></td>
+  <td class="note">in: Db* conn, TaskQuery q · out: TaskResult · dbm_fetch/store</td>
+</tr>
+</table>
+
+<div class="mod-head">
+  <span class="dot" style="background:#D85A30"></span>
+  <span class="mod-name">exec/</span>
+  <span class="mod-desc">I/O + crypto — no routing, no agent logic, thin transport wrappers</span>
+</div>
+<table>
+<tr><th>file</th><th>I/O</th><th>includes</th><th>role</th></tr>
+<tr>
+  <td class="fn">exec.h</td>
+  <td class="io">0 → 0</td>
+  <td class="inc"><span class="chip c-tl">types.h</span><span class="chip c-tl">errors.h</span></td>
+  <td class="note">public interface — declares vault_encrypt(), vault_decrypt(), send_frame(), recv_frame(), browser_send(). what agents/ sees.</td>
+</tr>
+<tr>
+  <td class="fn">vault.c</td>
+  <td class="io">2 → 1</td>
+  <td class="inc"><span class="chip c-tl">types.h</span><span class="chip c-tl">errors.h</span><span class="chip c-co">exec.h</span></td>
+  <td class="note">in: Bytes plaintext, Key8 key · out: CipherResult · DES ECB encrypt/decrypt</td>
+</tr>
+<tr>
+  <td class="fn">http.c</td>
+  <td class="io">2 → 1</td>
+  <td class="inc"><span class="chip c-tl">types.h</span><span class="chip c-tl">errors.h</span><span class="chip c-co">exec.h</span></td>
+  <td class="note">in: SerialReq req, Cred* cred · out: SerialResult · RS-232 frame write/read on modern builds wraps TCP socket</td>
+</tr>
+<tr>
+  <td class="fn">browser.c</td>
+  <td class="io">2 → 1</td>
+  <td class="inc"><span class="chip c-tl">types.h</span><span class="chip c-tl">errors.h</span><span class="chip c-co">exec.h</span></td>
+  <td class="note">in: SerialCmd cmd, Cred* cred · out: BrowserResult · serialised command frame to Playwright subprocess via pipe</td>
+</tr>
+</table>
+
+<div class="mod-head">
+  <span class="dot" style="background:#378ADD"></span>
+  <span class="mod-name">agents/</span>
+  <span class="mod-desc">orchestration — all inter-agent traffic through channel.h only, never direct</span>
+</div>
+<table>
+<tr><th>file</th><th>I/O</th><th>includes</th><th>role</th></tr>
+<tr>
+  <td class="fn">channel.h</td>
+  <td class="io">0 → 0</td>
+  <td class="inc"><span class="chip c-tl">types.h</span></td>
+  <td class="note">AgentMsg tagged union — tag enum (GOAL_NEW, TASK_DONE, EXEC_REQ, FINANCE_REQ, NUDGE, CHECKIN, RESULT) + union payload. the entire inter-agent vocabulary.</td>
+</tr>
+<tr>
+  <td class="fn">coord.c</td>
+  <td class="io">1 → 1</td>
+  <td class="inc"><span class="chip c-tl">types.h</span><span class="chip c-tl">errors.h</span><span class="chip c-bl">channel.h</span></td>
+  <td class="note">in: AgentMsg · out: AgentMsg · rule-table dispatch: routes GOAL_NEW to decompose_rule(), TASK_DONE to next_task_rule(), etc.</td>
+</tr>
+<tr>
+  <td class="fn">finance.c</td>
+  <td class="io">1 → 1</td>
+  <td class="inc"><span class="chip c-tl">types.h</span><span class="chip c-tl">errors.h</span><span class="chip c-bl">channel.h</span><span class="chip c-am">db.h</span><span class="chip c-co">exec.h</span></td>
+  <td class="note">in: AgentMsg · out: AgentMsg · all amounts i64 cents, approval tiers enforced as switch, no float ever</td>
+</tr>
+<tr>
+  <td class="fn">outreach.c</td>
+  <td class="io">1 → 1</td>
+  <td class="inc"><span class="chip c-tl">types.h</span><span class="chip c-tl">errors.h</span><span class="chip c-bl">channel.h</span><span class="chip c-co">exec.h</span></td>
+  <td class="note">in: AgentMsg · out: AgentMsg · composes serial frames for email/telegram via exec/http.c</td>
+</tr>
+<tr>
+  <td class="fn">research.c</td>
+  <td class="io">1 → 1</td>
+  <td class="inc"><span class="chip c-tl">types.h</span><span class="chip c-tl">errors.h</span><span class="chip c-bl">channel.h</span><span class="chip c-co">exec.h</span></td>
+  <td class="note">in: AgentMsg · out: AgentMsg · issues browser commands via exec/browser.c, returns structured BrowserResult wrapped in AgentMsg</td>
+</tr>
+</table>
+
+<div class="mod-head">
+  <span class="dot" style="background:#888780"></span>
+  <span class="mod-name">api/</span>
+  <span class="mod-desc">thin routes — validates input, calls db or auth, returns response. zero business logic.</span>
+</div>
+<table>
+<tr><th>file</th><th>I/O</th><th>includes</th><th>role</th></tr>
+<tr>
+  <td class="fn">goals.c</td>
+  <td class="io">2 → 1</td>
+  <td class="inc"><span class="chip c-tl">types.h</span><span class="chip c-tl">errors.h</span><span class="chip c-pu">auth.h</span><span class="chip c-am">db.h</span></td>
+  <td class="note">in: HttpReq req, Ctx* ctx · out: HttpResp · handle_goal_create(), handle_goal_get(), handle_goal_decompose()</td>
+</tr>
+<tr>
+  <td class="fn">tasks.c</td>
+  <td class="io">2 → 1</td>
+  <td class="inc"><span class="chip c-tl">types.h</span><span class="chip c-tl">errors.h</span><span class="chip c-pu">auth.h</span><span class="chip c-am">db.h</span></td>
+  <td class="note">in: HttpReq req, Ctx* ctx · out: HttpResp · handle_task_update(), handle_task_execute(), handle_task_status()</td>
+</tr>
+<tr>
+  <td class="fn">auth.c</td>
+  <td class="io">2 → 1</td>
+  <td class="inc"><span class="chip c-tl">types.h</span><span class="chip c-tl">errors.h</span><span class="chip c-pu">auth.h</span><span class="chip c-am">db.h</span></td>
+  <td class="note">in: HttpReq req, Ctx* ctx · out: HttpResp · handle_register(), handle_login(), handle_refresh()</td>
+</tr>
+</table>
+
+<div class="mod-head">
+  <span class="dot" style="background:#888780"></span>
+  <span class="mod-name">root</span>
+  <span class="mod-desc">entry point and Makefile only</span>
+</div>
+<table>
+<tr><th>file</th><th>I/O</th><th>includes</th><th>role</th></tr>
+<tr>
+  <td class="fn">main.c</td>
+  <td class="io">1 → 1</td>
+  <td class="inc">
+    <span class="chip c-tl">types.h</span><span class="chip c-tl">errors.h</span><span class="chip c-tl">config.h</span>
+    <span class="chip c-pu">auth.h</span><span class="chip c-am">db.h</span>
+    <span class="chip c-co">exec.h</span><span class="chip c-bl">channel.h</span>
+  </td>
+  <td class="note">in: int argc, char** argv · out: int exit code · wires config → db_open → server_listen → dispatch loop. touches only public .h interfaces, never a .c file directly.</td>
+</tr>
+<tr>
+  <td class="fn">Makefile</td>
+  <td class="io">— → —</td>
+  <td class="inc"><span class="note">nothing</span></td>
+  <td class="note">cc -Wall -Wextra -Werror -Wunused-result -Wshadow -O · lint -u -h *.c before compile · link order mirrors build order below</td>
+</tr>
+</table>
+
+<div style="background:var(--color-background-secondary);border-radius:var(--border-radius-lg);padding:12px 16px;font-size:12px;line-height:2;font-family:var(--font-mono)">
+<span style="color:var(--color-text-secondary);font-size:11px;font-family:var(--font-sans);font-weight:500;display:block;margin-bottom:4px">TOTAL — 23 files across 6 modules + root</span>
+core: 4 &nbsp;·&nbsp; auth: 4 &nbsp;·&nbsp; db: 4 &nbsp;·&nbsp; exec: 4 &nbsp;·&nbsp; agents: 5 &nbsp;·&nbsp; api: 3 &nbsp;·&nbsp; root: 2 + 1 Makefile<br>
+<span style="color:var(--color-text-secondary)">types.h + errors.h included by all · all others include only direct interfaces · no file includes another module's .c</span>
+</div>
+
+</div>
