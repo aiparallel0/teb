@@ -20,6 +20,12 @@ def setup_test_db():
         pass
 
 
+@pytest.fixture(autouse=True)
+def fresh_db():
+    """Override conftest fresh_db — this module uses a session-scoped DB."""
+    yield
+
+
 @pytest.fixture
 def anyio_backend():
     return "asyncio"
