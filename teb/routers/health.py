@@ -86,7 +86,7 @@ async def health_check() -> JSONResponse:
     except Exception:
         components["disk"] = {"status": "unknown"}
 
-    warnings: list = []
+    warnings: list[str] = []
     if db_ok and config.TEB_ENV == "production" and not ai_active:
         status = "degraded"
         warnings.append(
@@ -98,7 +98,7 @@ async def health_check() -> JSONResponse:
     code = 200 if db_ok else 503
     uptime_seconds = round(time.monotonic() - _APP_START_TIME, 1)
 
-    body: dict = {
+    body: dict[str, Any] = {
         "status": status,
         "version": "2.0.0",
         "uptime_seconds": uptime_seconds,

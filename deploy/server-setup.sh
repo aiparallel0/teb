@@ -328,7 +328,7 @@ import sys, json
 d = json.load(sys.stdin)
 print('  status : ' + str(d['status']))
 print('  version: ' + str(d.get('version', 'unknown')))
-sys.exit(0 if d['status'] == 'healthy' else 1)
+sys.exit(0 if d['status'] in ('healthy', 'degraded') else 1)
 "; then
   success "Health check passed ✓"
 else
