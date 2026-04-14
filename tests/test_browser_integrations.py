@@ -31,16 +31,6 @@ def _add_auth_headers(c) -> None:
     c.headers.update({"Authorization": f"Bearer {token}"})
 
 
-@pytest.fixture(autouse=True)
-def _temp_db(tmp_path):
-    """Create a fresh database for each test."""
-    db_path = str(tmp_path / "test.db")
-    storage.set_db_path(db_path)
-    storage.init_db()
-    yield
-    storage.set_db_path(None)
-
-
 @pytest.fixture
 def goal() -> Goal:
     g = Goal(title="earn money online", description="I want to earn $500 freelancing")

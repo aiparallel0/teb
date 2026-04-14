@@ -34,15 +34,6 @@ client = TestClient(app)
 
 # ─── Fixtures ─────────────────────────────────────────────────────────────────
 
-@pytest.fixture(autouse=True)
-def _fresh_db(tmp_path):
-    db = str(tmp_path / "test_real.db")
-    storage.set_db_path(db)
-    storage.init_db()
-    yield
-    storage.set_db_path(None)
-
-
 def _auth_headers():
     r = client.post("/api/auth/register", json={"email": "real@teb.test", "password": "testpass123"})
     if r.status_code not in (200, 201):

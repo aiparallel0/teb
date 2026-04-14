@@ -34,15 +34,6 @@ from teb.models import (
 
 # ─── Fixtures ────────────────────────────────────────────────────────────────
 
-@pytest.fixture(autouse=True)
-def _fresh_db(tmp_path):
-    db = str(tmp_path / "test_bridging_phases.db")
-    storage.set_db_path(db)
-    storage.init_db()
-    yield
-    storage.set_db_path(None)
-
-
 @pytest.fixture()
 def client():
     from teb.main import app

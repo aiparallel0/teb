@@ -11,7 +11,6 @@ Covers:
 - Structured error responses
 """
 
-import os
 import pytest
 from fastapi.testclient import TestClient
 
@@ -20,20 +19,6 @@ from teb.main import app, _paginate, _DEFAULT_PAGE_SIZE, _MAX_PAGE_SIZE, reset_r
 
 
 # ─── Test Setup ───────────────────────────────────────────────────────────────
-
-TEST_DB = "test_professional_quality.db"
-
-
-@pytest.fixture(autouse=True, scope="module")
-def setup_test_db():
-    storage.set_db_path(TEST_DB)
-    storage.init_db()
-    reset_rate_limits()
-    yield
-    try:
-        os.remove(TEST_DB)
-    except FileNotFoundError:
-        pass
 
 
 client = TestClient(app)

@@ -15,16 +15,6 @@ from teb.models import AgentHandoff, Goal
 
 # ─── Fixtures ────────────────────────────────────────────────────────────────
 
-@pytest.fixture(autouse=True)
-def _temp_db(tmp_path):
-    """Create a fresh database for each test."""
-    db_path = str(tmp_path / "test.db")
-    storage.set_db_path(db_path)
-    storage.init_db()
-    yield
-    storage.set_db_path(None)
-
-
 @pytest.fixture
 def goal() -> Goal:
     """Create a sample goal."""

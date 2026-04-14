@@ -6,7 +6,6 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from starlette.testclient import TestClient
 
-from teb import storage
 from teb.main import app, reset_rate_limits
 from teb.models import Task
 from teb.scheduler import (
@@ -17,15 +16,6 @@ from teb.scheduler import (
     smart_prioritize,
     suggest_focus_blocks,
 )
-
-
-@pytest.fixture(autouse=True)
-def _fresh_db(tmp_path):
-    db = str(tmp_path / "test_phase4.db")
-    storage.set_db_path(db)
-    storage.init_db()
-    yield
-    storage.set_db_path(None)
 
 
 @pytest.fixture()

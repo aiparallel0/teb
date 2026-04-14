@@ -15,16 +15,6 @@ from teb.models import (
 )
 
 
-@pytest.fixture(autouse=True)
-def _tmp_db(tmp_path):
-    """Use a fresh temporary database for each test."""
-    db_path = str(tmp_path / "test.db")
-    storage.set_db_path(db_path)
-    storage.init_db()
-    yield
-    storage.set_db_path(None)
-
-
 @pytest.fixture()
 def client():
     from teb.main import app, reset_rate_limits

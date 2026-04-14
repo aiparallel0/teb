@@ -2,7 +2,6 @@
 Financial Pipeline, and External Messaging."""
 
 import json
-import os
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -10,20 +9,6 @@ import pytest_asyncio
 from httpx import AsyncClient, ASGITransport
 
 # ─── Shared fixtures ─────────────────────────────────────────────────────────
-
-
-@pytest.fixture(autouse=True)
-def fresh_db(tmp_path):
-    """Give every test its own isolated database."""
-    from teb import storage
-    db = str(tmp_path / "test.db")
-    storage.set_db_path(db)
-    storage.init_db()
-    yield
-    try:
-        os.remove(db)
-    except FileNotFoundError:
-        pass
 
 
 @pytest.fixture

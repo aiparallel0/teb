@@ -13,20 +13,6 @@ from starlette.testclient import TestClient
 from teb.main import app, reset_rate_limits
 from teb import storage, auth
 
-_counter = 0
-
-
-@pytest.fixture(autouse=True)
-def _setup(tmp_path):
-    global _counter
-    _counter += 1
-    db = str(tmp_path / f"test_p5_8_{_counter}.db")
-    storage.set_db_path(db)
-    storage.init_db()
-    reset_rate_limits()
-    yield
-    storage.set_db_path(None)
-
 
 def _register_and_login(email="test@example.com", password="StrongPass123!"):
     client = TestClient(app, raise_server_exceptions=False)

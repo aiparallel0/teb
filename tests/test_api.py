@@ -1,26 +1,7 @@
 """API endpoint tests for teb"""
-import os
 import pytest
 import pytest_asyncio
 from httpx import AsyncClient, ASGITransport
-
-# Use an in-memory / temp DB for tests
-TEST_DB = "test_teb.db"
-
-
-@pytest.fixture(autouse=True, scope="session")
-def setup_test_db():
-    """Point storage at a separate test database."""
-    from teb import storage
-    storage.set_db_path(TEST_DB)
-    storage.init_db()
-    yield
-    # Clean up the test database file
-    try:
-        os.remove(TEST_DB)
-    except FileNotFoundError:
-        pass
-
 
 @pytest.fixture
 def anyio_backend():

@@ -1,23 +1,7 @@
 """Tests for architectural improvements: content blocks, cross-goal views, and SSE integration."""
-import os
 import pytest
 import pytest_asyncio
 from httpx import AsyncClient, ASGITransport
-
-TEST_DB = "test_arch_features.db"
-
-
-@pytest.fixture(autouse=True, scope="session")
-def setup_test_db():
-    """Point storage at a separate test database."""
-    from teb import storage
-    storage.set_db_path(TEST_DB)
-    storage.init_db()
-    yield
-    try:
-        os.remove(TEST_DB)
-    except FileNotFoundError:
-        pass
 
 
 @pytest.fixture

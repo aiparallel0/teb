@@ -9,20 +9,9 @@ import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 
 from teb import storage
-from teb.storage.base import set_db_path, init_db
 
 
 # ─── Fixtures ─────────────────────────────────────────────────────────────────
-
-@pytest.fixture(autouse=True)
-def setup_test_db(tmp_path):
-    """Create a fresh database for each test."""
-    db_path = str(tmp_path / "test.db")
-    set_db_path(db_path)
-    init_db()
-    yield
-    set_db_path(db_path)
-
 
 async def _get_auth_headers(client: AsyncClient) -> dict:
     """Register and login a test user, return auth headers."""
