@@ -110,3 +110,22 @@ def get_task_for_user(task_id: int, user_id: int) -> Task:
         if goal and goal.user_id is not None and goal.user_id != user_id:
             raise HTTPException(status_code=403, detail="Not authorized")
     return task
+
+
+# ─── Rate limiting ────────────────────────────────────────────────────────────
+# The actual rate-limit implementation lives in main.py (in-memory buckets).
+# Routers call this via the setter-injected function.
+
+_check_api_rate_limit_fn = None
+
+
+def set_api_rate_limiter(fn):
+    """Inject the rate-limit function from main.py."""
+    global _check_api_rate_limit_fn
+    _check_api_rate_limit_fn = fn
+
+
+def check_api_rate_limit(request: "Request") -> None:
+    """Apply the general API rate limit. No-op if not configured."""
+    if _check_api_rate_limit_fn:
+        _check_api_rate_limit_fn(request)
