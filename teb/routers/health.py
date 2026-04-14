@@ -65,6 +65,7 @@ async def health_check() -> JSONResponse:
         "status": "ok" if ai_provider else "unconfigured",
         "provider": ai_provider or "none",
     }
+    ai_active = ai_provider is not None
 
     from teb import payments as _pay
     providers = _pay.list_providers()
@@ -85,20 +86,30 @@ async def health_check() -> JSONResponse:
     except Exception:
         components["disk"] = {"status": "unknown"}
 
-    status = "healthy" if db_ok else "degraded"
+    warnings: list[str] = []
+    if db_ok and config.TEB_ENV == "production" and not ai_active:
+        status = "degraded"
+        warnings.append(
+            "AI provider not configured — running in template-only mode. "
+            "Set ANTHROPIC_API_KEY or OPENAI_API_KEY in .env"
+        )
+    else:
+        status = "healthy" if db_ok else "degraded"
     code = 200 if db_ok else 503
     uptime_seconds = round(time.monotonic() - _APP_START_TIME, 1)
 
-    return JSONResponse(
-        status_code=code,
-        content={
-            "status": status,
-            "version": "2.0.0",
-            "uptime_seconds": uptime_seconds,
-            "python_version": platform.python_version(),
-            "components": components,
-        },
-    )
+    body: dict[str, Any] = {
+        "status": status,
+        "version": "2.0.0",
+        "uptime_seconds": uptime_seconds,
+        "python_version": platform.python_version(),
+        "ai_active": ai_active,
+        "components": components,
+    }
+    if warnings:
+        body["warnings"] = warnings
+
+    return JSONResponse(status_code=code, content=body)
 
 
 @router.get("/api/health/ready")

@@ -64,3 +64,43 @@ curl -s http://localhost:8000/health | python3 -m json.tool
 ## Triggering Deploy Without a Push
 
 Go to **Actions → Deploy to portearchive.com → Run workflow** (uses `workflow_dispatch`).
+
+## Troubleshooting: deploy-user SSH Access
+
+If you see `Permission denied (publickey)` when connecting as the `deploy` user:
+
+### Verify SSH access
+```bash
+ssh deploy@portearchive.com
+```
+
+### If it fails — Option A: Re-run server setup (recommended)
+SSH in as `root` and re-run the setup script, which (re)creates the deploy user and
+installs the correct SSH keys:
+```bash
+ssh root@portearchive.com
+cd /opt/teb
+sudo bash deploy/server-setup.sh
+```
+The script is **idempotent** — it is safe to run again. After it finishes, it prints the
+GitHub secrets you need to copy into **Settings → Secrets → Actions**.
+
+### If it fails — Option B: Use root for deploys (quick workaround)
+Update the GitHub secret `DEPLOY_USER` to `root` and make sure `DEPLOY_SSH_KEY` holds
+the **root** user's private key from the server. This lets deploys succeed immediately
+without touching the deploy user.
+
+### Verify the GitHub secrets are correct
+Go to **Settings → Secrets and variables → Actions** and confirm:
+- `DEPLOY_HOST` — hostname or IP of your server (e.g. `portearchive.com`)
+- `DEPLOY_USER` — `deploy` (or `root` as a workaround)
+- `DEPLOY_SSH_KEY` — the *private* key whose public half is in the server user's
+  `~/.ssh/authorized_keys`
+
+To check which keys are authorised on the server:
+```bash
+# For the deploy user:
+ssh root@portearchive.com cat /home/deploy/.ssh/authorized_keys
+# For root:
+ssh root@portearchive.com cat /root/.ssh/authorized_keys
+```
