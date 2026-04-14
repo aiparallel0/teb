@@ -44,7 +44,8 @@ jobs:
             set -e
             cd /opt/teb
 
-            echo "==> Pulling latest code..."
+            echo "==> Cleaning local state..."
+            git stash --include-untracked 2>/dev/null || true
             git fetch origin main
             git reset --hard origin/main
 
@@ -60,6 +61,20 @@ jobs:
 
             echo "==> Verifying health..."
             sleep 5
-            curl -sf http://localhost:8000/health | python3 -c "import sys,json; d=json.load(sys.stdin); print(f'Status: {d[\"status\"]}, Version: {d[\"version\"]}'); sys.exit(0 if d['status']=='healthy' else 1)"
+            curl -sf http://localhost:8000/health | python3 -c "
+import sys, json
+d = json.load(sys.stdin)
+ai = d.get('components', {}).get('ai', {})
+print(f'Status: {d[\"status\"]}, AI: {ai.get(\"provider\", \"none\")}')
+if ai.get('status') == 'unconfigured':
+    print('WARNING: AI provider is NOT configured — teb is in template-only mode!')
+    print('Set ANTHROPIC_API_KEY or OPENAI_API_KEY in /opt/teb/.env')
+sys.exit(0 if d['status'] in ('healthy', 'degraded') else 1)
+"
+
+            AI_STATUS=$(curl -sf http://localhost:8000/health | python3 -c "import sys,json; print(json.load(sys.stdin).get('ai_active', False))")
+            if [ "$AI_STATUS" != "True" ]; then
+              echo "::warning::AI provider is NOT configured. teb is running in template-only mode. Set ANTHROPIC_API_KEY or OPENAI_API_KEY in /opt/teb/.env"
+            fi
 
             echo "==> Deploy complete!"

@@ -48,6 +48,19 @@ services:
       - TEB_JWT_SECRET=${TEB_JWT_SECRET:?Set TEB_JWT_SECRET in .env}
       - TEB_ENV=production
       - TEB_BASE_PATH=${TEB_BASE_PATH:-/teb}
+      # ─────────────────────────────────────────────────────────────────────────
+      # ⚠️  AI PROVIDER KEYS — YOU MUST SET AT LEAST ONE IN /opt/teb/.env ⚠️
+      #
+      # Without a real key teb runs in template-only mode: every task response
+      # will be generic placeholder text, no Claude/OpenAI calls will be made,
+      # and $0 will be spent.  Set the key in .env — Docker Compose reads it
+      # automatically via the ${VAR:-} syntax below.
+      #
+      # Example (in /opt/teb/.env):
+      #   ANTHROPIC_API_KEY=sk-ant-api03-...
+      #   # OR
+      #   OPENAI_API_KEY=sk-...
+      # ─────────────────────────────────────────────────────────────────────────
       # AI providers
       - OPENAI_API_KEY=${OPENAI_API_KEY:-}
       - OPENAI_BASE_URL=${OPENAI_BASE_URL:-https://api.openai.com/v1}
