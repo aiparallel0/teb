@@ -724,7 +724,7 @@ async def test_spending_validation_zero_amount(client):
 @pytest.mark.anyio
 async def test_guess_spending_category(client):
     """Test the category guessing function from main."""
-    from teb.main import _guess_spending_category
+    from teb.routers.financial import _guess_spending_category
     assert _guess_spending_category("Namecheap") == "domain"
     assert _guess_spending_category("Vercel") == "hosting"
     assert _guess_spending_category("Google Ads") == "marketing"

@@ -90,25 +90,51 @@ def require_admin(request: Request) -> int:
     return uid
 
 
-def get_goal_for_user(goal_id: int, user_id: int) -> Goal:
-    """Fetch a goal and verify the requesting user owns it (or it has no owner)."""
+def get_collaborator_role(goal_id: int, user_id: int) -> Optional[str]:
+    """Return the collaborator role for a user on a goal, or None."""
+    collabs = storage.list_collaborators(goal_id)
+    for c in collabs:
+        if c.user_id == user_id:
+            return c.role
+    return None
+
+
+def get_goal_for_user(goal_id: int, user_id: int, require_role: Optional[str] = None) -> Goal:
+    """Fetch a goal and verify the requesting user owns it or is a collaborator.
+
+    If ``require_role`` is set, the user must be the owner **or** have that
+    collaborator role (or higher).  Role hierarchy: admin > editor > viewer.
+    """
     goal = storage.get_goal(goal_id)
     if not goal:
         raise HTTPException(status_code=404, detail="Goal not found")
-    if goal.user_id is not None and goal.user_id != user_id:
+
+    # Owner always has full access
+    if goal.user_id is None or goal.user_id == user_id:
+        return goal
+
+    # Check collaborator access
+    collab_role = get_collaborator_role(goal_id, user_id)
+    if collab_role is None:
         raise HTTPException(status_code=403, detail="Not authorized")
+
+    if require_role:
+        _ROLE_LEVEL = {"viewer": 0, "editor": 1, "admin": 2}
+        needed = _ROLE_LEVEL.get(require_role, 0)
+        actual = _ROLE_LEVEL.get(collab_role, 0)
+        if actual < needed:
+            raise HTTPException(status_code=403, detail=f"Requires {require_role} access")
+
     return goal
 
 
-def get_task_for_user(task_id: int, user_id: int) -> Task:
-    """Fetch a task and verify the requesting user owns its goal."""
+def get_task_for_user(task_id: int, user_id: int, require_role: Optional[str] = None) -> Task:
+    """Fetch a task and verify the requesting user owns its goal or is a collaborator."""
     task = storage.get_task(task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
     if task.goal_id is not None:
-        goal = storage.get_goal(task.goal_id)
-        if goal and goal.user_id is not None and goal.user_id != user_id:
-            raise HTTPException(status_code=403, detail="Not authorized")
+        get_goal_for_user(task.goal_id, user_id, require_role=require_role)
     return task
 
 
