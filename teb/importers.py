@@ -358,3 +358,157 @@ def import_from_csv(user_id: int, csv_text: str) -> Tuple[Goal, List[Task]]:
 
     logger.info("Imported CSV as goal %d with %d tasks", goal.id, len(tasks_created))
     return goal, tasks_created
+
+
+def import_from_langchain(user_id: int, data: Dict[str, Any]) -> Tuple[Goal, List[Task]]:
+    """Import a LangChain agent/chain workflow export into a teb goal with tasks.
+
+    Expected structure:
+        {
+            "name": "...",
+            "description": "...",
+            "agents": [{"name": "...", "role": "...", "tools": [...], "tasks": [...]}],
+            "chains": [{"name": "...", "steps": [{"name": "...", "type": "..."}]}]
+        }
+    """
+    workflow_name = data.get("name", "Imported LangChain Workflow")
+    goal = Goal(title=workflow_name, description=data.get("description", ""))
+    goal.user_id = user_id
+    goal.tags = "imported,langchain"
+    goal.status = "decomposed"
+    goal = storage.create_goal(goal)
+
+    tasks_created: List[Task] = []
+    order = 0
+
+    # Import agents and their tasks
+    for agent in data.get("agents", []):
+        agent_name = agent.get("name", agent.get("role", "Agent"))
+        agent_role = agent.get("role", agent_name)
+        tools = agent.get("tools", [])
+        tools_desc = f" (tools: {', '.join(tools)})" if tools else ""
+
+        parent_task = Task(
+            goal_id=goal.id,
+            title=f"[{agent_role}] {agent_name}{tools_desc}",
+            description=f"Agent: {agent_role}",
+            status="todo",
+            order_index=order,
+            tags="langchain",
+        )
+        parent_task = storage.create_task(parent_task)
+        tasks_created.append(parent_task)
+        order += 1
+
+        for si, at in enumerate(agent.get("tasks", [])):
+            expected = at.get("expected_output", "")
+            desc = at.get("description", f"Agent task {si + 1}")
+            child_task = Task(
+                goal_id=goal.id,
+                parent_id=parent_task.id,
+                title=desc,
+                description=f"Expected output: {expected}" if expected else "",
+                status="todo",
+                order_index=si,
+                tags="langchain",
+            )
+            child_task = storage.create_task(child_task)
+            tasks_created.append(child_task)
+
+    # Import chains and their steps
+    for chain in data.get("chains", []):
+        chain_name = chain.get("name", "Chain")
+
+        parent_task = Task(
+            goal_id=goal.id,
+            title=f"[Chain] {chain_name}",
+            description=f"LangChain chain: {chain_name}",
+            status="todo",
+            order_index=order,
+            tags="langchain",
+        )
+        parent_task = storage.create_task(parent_task)
+        tasks_created.append(parent_task)
+        order += 1
+
+        for si, step in enumerate(chain.get("steps", [])):
+            step_name = step.get("name", f"Step {si + 1}")
+            step_type = step.get("type", "unknown")
+            child_task = Task(
+                goal_id=goal.id,
+                parent_id=parent_task.id,
+                title=step_name,
+                description=f"Chain step type: {step_type}",
+                status="todo",
+                order_index=si,
+                tags="langchain",
+            )
+            child_task = storage.create_task(child_task)
+            tasks_created.append(child_task)
+
+    logger.info("Imported LangChain workflow '%s' as goal %d with %d tasks", workflow_name, goal.id, len(tasks_created))
+    return goal, tasks_created
+
+
+def import_from_crewai(user_id: int, data: Dict[str, Any]) -> Tuple[Goal, List[Task]]:
+    """Import a CrewAI crew export into a teb goal with tasks.
+
+    Expected structure:
+        {
+            "name": "...",
+            "description": "...",
+            "agents": [{"role": "...", "goal": "...", "backstory": "...", "tools": [...]}],
+            "tasks": [{"description": "...", "agent": "...", "expected_output": "...", "context": [...]}],
+            "process": "sequential" | "hierarchical"
+        }
+    """
+    crew_name = data.get("name", "Imported CrewAI Crew")
+    goal = Goal(title=crew_name, description=data.get("description", ""))
+    goal.user_id = user_id
+    goal.tags = "imported,crewai"
+    goal.status = "decomposed"
+    goal = storage.create_goal(goal)
+
+    tasks_created: List[Task] = []
+    process_type = data.get("process", "sequential")
+
+    # Build agent lookup for backstory enrichment
+    agents_map: Dict[str, Dict[str, Any]] = {}
+    for agent in data.get("agents", []):
+        role = agent.get("role", "")
+        agents_map[role] = agent
+
+    crew_tasks = data.get("tasks", [])
+    for idx, ct in enumerate(crew_tasks):
+        agent_role = ct.get("agent", "Unassigned")
+        description = ct.get("description", f"Task {idx + 1}")
+        expected_output = ct.get("expected_output", "")
+
+        # Build description from task + agent backstory
+        agent_info = agents_map.get(agent_role, {})
+        agent_goal = agent_info.get("goal", "")
+        backstory = agent_info.get("backstory", "")
+        desc_parts = []
+        if expected_output:
+            desc_parts.append(f"Expected output: {expected_output}")
+        if agent_goal:
+            desc_parts.append(f"Agent goal: {agent_goal}")
+        if backstory:
+            desc_parts.append(f"Backstory: {backstory}")
+
+        # Sequential = ordered, hierarchical = all parallel (order 0)
+        order_index = idx if process_type == "sequential" else 0
+
+        task = Task(
+            goal_id=goal.id,
+            title=f"[{agent_role}] {description}",
+            description="\n".join(desc_parts),
+            status="todo",
+            order_index=order_index,
+            tags="crewai",
+        )
+        task = storage.create_task(task)
+        tasks_created.append(task)
+
+    logger.info("Imported CrewAI crew '%s' as goal %d with %d tasks", crew_name, goal.id, len(tasks_created))
+    return goal, tasks_created
