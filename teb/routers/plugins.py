@@ -16,7 +16,7 @@ from teb import storage
 from teb.routers import deps
 from teb import plugins
 from teb.models import (
-    PluginListing, PluginManifest, PluginView, Theme,
+    CustomFieldDefinition, PluginListing, PluginManifest, PluginView, Theme,
 )
 
 logger = logging.getLogger(__name__)

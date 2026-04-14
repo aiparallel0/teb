@@ -14,7 +14,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from teb import storage
 from teb.routers import deps
-from teb import workload
+from teb import auth, config, workload
 from teb import cache
 from teb.models import (
     BrandingConfig, IPAllowlist, Organization, SSOConfig,

@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Form, HTTPException, Query, Request, UploadFile
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field, field_validator
 
 from teb import storage
@@ -18,7 +18,7 @@ from teb.routers import deps
 from teb import scheduler
 
 from teb.models import (
-    ActivityFeedEntry, CommentReaction, DashboardLayout, DirectMessage, EmailNotificationConfig, GoalChatMessage, GoalCollaborator, PushSubscription, SavedView, ScheduledReport, Workspace, WorkspaceMember,
+    ActivityFeedEntry, CommentReaction, DashboardLayout, DirectMessage, EmailNotificationConfig, GoalChatMessage, GoalCollaborator, Notification, PushSubscription, SavedView, ScheduledReport, Workspace, WorkspaceMember,
 )
 
 logger = logging.getLogger(__name__)
@@ -651,6 +651,19 @@ async def export_goal_endpoint(goal_id: int, request: Request, format: str = Que
             media_type="text/csv",
             headers={"Content-Disposition": f'attachment; filename="goal_{goal_id}_tasks.csv"'},
         )
+    elif format == "markdown":
+        lines = [f"# {goal.title}", "", goal.description or "_No description_", ""]
+        lines.append("## Tasks\n")
+        status_emoji = {"done": "\u2705", "in_progress": "\U0001F551", "todo": "\u2B1C",
+                        "failed": "\u274C", "skipped": "\u23ED\uFE0F", "executing": "\u26A1"}
+        for t in sorted(tasks, key=lambda x: x.order_index):
+            emoji = status_emoji.get(t.status, "\u2B1C")
+            lines.append(f"- {emoji} **{t.title}** ({t.status}, {t.estimated_minutes}m)")
+            if t.description:
+                lines.append(f"  > {t.description}")
+        lines.append(f"\n---\n_Exported from teb_")
+        md = "\n".join(lines)
+        return JSONResponse(content={"format": "markdown", "content": md})
     else:
         return {
             "goal": goal.to_dict(),

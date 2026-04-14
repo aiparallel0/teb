@@ -1789,35 +1789,7 @@ async def delete_api_key(key_id: int, request: Request):
     return {"deleted": True}
 
 
-# ─── Goal Export (WP-18) ─────────────────────────────────────────────────────
-
-
-@app.get("/api/goals/{goal_id}/export")
-async def export_goal(goal_id: int, request: Request, format: str = "markdown"):
-    """Export a goal to markdown or JSON format."""
-    uid = _require_user(request)
-    goal = storage.get_goal(goal_id)
-    if not goal or goal.user_id != uid:
-        raise HTTPException(status_code=404, detail="Goal not found")
-    tasks = storage.list_tasks(goal_id=goal_id)
-    if format == "json":
-        return {
-            "goal": goal.to_dict(),
-            "tasks": [t.to_dict() for t in tasks],
-        }
-    # Default: markdown
-    lines = [f"# {goal.title}", "", goal.description or "_No description_", ""]
-    lines.append("## Tasks\n")
-    status_emoji = {"done": "\u2705", "in_progress": "\U0001F551", "todo": "\u2B1C",
-                    "failed": "\u274C", "skipped": "\u23ED\uFE0F", "executing": "\u26A1"}
-    for t in sorted(tasks, key=lambda x: x.order_index):
-        emoji = status_emoji.get(t.status, "\u2B1C")
-        lines.append(f"- {emoji} **{t.title}** ({t.status}, {t.estimated_minutes}m)")
-        if t.description:
-            lines.append(f"  > {t.description}")
-    lines.append(f"\n---\n_Exported from teb_")
-    md = "\n".join(lines)
-    return JSONResponse(content={"format": "markdown", "content": md})
+# ─── Goal Export (WP-18) — moved to teb/routers/collaboration.py ─────────────
 
 
 # ─── Task Blockers (WP-19) ───────────────────────────────────────────────────
