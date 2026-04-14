@@ -20,7 +20,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 
-from teb import agents, auth, browser, config, decomposer, deployer, executor, intelligence, integrations, messaging, provisioning, scheduler, storage, transcribe
+from teb import agents, auth, browser, config, decomposer, deployer, executor, intelligence, integrations, messaging, payments, provisioning, scheduler, storage, transcribe
 from teb.models import (
     ActivityFeedEntry, AgentGoalMemory, ApiCredential, AuditEvent, BrandingConfig, BrowserAction, CheckIn,
     CommentReaction, CustomField, CustomFieldDefinition, DashboardLayout, DashboardWidget, DirectMessage, EmailNotificationConfig,
@@ -1157,7 +1157,7 @@ async def payment_webhook(provider: str, request: Request):
     body = await request.body()
     signature = request.headers.get("x-signature", "") or request.headers.get("stripe-signature", "")
 
-    result = _payments.process_webhook(provider, body, signature)
+    result = payments.process_webhook(provider, body, signature)
     if result.get("error"):
         raise HTTPException(status_code=400, detail=result["error"])
     return result
@@ -1174,7 +1174,7 @@ async def recover_transactions(request: Request):
     """
     _check_api_rate_limit(request)
     _require_admin(request)
-    result = _payments.recover_failed_transactions()
+    result = payments.recover_failed_transactions()
     return result
 
 

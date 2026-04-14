@@ -14,7 +14,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from teb import storage
 from teb.routers import deps
-from teb import integrations as integrations_mod
+from teb import integrations
 from teb import browser
 from teb import agents, browser, executor
 from teb import state_machine
