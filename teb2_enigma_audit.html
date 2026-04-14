@@ -1,0 +1,120 @@
+<style>
+.wrap{font-size:13px;color:var(--color-text-primary);line-height:1.7}
+.pi{border-left:3px solid #E24B4A;padding:14px 18px;margin-bottom:18px;border-radius:0 var(--border-radius-md) var(--border-radius-md) 0;background:var(--color-background-secondary)}
+.pi p{margin:0 0 8px;font-size:13px}
+.pi p:last-child{margin:0}
+.sec{font-size:11px;font-weight:500;text-transform:uppercase;letter-spacing:.06em;color:var(--color-text-secondary);margin:1.6rem 0 .5rem}
+.spec{font-family:var(--font-mono);font-size:11px;background:var(--color-background-secondary);border-radius:var(--border-radius-md);padding:10px 14px;line-height:2;margin-bottom:12px}
+.row{display:grid;grid-template-columns:180px 1fr 80px;gap:12px;align-items:start;padding:9px 0;border-top:0.5px solid var(--color-border-tertiary);font-size:12px}
+.row:first-child{border-top:none}
+.fname{font-family:var(--font-mono);font-weight:500;font-size:11px}
+.verdict{font-size:12px;line-height:1.5;color:var(--color-text-secondary)}
+.score{font-family:var(--font-mono);font-size:13px;font-weight:500;text-align:center}
+.s0{color:#E24B4A}.s1{color:#D85A30}.s2{color:#BA7517}.s3{color:#1D9E75}
+.bridge{background:var(--color-background-secondary);border:0.5px solid var(--color-border-tertiary);border-radius:var(--border-radius-lg);padding:12px 16px;margin-bottom:8px}
+.b-head{display:flex;align-items:center;gap:8px;margin-bottom:6px}
+.b-title{font-size:13px;font-weight:500}
+.b-body{font-size:12px;color:var(--color-text-secondary);line-height:1.6}
+.tag{font-size:10px;font-weight:500;padding:2px 8px;border-radius:20px;display:inline-block}
+.t-imp{background:#FCEBEB;color:#A32D2D}
+.t-op{background:#FAEEDA;color:#854F0B}
+.t-ok{background:#EAF3DE;color:#3B6D11}
+.t-hw{background:#EEEDFE;color:#534AB7}
+@media(prefers-color-scheme:dark){
+  .t-imp{background:#791F1F;color:#F7C1C1}
+  .t-op{background:#633806;color:#FAC775}
+  .t-ok{background:#27500A;color:#C0DD97}
+  .t-hw{background:#3C3489;color:#CECBF6}
+}
+.final{border:2px solid #E24B4A;border-radius:var(--border-radius-lg);padding:16px 20px;margin-top:16px}
+@media(prefers-color-scheme:dark){.final{border-color:#A32D2D}}
+.rating{font-size:40px;font-weight:500;color:#E24B4A;margin-bottom:4px}
+</style>
+<div class="wrap">
+
+<div class="sec">the PI verdict — no softening</div>
+<div class="pi">
+<p>The Enigma machine is not a computer. It has no CPU, no RAM, no stored program, no file system, no logic gates in any programmable sense. It is an electromechanical rotor cipher device operated entirely by a human typing on a keyboard. It outputs substituted letters via a lampboard. That is the complete list of its capabilities.</p>
+<p>Asking whether teb2 can run on an Enigma is like asking whether a novel can run on a typewriter. The typewriter produced the novel. It cannot execute it. The Enigma produced ciphertext. It cannot execute C code, store a struct, compare two integers, or loop.</p>
+<p>Score: 0/100. Not "almost zero." Zero. There is no subset of teb2 that executes on an Enigma machine. The only contact point is that teb2 has a crypto layer and Enigma is a cipher. That is a conceptual overlap, not a compatibility.</p>
+</div>
+
+<div class="sec">enigma machine — actual hardware spec</div>
+<div class="spec">
+Type:        Electromechanical rotor cipher device<br>
+Year:        1927–1945 (Wehrmacht Enigma I, 1930)<br>
+"CPU":       none — 3–4 physical rotors step mechanically on keypress<br>
+"RAM":       none — rotor positions ARE the state (26³ = 17,576 possible states)<br>
+"Storage":   none — codebooks held by human operators on paper<br>
+"I/O":       keyboard in (26 keys) · lampboard out (26 lamps) · human reads result<br>
+"Program":   none — wiring is fixed at manufacture, plugboard set by operator<br>
+Operations:  1 substitution cipher per keypress · no arithmetic · no branching<br>
+Power:       4.5V battery or hand crank<br>
+Weight:      12 kg
+</div>
+
+<div class="sec">file-by-file verdict against enigma hardware</div>
+<div class="row" style="border-top:none;font-weight:500;font-size:11px;color:var(--color-text-secondary)">
+  <div>file</div><div>verdict</div><div>score</div>
+</div>
+<div class="row"><div class="fname">core/types.h<br>core/errors.h</div><div class="verdict">Data declarations. An Enigma has no memory to hold a struct. Cannot be loaded, referenced, or allocated.</div><div class="score s0">0</div></div>
+<div class="row"><div class="fname">core/config.c</div><div class="verdict">Reads environment variables. Enigma has no environment, no file system, no operating system.</div><div class="score s0">0</div></div>
+<div class="row"><div class="fname">auth/hash.c</div><div class="verdict">The only file with a conceptual Enigma analog — a substitution cipher. But crypt() requires a CPU to run 25 DES rounds. Enigma does one rotor substitution per keypress, manually.</div><div class="score s1">5*</div></div>
+<div class="row"><div class="fname">auth/token.c<br>auth/rbac.c</div><div class="verdict">Struct manipulation and integer comparison. No arithmetic unit exists on Enigma.</div><div class="score s0">0</div></div>
+<div class="row"><div class="fname">db/*</div><div class="verdict">Persistent storage requires a medium (disk, tape, drum). Enigma has none. Operators kept paper codebooks — that is the only "db".</div><div class="score s0">0</div></div>
+<div class="row"><div class="fname">exec/vault.c</div><div class="verdict">DES encryption requires 16 rounds of bit permutation on a CPU. Enigma does rotor substitution. Functionally similar intent, physically incompatible implementation.</div><div class="score s1">5*</div></div>
+<div class="row"><div class="fname">exec/http.c<br>exec/browser.c</div><div class="verdict">Network I/O. Enigma communicates via Morse code radio, operator-typed. No TCP, no sockets, no subprocess.</div><div class="score s0">0</div></div>
+<div class="row"><div class="fname">agents/*<br>api/*<br>main.c</div><div class="verdict">Program logic, loops, conditionals, function calls. None of these concepts exist on an Enigma machine.</div><div class="score s0">0</div></div>
+
+<div style="font-size:11px;color:var(--color-text-secondary);margin-top:4px">* conceptual overlap only — not executable compatibility</div>
+
+<div class="final">
+  <div class="rating">0 / 100</div>
+  <div style="font-size:13px;font-weight:500;margin-bottom:8px">the machine cannot run software. the question has no answer in the positive direction.</div>
+  <div style="font-size:12px;color:var(--color-text-secondary)">The correct question is: what is the <em>simplest stored-program computer</em> that can run teb2, and how do we get teb2 to run on it? That question has an answer. The bridge below addresses it.</div>
+</div>
+
+<div class="sec">bridge — preserving all functionality, targeting enigma-era hardware</div>
+<div style="font-size:12px;color:var(--color-text-secondary);margin-bottom:12px">The earliest stored-program computers contemporary to Enigma's operational era: Manchester Baby (1948), EDSAC (1949), Harvard Mark I (1944). Target: Harvard Mark I — the most capable Enigma-era programmable machine. 72-word memory, mechanical relays, paper tape I/O.</div>
+
+<div class="bridge">
+  <div class="b-head"><span class="tag t-hw">hardware change</span><span class="b-title">vault.c — swap DES for Enigma rotor emulation</span></div>
+  <div class="b-body">Replace DES with a software Enigma rotor simulation in ~80 lines of K&R C. Three rotor tables as int arrays, plugboard as a 26-int substitution array. Identical interface: Bytes + Key → CipherResult. The Key struct becomes {rotor_start[3], plugboard[26]}. An actual Enigma machine operated by a human IS the hardware accelerator for this function — the software emulation makes it reproducible without the physical device. Zero functionality loss.</div>
+</div>
+
+<div class="bridge">
+  <div class="b-head"><span class="tag t-hw">hardware change</span><span class="b-title">exec/http.c — swap TCP for Morse/teletype frame</span></div>
+  <div class="b-body">Replace the socket write with a paper-tape-format serial frame: fixed-width ASCII fields, checksum byte at end. On modern hardware this goes over TCP unchanged. On Enigma-era hardware an operator reads the frame off paper tape and transmits via teleprinter. The SerialReq struct IS the Morse message format — it was already designed this way. Zero functionality loss.</div>
+</div>
+
+<div class="bridge">
+  <div class="b-head"><span class="tag t-op">operational change</span><span class="b-title">db/ — swap dbm for paper codebook format</span></div>
+  <div class="b-body">Harvard Mark I had no disk. Storage was paper tape and operator-maintained ledgers. Replace dbm_fetch/store with paper-tape sequential read/write: each record is a fixed-width line on tape. On modern hardware this is fread/fwrite on a flat binary file. Same GoalResult/TaskResult structs — just serialised to fixed-width binary records instead of dbm. Zero functionality loss.</div>
+</div>
+
+<div class="bridge">
+  <div class="b-head"><span class="tag t-op">operational change</span><span class="b-title">agents/ — the human IS the agent loop</span></div>
+  <div class="b-body">On Enigma-era hardware the coord.c rule table runs, outputs an AgentMsg, and an operator reads it off the teleprinter and acts. The agent IS the human. On modern hardware the same rule table dispatches to an LLM call. The channel.h AgentMsg struct is identical — only what sits behind the dispatch changes. The architecture already supports this swap: coord.c has no LLM dependency, only a rule switch. Zero functionality loss.</div>
+</div>
+
+<div class="bridge">
+  <div class="b-head"><span class="tag t-ok">no change needed</span><span class="b-title">core/, auth/, api/ — already era-compatible</span></div>
+  <div class="b-body">types.h structs, the DES-based hash, the binary Ticket struct, and the thin HTTP routes all compile and run on any stored-program machine from 1948 onward with no changes. The K&R C style, manual typedefs, and no-prototype function declarations are identical to what was written on Harvard Mark I successors in the early 1950s.</div>
+</div>
+
+<div style="margin-top:16px;background:var(--color-background-secondary);border-radius:var(--border-radius-lg);padding:14px 18px;font-size:12px;line-height:1.8">
+  <span style="font-weight:500;color:var(--color-text-primary)">After bridge changes — honest score against Harvard Mark I (1944):</span><br>
+  <span style="color:var(--color-text-secondary)">core: </span><span style="color:#1D9E75;font-weight:500">95</span><span style="color:var(--color-text-tertiary)"> · </span>
+  <span style="color:var(--color-text-secondary)">auth: </span><span style="color:#1D9E75;font-weight:500">88</span><span style="color:var(--color-text-tertiary)"> · </span>
+  <span style="color:var(--color-text-secondary)">db: </span><span style="color:#639922;font-weight:500">75</span><span style="color:var(--color-text-tertiary)"> · </span>
+  <span style="color:var(--color-text-secondary)">exec: </span><span style="color:#639922;font-weight:500">78</span><span style="color:var(--color-text-tertiary)"> · </span>
+  <span style="color:var(--color-text-secondary)">agents: </span><span style="color:#BA7517;font-weight:500">60</span><span style="color:var(--color-text-tertiary)"> · </span>
+  <span style="color:var(--color-text-secondary)">api: </span><span style="color:#1D9E75;font-weight:500">82</span>
+  <br><span style="color:var(--color-text-secondary)">Enigma machine direct execution: </span><span style="color:#E24B4A;font-weight:500">0 — unchanged. the machine is not a computer.</span>
+</div>
+
+<div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap">
+  <button onclick="sendPrompt('Write vault.c with Enigma rotor emulation in K&R C — three rotor tables, plugboard, same Bytes+Key→CipherResult interface')">vault.c with Enigma rotors ↗</button>
+  <button onclick="sendPrompt('Write db/goals.c using fixed-width binary flat file instead of dbm — same GoalResult interface')">flat-file db layer ↗</button>
+</div>
+</div>

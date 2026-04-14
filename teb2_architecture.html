@@ -1,0 +1,131 @@
+<h2 class="sr-only">Architecture diagram for teb v2: a context-window-first design with strict file size limits, one-responsibility modules, and compile-time error enforcement replacing tests</h2>
+<style>
+.law { background: var(--color-background-secondary); border-left: 3px solid; border-radius: 0 var(--border-radius-md) var(--border-radius-md) 0; padding: 10px 14px; margin-bottom: 8px; font-size: 13px; }
+.law-red   { border-color: #E24B4A; }
+.law-teal  { border-color: #1D9E75; }
+.law-blue  { border-color: #378ADD; }
+.law-amber { border-color: #BA7517; }
+.law-purp  { border-color: #7F77DD; }
+.law-title { font-weight: 500; color: var(--color-text-primary); margin-bottom: 2px; }
+.law-desc  { color: var(--color-text-secondary); line-height: 1.5; }
+.col { flex: 1; min-width: 0; }
+.sec-head { font-size: 11px; font-weight: 500; color: var(--color-text-secondary); letter-spacing: .05em; text-transform: uppercase; margin-bottom: 10px; }
+.lang-pick { background: var(--color-background-primary); border: 2px solid var(--color-border-info); border-radius: var(--border-radius-lg); padding: 14px 16px; margin-bottom: 10px; }
+.lang-alt  { background: var(--color-background-secondary); border: 0.5px solid var(--color-border-tertiary); border-radius: var(--border-radius-lg); padding: 12px 14px; margin-bottom: 8px; }
+.tag { font-size: 11px; font-weight: 500; padding: 2px 8px; border-radius: 20px; display: inline-block; }
+.t-rust   { background:#FAECE7;color:#993C1D; }
+.t-go     { background:#E1F5EE;color:#0F6E56; }
+.t-zig    { background:#E6F1FB;color:#185FA5; }
+.t-yes    { background:#EAF3DE;color:#3B6D11; }
+.t-no     { background:#FCEBEB;color:#A32D2D; }
+@media(prefers-color-scheme:dark){
+  .t-rust{background:#712B13;color:#F5C4B3}
+  .t-go{background:#085041;color:#9FE1CB}
+  .t-zig{background:#0C447C;color:#B5D4F4}
+  .t-yes{background:#27500A;color:#C0DD97}
+  .t-no{background:#791F1F;color:#F7C1C1}
+}
+.file-ex { font-family: var(--font-mono); font-size: 11px; color: var(--color-text-secondary); background: var(--color-background-secondary); border-radius: var(--border-radius-md); padding: 8px 10px; margin-top: 6px; line-height: 1.8; }
+.btn-row { display:flex;flex-wrap:wrap;gap:6px;margin-top:14px; }
+</style>
+
+<div class="sec-head">The core constraint — every architectural decision follows from this</div>
+<div class="law law-red" style="margin-bottom:16px">
+  <div class="law-title">Context window = hard limit. Design around it, not through it.</div>
+  <div class="law-desc">An agent touching a file must load: the file itself + its direct interface contracts + nothing else. If understanding a file requires reading 3 other files first, the architecture has already failed. Target: any single agent task fits in &lt;8KB of context.</div>
+</div>
+
+<div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:20px">
+  <div class="col">
+    <div class="sec-head">Architecture laws</div>
+    <div class="law law-teal">
+      <div class="law-title">1 file = 1 responsibility, hard cap 200 lines</div>
+      <div class="law-desc">If a file exceeds 200 lines it has more than one job. Split it. No exceptions. 100KB files are an AI agent death sentence.</div>
+    </div>
+    <div class="law law-blue">
+      <div class="law-title">Interfaces at boundaries, never inside modules</div>
+      <div class="law-desc">Every cross-module call goes through a typed interface file. The agent writing module A never needs to read module B — only B's interface header. This is the C header model applied universally.</div>
+    </div>
+    <div class="law law-amber">
+      <div class="law-title">Flat imports, no transitive dependencies</div>
+      <div class="law-desc">Module A imports from B. A never imports from C through B. Transitive dependency chains mean an agent must follow the chain to understand anything — that's recursive context explosion.</div>
+    </div>
+    <div class="law law-purp">
+      <div class="law-title">Error at compile, not at runtime, never at test</div>
+      <div class="law-desc">Tests find what the type system missed. If your type system is strong enough, tests find almost nothing. Invest in compiler strictness, not test count. 0 tests + strict compilation &gt; 1000 tests + dynamic typing.</div>
+    </div>
+    <div class="law law-red">
+      <div class="law-title">Explicit over implicit, always</div>
+      <div class="law-desc">No magic. No reflection-based dependency injection. No dynamic dispatch where static dispatch works. An agent must be able to read a file and know exactly what it does — not what it might do at runtime.</div>
+    </div>
+  </div>
+
+  <div class="col">
+    <div class="sec-head">Language recommendation</div>
+    <div class="lang-pick">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+        <span style="font-size:16px;font-weight:500;color:var(--color-text-primary)">Rust</span>
+        <span class="tag t-rust">primary</span>
+        <span class="tag t-yes">recommended</span>
+      </div>
+      <div style="font-size:12px;color:var(--color-text-secondary);line-height:1.6">
+        The compiler IS the test suite. Every function signature is a contract. Every <code>Result&lt;T,E&gt;</code> forces you to handle the error path — no silent failures. The module system enforces the architecture laws above at compile time: you cannot have circular dependencies, you cannot accidentally make something public, you cannot misuse a type across a boundary.<br><br>
+        <strong style="color:var(--color-text-primary)">Flags for teb2:</strong>
+      </div>
+      <div class="file-ex">#![deny(warnings)]<br>#![deny(unused)]<br>#![deny(dead_code)]<br>#![forbid(unsafe_code)]  // unless explicit<br>// Every warning = build failure<br>// unused import = build failure<br>// dead function = build failure</div>
+    </div>
+    <div class="lang-alt">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+        <span style="font-size:14px;font-weight:500;color:var(--color-text-primary)">Zig</span>
+        <span class="tag t-zig">alternative</span>
+      </div>
+      <div style="font-size:12px;color:var(--color-text-secondary);line-height:1.5">Comptime replaces macros + generics cleanly. No hidden control flow — what you read is what runs. Excellent for the execution engine layer. Pre-1.0 ecosystem risk.</div>
+    </div>
+    <div class="lang-alt">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+        <span style="font-size:14px;font-weight:500;color:var(--color-text-primary)">Go</span>
+        <span class="tag t-go">agents layer only</span>
+      </div>
+      <div style="font-size:12px;color:var(--color-text-secondary);line-height:1.5">Goroutines + channels are the ideal model for multi-agent message passing. Simpler than Rust for this specific problem. Could be the agent orchestration layer while Rust owns the core.</div>
+    </div>
+  </div>
+</div>
+
+<div class="sec-head">Proposed file structure — context-budget per directory</div>
+<div class="file-ex">
+teb2/<br>
+├── core/              <span style="color:var(--color-text-tertiary)">// &lt;200 lines each. zero external deps</span><br>
+│   ├── types.rs       <span style="color:var(--color-text-tertiary)">// ALL domain types. one truth. agents read this first</span><br>
+│   ├── errors.rs      <span style="color:var(--color-text-tertiary)">// ALL error variants. exhaustive match enforced</span><br>
+│   └── config.rs      <span style="color:var(--color-text-tertiary)">// env/config. no logic, pure data</span><br>
+├── auth/              <span style="color:var(--color-text-tertiary)">// owns: jwt, argon2, rbac. nothing else</span><br>
+│   ├── mod.rs         <span style="color:var(--color-text-tertiary)">// public interface only — what callers see</span><br>
+│   ├── hash.rs        <span style="color:var(--color-text-tertiary)">// argon2id. 1 function, 1 purpose</span><br>
+│   ├── token.rs       <span style="color:var(--color-text-tertiary)">// jwt sign/verify. algorithm pinned at compile time</span><br>
+│   └── rbac.rs        <span style="color:var(--color-text-tertiary)">// role checks. pure functions, no db</span><br>
+├── agents/            <span style="color:var(--color-text-tertiary)">// each agent = 1 file. agent reads only its own file + core/types</span><br>
+│   ├── coordinator.rs<br>
+│   ├── finance.rs<br>
+│   ├── outreach.rs<br>
+│   └── channel.rs     <span style="color:var(--color-text-tertiary)">// typed message enum — all inter-agent comms</span><br>
+├── exec/              <span style="color:var(--color-text-tertiary)">// http execution engine. no agent logic here</span><br>
+│   ├── mod.rs<br>
+│   ├── http.rs        <span style="color:var(--color-text-tertiary)">// reqwest wrapper. typed requests only</span><br>
+│   └── vault.rs       <span style="color:var(--color-text-tertiary)">// chacha20poly1305. encrypt/decrypt. that's it</span><br>
+├── db/                <span style="color:var(--color-text-tertiary)">// sqlx. queries verified at compile time against schema</span><br>
+│   ├── mod.rs<br>
+│   ├── goals.rs       <span style="color:var(--color-text-tertiary)">// ONLY goal queries</span><br>
+│   ├── tasks.rs       <span style="color:var(--color-text-tertiary)">// ONLY task queries</span><br>
+│   └── schema.sql     <span style="color:var(--color-text-tertiary)">// single source of truth for sqlx compile check</span><br>
+└── api/               <span style="color:var(--color-text-tertiary)">// axum routes. thin layer. no business logic</span><br>
+    ├── mod.rs<br>
+    ├── goals.rs       <span style="color:var(--color-text-tertiary)">// goal routes only</span><br>
+    └── tasks.rs       <span style="color:var(--color-text-tertiary)">// task routes only</span>
+</div>
+
+<div class="btn-row">
+  <button onclick="sendPrompt('Show me what core/types.rs would look like for teb2 with exhaustive domain types')">core/types.rs ↗</button>
+  <button onclick="sendPrompt('Show me the agents/channel.rs typed message enum for teb2 multi-agent comms')">agents/channel.rs ↗</button>
+  <button onclick="sendPrompt('Show me what the Rust compiler flags and Cargo.toml should look like for maximum strictness in teb2')">Cargo.toml strictness ↗</button>
+  <button onclick="sendPrompt('Design the auth module for teb2 in Rust with argon2id and compile-time algorithm pinning')">auth module ↗</button>
+</div>

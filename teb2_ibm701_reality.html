@@ -1,0 +1,231 @@
+<style>
+.wrap{font-size:13px;color:var(--color-text-primary);line-height:1.7}
+.sec{font-size:11px;font-weight:500;text-transform:uppercase;letter-spacing:.06em;color:var(--color-text-secondary);margin:1.5rem 0 .4rem}
+.spec-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:14px}
+.spec-card{background:var(--color-background-secondary);border-radius:var(--border-radius-md);padding:10px 12px}
+.spec-label{font-size:11px;color:var(--color-text-secondary);margin-bottom:2px}
+.spec-val{font-size:18px;font-weight:500;font-family:var(--font-mono)}
+.spec-sub{font-size:11px;color:var(--color-text-tertiary)}
+.critical{color:#E24B4A}
+.warn{color:#BA7517}
+.ok{color:#1D9E75}
+.hard-wall{background:#FCEBEB;border:0.5px solid #F09595;border-radius:var(--border-radius-md);padding:10px 14px;font-size:12px;line-height:1.6;margin-bottom:8px}
+@media(prefers-color-scheme:dark){.hard-wall{background:#501313;border-color:#791F1F}}
+.hard-wall strong{color:#A32D2D}
+@media(prefers-color-scheme:dark){.hard-wall strong{color:#F7C1C1}}
+.change{background:var(--color-background-secondary);border-left:3px solid;border-radius:0 var(--border-radius-md) var(--border-radius-md) 0;padding:11px 14px;margin-bottom:8px}
+.change-drop{border-color:#E24B4A}
+.change-swap{border-color:#BA7517}
+.change-keep{border-color:#1D9E75}
+.c-head{display:flex;align-items:center;gap:8px;margin-bottom:4px}
+.c-title{font-size:13px;font-weight:500}
+.c-body{font-size:12px;color:var(--color-text-secondary);line-height:1.6}
+.tag{font-size:10px;font-weight:500;padding:2px 7px;border-radius:20px}
+.t-drop{background:#FCEBEB;color:#A32D2D}
+.t-swap{background:#FAEEDA;color:#854F0B}
+.t-keep{background:#EAF3DE;color:#3B6D11}
+.t-arch{background:#EEEDFE;color:#534AB7}
+@media(prefers-color-scheme:dark){
+  .t-drop{background:#791F1F;color:#F7C1C1}
+  .t-swap{background:#633806;color:#FAC775}
+  .t-keep{background:#27500A;color:#C0DD97}
+  .t-arch{background:#3C3489;color:#CECBF6}
+}
+.mem-bar{background:var(--color-background-secondary);border-radius:var(--border-radius-md);padding:12px 14px;font-family:var(--font-mono);font-size:11px;line-height:2.1;margin-bottom:12px;border:0.5px solid var(--color-border-tertiary)}
+.asm-block{font-family:var(--font-mono);font-size:11px;background:var(--color-background-secondary);border-radius:var(--border-radius-md);padding:10px 14px;line-height:1.9;border:0.5px solid var(--color-border-tertiary);margin-top:6px}
+.row{display:grid;grid-template-columns:140px 1fr 60px;gap:10px;padding:7px 0;border-top:0.5px solid var(--color-border-tertiary);font-size:12px;align-items:start}
+.row:first-of-type{border-top:none}
+.fname{font-family:var(--font-mono);font-size:11px;font-weight:500}
+</style>
+<div class="wrap">
+
+<div class="sec">ibm 701 — real hardware numbers</div>
+<div class="spec-grid">
+  <div class="spec-card">
+    <div class="spec-label">primary RAM</div>
+    <div class="spec-val critical">9 KB</div>
+    <div class="spec-sub">2,048 × 36-bit words · expandable to 4,096 words = 18 KB</div>
+  </div>
+  <div class="spec-card">
+    <div class="spec-label">registers</div>
+    <div class="spec-val critical">2</div>
+    <div class="spec-sub">accumulator (38-bit) · multiplier/quotient (36-bit) · nothing else</div>
+  </div>
+  <div class="spec-card">
+    <div class="spec-label">instruction set</div>
+    <div class="spec-val warn">33 ops</div>
+    <div class="spec-sub">18-bit instructions · 5-bit opcode · 12-bit address · no index registers</div>
+  </div>
+  <div class="spec-card">
+    <div class="spec-label">drum storage</div>
+    <div class="spec-val ok">~41 KB</div>
+    <div class="spec-sub">82,920 digits working store · tape: 8M digits/reel sequential</div>
+  </div>
+  <div class="spec-card">
+    <div class="spec-label">word size</div>
+    <div class="spec-val">36-bit</div>
+    <div class="spec-sub">signed magnitude · no two's complement · positive AND negative zero</div>
+  </div>
+  <div class="spec-card">
+    <div class="spec-label">language</div>
+    <div class="spec-val critical">none</div>
+    <div class="spec-sub">no C compiler exists for 701 · assembly only · Speedcode (1953) for math only</div>
+  </div>
+</div>
+
+<div class="sec">hard walls — non-negotiable realities</div>
+<div class="hard-wall"><strong>Wall 1 — No C compiler.</strong> K&R C was invented in 1972 on a PDP-11. No C compiler exists for the IBM 701, has ever existed, or can practically be built. Every .c and .h file in teb2 must become IBM 701 assembly source. This is not a workaround. It is a complete language replacement.</div>
+<div class="hard-wall"><strong>Wall 2 — 9 KB RAM.</strong> The entire running program — code + data + stack — must fit in 9 KB at any moment. teb2's types.h alone describes structs totalling ~400 bytes. A single Goal struct with all fields is ~80 bytes. You can hold ~115 Goals in RAM simultaneously. Every module must be an overlay loaded from drum on demand and evicted when done.</div>
+<div class="hard-wall"><strong>Wall 3 — No OS, no filesystem, no sockets.</strong> There is no operating system. No file open/close. No TCP. I/O is punch cards (input) and magnetic tape reels (output/storage). The db layer becomes sequential tape record read/write. The HTTP layer becomes punched card batches.</div>
+<div class="hard-wall"><strong>Wall 4 — Self-modifying code for arrays.</strong> There are no index registers. Looping over an array requires modifying the address field of a load instruction at runtime. Every loop in every file must use this technique.</div>
+<div class="hard-wall"><strong>Wall 5 — No floating point.</strong> Hardware has none. All arithmetic is integer. Already handled — teb2 uses i64 cents. Keep it.</div>
+
+<div class="sec">memory map — 9 KB budget allocated per module</div>
+<div class="mem-bar">
+IBM 701 RAM — 2,048 words × 36 bits (9,216 bytes total)<br>
+<br>
+addr 0000–0063  ( 100 words /  450 bytes)  resident: types + error constants<br>
+addr 0064–0127  ( 64 words  /  288 bytes)  resident: current module code (overlay)<br>
+addr 0128–0255  (128 words  /  576 bytes)  resident: current module working data<br>
+addr 0256–0511  (256 words  / 1,152 bytes) resident: I/O buffer (tape record in/out)<br>
+addr 0512–0767  (256 words  / 1,152 bytes) drum transfer buffer<br>
+addr 0768–2047  (1,280 words/ 5,760 bytes) available: next overlay pre-load area<br>
+<br>
+RULE: one module loads at a time. finish, write result to drum, evict, load next.
+</div>
+
+<div class="sec">complete file changes — every file in the repo</div>
+<div class="row" style="border-top:none;font-weight:500;font-size:11px;color:var(--color-text-secondary)">
+  <div>file (was)</div><div>change + reason</div><div>action</div>
+</div>
+
+<div class="row">
+  <div class="fname">core/types.h</div>
+  <div style="font-size:12px;color:var(--color-text-secondary)">Becomes <code>core/types.asm</code> — EQU constants defining word offsets for each field. A Goal "struct" is 8 consecutive 36-bit words at a base address. No typedef, no struct keyword — just labelled memory layout.</div>
+  <div><span class="tag t-swap">rename+rewrite</span></div>
+</div>
+<div class="row">
+  <div class="fname">core/errors.h</div>
+  <div style="font-size:12px;color:var(--color-text-secondary)">Becomes <code>core/errors.asm</code> — EQU constants: ERR_OK EQU 0, ERR_NOT_FOUND EQU 1, etc. Loaded resident at addr 0000. Error code lives in accumulator on return — same 1-output contract.</div>
+  <div><span class="tag t-swap">rename+rewrite</span></div>
+</div>
+<div class="row">
+  <div class="fname">core/config.c/.h</div>
+  <div style="font-size:12px;color:var(--color-text-secondary)">Becomes <code>core/config.asm</code> — reads first tape record on reel 1 (the config record). Fixed-width fields at known word offsets. 1 input (tape unit number), 1 output (base address of loaded config block). Fits in 12 words of code.</div>
+  <div><span class="tag t-swap">rewrite</span></div>
+</div>
+<div class="row">
+  <div class="fname">auth/hash.c</div>
+  <div style="font-size:12px;color:var(--color-text-secondary)">Becomes <code>auth/hash.asm</code> — Enigma rotor emulation in 701 assembly. Three rotor tables as 26-word arrays on drum. Self-modifying loop steps through each character. Input: password word-address + rotor-start word-address. Output: hashed word-address in accumulator.</div>
+  <div><span class="tag t-swap">rewrite</span></div>
+</div>
+<div class="row">
+  <div class="fname">auth/token.c</div>
+  <div style="font-size:12px;color:var(--color-text-secondary)">Becomes <code>auth/token.asm</code> — Ticket is 4 words: user_id (36-bit), role (36-bit), expiry (36-bit), mac (36-bit). MAC = XOR-fold of fields through rotor table. No JSON, no Base64, no strings. Pure word operations.</div>
+  <div><span class="tag t-swap">rewrite</span></div>
+</div>
+<div class="row">
+  <div class="fname">auth/rbac.c</div>
+  <div style="font-size:12px;color:var(--color-text-secondary)">Becomes <code>auth/rbac.asm</code> — 6-word permission table resident in low memory. Role in accumulator, required permission in MQ. Single compare-and-branch. Smallest module: ~8 instructions.</div>
+  <div><span class="tag t-swap">rewrite</span></div>
+</div>
+<div class="row">
+  <div class="fname">db/schema.sql</div>
+  <div style="font-size:12px;color:var(--color-text-secondary)">Becomes <code>db/schema.asm</code> — tape record layout constants. GOAL_RECORD_WORDS EQU 8, TASK_RECORD_WORDS EQU 6, etc. Documents the physical tape format. Not executable — reference only, included by db modules.</div>
+  <div><span class="tag t-swap">rename+rewrite</span></div>
+</div>
+<div class="row">
+  <div class="fname">db/goals.c</div>
+  <div style="font-size:12px;color:var(--color-text-secondary)">Becomes <code>db/goals.asm</code> — sequential tape scan: load record, compare id field to query id, branch if match, copy to output buffer, stop. No random access. Input: tape unit + GoalQuery word-address. Output: GoalResult word-address in accumulator.</div>
+  <div><span class="tag t-swap">rewrite</span></div>
+</div>
+<div class="row">
+  <div class="fname">db/tasks.c</div>
+  <div style="font-size:12px;color:var(--color-text-secondary)">Becomes <code>db/tasks.asm</code> — identical pattern to goals.asm. Same tape scan, different record layout constants from schema.asm.</div>
+  <div><span class="tag t-swap">rewrite</span></div>
+</div>
+<div class="row">
+  <div class="fname">exec/vault.c</div>
+  <div style="font-size:12px;color:var(--color-text-secondary)">Becomes <code>exec/vault.asm</code> — Enigma rotor tables on drum. Load rotor segment to RAM, step each input word through substitution table via self-modifying address loop. Input: plaintext word-address + key word-address. Output: ciphertext word-address.</div>
+  <div><span class="tag t-swap">rewrite</span></div>
+</div>
+<div class="row">
+  <div class="fname">exec/http.c<br>exec/browser.c</div>
+  <div style="font-size:12px;color:var(--color-text-secondary)">Both become <code>exec/card.asm</code> — output is a punched card batch. Each API call becomes a fixed-format card record written to the card punch. Input arrives from card reader at next job step. No TCP, no subprocess. One file replaces two because the interface is identical: SerialReq → punch → read → SerialResult.</div>
+  <div><span class="tag t-swap">merge+rewrite</span></div>
+</div>
+<div class="row">
+  <div class="fname">agents/channel.h</div>
+  <div style="font-size:12px;color:var(--color-text-secondary)">Becomes <code>agents/channel.asm</code> — AgentMsg is 4 words: tag word (36-bit enum), payload words 1–3. MSG_GOAL_NEW EQU 1, MSG_TASK_DONE EQU 2, etc. Message queue is a circular drum segment: 64 records × 4 words = 256 drum words.</div>
+  <div><span class="tag t-swap">rewrite</span></div>
+</div>
+<div class="row">
+  <div class="fname">agents/coord.c<br>agents/finance.c<br>agents/outreach.c<br>agents/research.c</div>
+  <div style="font-size:12px;color:var(--color-text-secondary)">Each becomes a <code>.asm</code> overlay. Loaded from drum when a message for that agent arrives. Dispatch is a jump table: load msg tag, multiply by 2 (word offset), self-modify a branch instruction address, execute. Output: new AgentMsg written to drum queue. Evicted after processing.</div>
+  <div><span class="tag t-swap">rewrite</span></div>
+</div>
+<div class="row">
+  <div class="fname">api/goals.c<br>api/tasks.c<br>api/auth.c</div>
+  <div style="font-size:12px;color:var(--color-text-secondary)">Become card-reader handlers. Each "HTTP request" is a punched card with fixed-format fields. The api module reads the card, validates the ticket word, dispatches to db or auth overlay. Response is a printed line or output card. Input: card buffer word-address + Ctx word-address. Output: response word-address.</div>
+  <div><span class="tag t-swap">rewrite</span></div>
+</div>
+<div class="row">
+  <div class="fname">main.c</div>
+  <div style="font-size:12px;color:var(--color-text-secondary)">Becomes <code>main.asm</code> — the boot loader. Reads config tape record, initialises drum queue, enters card-read loop. Dispatch loop: read card, extract module tag from first word, load that module overlay from drum to addr 0064, jump to it, on return write output card, loop. 40 instructions total.</div>
+  <div><span class="tag t-swap">rewrite</span></div>
+</div>
+<div class="row">
+  <div class="fname">Makefile</div>
+  <div style="font-size:12px;color:var(--color-text-secondary)">Becomes assembly job control: run IBM 701 assembler (or modern cross-assembler targeting 701 binary) on each .asm file, produce binary card deck per module, load sequence documented. On modern hardware: use the open-source i701 emulator — it accepts 701 assembly and produces authentic binary output.</div>
+  <div><span class="tag t-swap">rewrite</span></div>
+</div>
+
+<div class="sec">new file added — overlay loader</div>
+<div class="change change-keep">
+  <div class="c-head"><span class="tag t-arch">new file</span><span class="c-title">core/loader.asm — drum overlay manager</span></div>
+  <div class="c-body">The 9 KB wall forces this to exist. Resident at fixed address. Two functions: drum_load(module_id, dest_addr) and drum_save(src_addr, module_id). Every module calls loader before jumping to another module. 20 instructions. This is the only file with no equivalent in the original teb2 — it exists solely because of the memory constraint.</div>
+</div>
+
+<div class="sec">complete renamed file inventory</div>
+<div class="asm-block">
+teb2/<br>
+├── core/<br>
+│   ├── types.asm      <span style="color:var(--color-text-tertiary)">was types.h       — word-layout EQU constants</span><br>
+│   ├── errors.asm     <span style="color:var(--color-text-tertiary)">was errors.h      — error code EQU constants</span><br>
+│   ├── config.asm     <span style="color:var(--color-text-tertiary)">was config.c/.h   — tape reel 1 record 0 reader</span><br>
+│   └── loader.asm     <span style="color:var(--color-text-tertiary)">NEW               — drum overlay load/save</span><br>
+├── auth/<br>
+│   ├── hash.asm       <span style="color:var(--color-text-tertiary)">was hash.c        — rotor cipher hash</span><br>
+│   ├── token.asm      <span style="color:var(--color-text-tertiary)">was token.c       — 4-word binary ticket</span><br>
+│   └── rbac.asm       <span style="color:var(--color-text-tertiary)">was rbac.c        — 8-word permission table</span><br>
+├── db/<br>
+│   ├── schema.asm     <span style="color:var(--color-text-tertiary)">was schema.sql    — tape record layout EQUs</span><br>
+│   ├── goals.asm      <span style="color:var(--color-text-tertiary)">was goals.c       — tape sequential scan</span><br>
+│   └── tasks.asm      <span style="color:var(--color-text-tertiary)">was tasks.c       — tape sequential scan</span><br>
+├── exec/<br>
+│   ├── vault.asm      <span style="color:var(--color-text-tertiary)">was vault.c       — rotor cipher encrypt/decrypt</span><br>
+│   └── card.asm       <span style="color:var(--color-text-tertiary)">was http.c+browser.c — card punch/reader I/O</span><br>
+├── agents/<br>
+│   ├── channel.asm    <span style="color:var(--color-text-tertiary)">was channel.h     — 4-word AgentMsg + drum queue</span><br>
+│   ├── coord.asm      <span style="color:var(--color-text-tertiary)">was coord.c       — jump-table dispatch overlay</span><br>
+│   ├── finance.asm    <span style="color:var(--color-text-tertiary)">was finance.c     — approval tier switch overlay</span><br>
+│   ├── outreach.asm   <span style="color:var(--color-text-tertiary)">was outreach.c    — card-batch compose overlay</span><br>
+│   └── research.asm   <span style="color:var(--color-text-tertiary)">was research.c    — tape-scan research overlay</span><br>
+├── api/<br>
+│   ├── goals.asm      <span style="color:var(--color-text-tertiary)">was goals.c       — card-format goal handler</span><br>
+│   ├── tasks.asm      <span style="color:var(--color-text-tertiary)">was tasks.c       — card-format task handler</span><br>
+│   └── auth.asm       <span style="color:var(--color-text-tertiary)">was auth.c        — card-format auth handler</span><br>
+├── main.asm           <span style="color:var(--color-text-tertiary)">was main.c        — boot + card-read dispatch loop</span><br>
+└── Makefile           <span style="color:var(--color-text-tertiary)">unchanged name    — now calls i701 cross-assembler</span><br>
+<br>
+total: 22 files · 0 .c files · 0 .h files · all .asm · 1 new file (loader.asm)<br>
+architecture laws preserved: 2-in/1-out · flat includes · no transitive deps
+</div>
+
+<div style="margin-top:14px;display:flex;gap:8px;flex-wrap:wrap">
+  <button onclick="sendPrompt('Write main.asm in IBM 701 assembly — boot loader, card-read dispatch loop, overlay jump')">main.asm ↗</button>
+  <button onclick="sendPrompt('Write core/types.asm — IBM 701 EQU word-layout constants for Goal, Task, AgentMsg, Ticket structs')">types.asm ↗</button>
+  <button onclick="sendPrompt('Write auth/hash.asm — IBM 701 assembly Enigma rotor cipher, self-modifying address loop')">hash.asm ↗</button>
+  <button onclick="sendPrompt('Write core/loader.asm — IBM 701 drum overlay manager, drum_load and drum_save routines')">loader.asm ↗</button>
+</div>
+</div>

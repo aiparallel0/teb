@@ -1,0 +1,170 @@
+<h2 class="sr-only">Component-by-component replacement recommendations for the teb project, swapping Python for more robust language alternatives</h2>
+<style>
+.comp-row { border-bottom: 0.5px solid var(--color-border-tertiary); padding: 14px 0; display: grid; grid-template-columns: 180px 1fr 1fr; gap: 16px; align-items: start; }
+.comp-row:last-child { border-bottom: none; }
+.pill { font-size: 11px; font-weight: 500; padding: 2px 9px; border-radius: 20px; display: inline-block; white-space: nowrap; }
+.pill-py  { background: #E6F1FB; color: #185FA5; }
+.pill-rs  { background: #FAECE7; color: #993C1D; }
+.pill-go  { background: #E1F5EE; color: #0F6E56; }
+.pill-kt  { background: #EEEDFE; color: #534AB7; }
+.pill-ts  { background: #EAF3DE; color: #3B6D11; }
+.tag-easy   { background: #EAF3DE; color: #3B6D11; }
+.tag-medium { background: #FAEEDA; color: #854F0B; }
+.tag-hard   { background: #FCEBEB; color: #A32D2D; }
+@media (prefers-color-scheme: dark) {
+  .pill-py  { background: #0C447C; color: #B5D4F4; }
+  .pill-rs  { background: #712B13; color: #F5C4B3; }
+  .pill-go  { background: #085041; color: #9FE1CB; }
+  .pill-kt  { background: #3C3489; color: #CECBF6; }
+  .pill-ts  { background: #27500A; color: #C0DD97; }
+  .tag-easy   { background: #27500A; color: #C0DD97; }
+  .tag-medium { background: #633806; color: #FAC775; }
+  .tag-hard   { background: #791F1F; color: #F7C1C1; }
+}
+.comp-label { font-size: 13px; font-weight: 500; color: var(--color-text-primary); margin-bottom: 4px; }
+.comp-sub   { font-size: 11px; color: var(--color-text-secondary); }
+.col-head   { font-size: 11px; font-weight: 500; color: var(--color-text-secondary); text-transform: uppercase; letter-spacing: .04em; padding-bottom: 8px; border-bottom: 0.5px solid var(--color-border-tertiary); }
+.repl-name  { font-size: 13px; font-weight: 500; color: var(--color-text-primary); margin-bottom: 3px; }
+.repl-why   { font-size: 12px; color: var(--color-text-secondary); line-height: 1.5; }
+.btn-row    { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+</style>
+
+<div style="display:grid;grid-template-columns:180px 1fr 1fr;gap:16px;padding-bottom:8px">
+  <div class="col-head">Component (current)</div>
+  <div class="col-head">Robustest replacement</div>
+  <div class="col-head">Why + migration effort</div>
+</div>
+
+<div class="comp-row">
+  <div>
+    <div class="comp-label">Web API / server</div>
+    <div class="comp-sub"><span class="pill pill-py">Python</span> FastAPI 0.115</div>
+  </div>
+  <div>
+    <div class="repl-name"><span class="pill pill-rs">Rust</span> Axum + Tower</div>
+    <div class="btn-row">
+      <span class="pill tag-hard">hard migration</span>
+      <span class="pill tag-easy">max robustness</span>
+    </div>
+  </div>
+  <div class="repl-why">Axum gives compile-time request/response types, zero-copy extractors, and Tower middleware. No runtime type errors. Memory-safe. Handles 10–50× more requests/sec. Migration is a full rewrite.<br><br><strong style="color:var(--color-text-primary)">Pragmatic alternative:</strong> <span class="pill pill-go">Go</span> <strong>Gin or Chi</strong> — 80% of the safety gain, much faster migration, excellent stdlib HTTP.</div>
+</div>
+
+<div class="comp-row">
+  <div>
+    <div class="comp-label">Authentication / JWT</div>
+    <div class="comp-sub"><span class="pill pill-py">Python</span> bcrypt + custom JWT + RBAC</div>
+  </div>
+  <div>
+    <div class="repl-name"><span class="pill pill-rs">Rust</span> argon2 + jsonwebtoken</div>
+    <div class="btn-row">
+      <span class="pill tag-hard">hard migration</span>
+      <span class="pill tag-easy">stronger crypto</span>
+    </div>
+  </div>
+  <div class="repl-why">Argon2id is the current gold-standard password hash (winner of Password Hashing Competition). The Rust <code>jsonwebtoken</code> crate enforces algorithm at compile time — no "alg: none" attack surface. bcrypt is fine but Argon2 is strictly better for new code.<br><br><strong style="color:var(--color-text-primary)">Pragmatic alternative:</strong> Stay Python but swap bcrypt → <code>argon2-cffi</code> and use <code>python-jose</code> with explicit algorithm pinning.</div>
+</div>
+
+<div class="comp-row">
+  <div>
+    <div class="comp-label">Database / ORM</div>
+    <div class="comp-sub"><span class="pill pill-py">Python</span> SQLite + custom SQL migrations</div>
+  </div>
+  <div>
+    <div class="repl-name"><span class="pill pill-rs">Rust</span> SQLx + SQLite</div>
+    <div class="btn-row">
+      <span class="pill tag-hard">hard migration</span>
+      <span class="pill tag-easy">compile-time SQL</span>
+    </div>
+  </div>
+  <div class="repl-why">SQLx verifies every SQL query against the real database schema at compile time — a query with a wrong column name fails the build, not at 3am. Zero runtime query surprises. Keeps SQLite, so no infra change.<br><br><strong style="color:var(--color-text-primary)">Pragmatic alternative:</strong> <span class="pill pill-py">Python</span> swap raw SQL for <code>SQLModel</code> or <code>SQLAlchemy 2.0</code> with strict typing — catches most ORM-level bugs before runtime.</div>
+</div>
+
+<div class="comp-row">
+  <div>
+    <div class="comp-label">Async HTTP client</div>
+    <div class="comp-sub"><span class="pill pill-py">Python</span> httpx (async)</div>
+  </div>
+  <div>
+    <div class="repl-name"><span class="pill pill-rs">Rust</span> reqwest</div>
+    <div class="btn-row">
+      <span class="pill tag-hard">hard migration</span>
+      <span class="pill tag-easy">max robustness</span>
+    </div>
+  </div>
+  <div class="repl-why">reqwest is memory-safe, async (Tokio), has compile-time-typed request/response builders, and handles TLS via rustls (no OpenSSL footguns). Connection pool management is deterministic.<br><br><strong style="color:var(--color-text-primary)">Pragmatic alternative:</strong> httpx is already excellent. Pin versions and add strict timeout config — this is a low-priority swap.</div>
+</div>
+
+<div class="comp-row">
+  <div>
+    <div class="comp-label">Browser automation</div>
+    <div class="comp-sub"><span class="pill pill-py">Python</span> Playwright</div>
+  </div>
+  <div>
+    <div class="repl-name"><span class="pill pill-rs">Rust</span> chromiumoxide</div>
+    <div class="btn-row">
+      <span class="pill tag-hard">hard migration</span>
+      <span class="pill tag-medium">niche ecosystem</span>
+    </div>
+  </div>
+  <div class="repl-why">chromiumoxide drives Chrome via CDP in async Rust. Type-safe, memory-safe, very fast. But the ecosystem is immature vs Playwright.<br><br><strong style="color:var(--color-text-primary)">Pragmatic alternative:</strong> <strong>Keep Playwright-Python</strong> — it's the most robust browser automation tool that exists in any language. This is the one component where Python wins outright. Playwright's reliability, cross-browser support, and test recording make it the right choice regardless of language preference.</div>
+</div>
+
+<div class="comp-row">
+  <div>
+    <div class="comp-label">Credential vault</div>
+    <div class="comp-sub"><span class="pill pill-py">Python</span> Fernet encryption</div>
+  </div>
+  <div>
+    <div class="repl-name"><span class="pill pill-rs">Rust</span> age + ring / chacha20poly1305</div>
+    <div class="btn-row">
+      <span class="pill tag-medium">medium migration</span>
+      <span class="pill tag-easy">modern AEAD</span>
+    </div>
+  </div>
+  <div class="repl-why">Fernet is AES-128-CBC + HMAC-SHA256 — solid but not modern AEAD. ChaCha20-Poly1305 (via the <code>ring</code> crate) or <code>age</code> encryption give authenticated encryption with simpler, harder-to-misuse APIs and no padding oracle surface.<br><br><strong style="color:var(--color-text-primary)">Pragmatic alternative:</strong> Stay Python, swap Fernet → <code>cryptography</code> lib's <code>AESGCM</code> or <code>ChaCha20Poly1305</code>. Same language, better primitive.</div>
+</div>
+
+<div class="comp-row">
+  <div>
+    <div class="comp-label">Multi-agent orchestration</div>
+    <div class="comp-sub"><span class="pill pill-py">Python</span> custom message passing, 6 agents</div>
+  </div>
+  <div>
+    <div class="repl-name"><span class="pill pill-go">Go</span> goroutines + channels</div>
+    <div class="btn-row">
+      <span class="pill tag-medium">medium migration</span>
+      <span class="pill tag-easy">race-free concurrency</span>
+    </div>
+  </div>
+  <div class="repl-why">Go's goroutines + typed channels make the message-passing architecture explicit and race-condition-free. The Go race detector (<code>-race</code>) catches concurrency bugs at test time. Python's GIL and asyncio interplay is a footgun for multi-agent work.<br><br><strong style="color:var(--color-text-primary)">Pragmatic alternative:</strong> Rust's <code>tokio::mpsc</code> channels give the same guarantees with compile-time enforcement — but Go is the pragmatic win here for this use case.</div>
+</div>
+
+<div class="comp-row" style="border-bottom:none">
+  <div>
+    <div class="comp-label">Financial pipeline</div>
+    <div class="comp-sub"><span class="pill pill-py">Python</span> Mercury + Stripe integrations</div>
+  </div>
+  <div>
+    <div class="repl-name"><span class="pill pill-rs">Rust</span> async-stripe + custom Mercury client</div>
+    <div class="btn-row">
+      <span class="pill tag-hard">hard migration</span>
+      <span class="pill tag-easy">safest for money</span>
+    </div>
+  </div>
+  <div class="repl-why">Money code has zero tolerance for type errors, silent integer overflow, or race conditions. Rust's type system can encode "approved amount" vs "pending amount" as distinct types — the compiler prevents mixing them. Idempotency keys enforced by type.<br><br><strong style="color:var(--color-text-primary)">Pragmatic alternative:</strong> Stay Python but wrap all financial operations in strict Pydantic v2 models with <code>Decimal</code> (never <code>float</code>) and transaction-level DB locks.</div>
+</div>
+
+<div style="margin-top:20px;padding:14px 16px;background:var(--color-background-secondary);border-radius:var(--border-radius-lg);border:0.5px solid var(--color-border-tertiary)">
+  <div style="font-size:13px;font-weight:500;color:var(--color-text-primary);margin-bottom:8px">Recommended migration path for maximum robustness</div>
+  <div style="font-size:12px;color:var(--color-text-secondary);line-height:1.7">
+    <strong style="color:var(--color-text-primary)">Phase 1 (stay Python, big wins):</strong> Argon2 for passwords · SQLModel/SQLAlchemy 2.0 · Pydantic v2 everywhere · Decimal for all money · ChaCha20-Poly1305 for vault · pin all deps with hashes<br>
+    <strong style="color:var(--color-text-primary)">Phase 2 (Go for agents):</strong> Rewrite the multi-agent layer in Go — goroutines + channels are the best fit for your message-passing design · Keep Python/Playwright for browser tasks, call out via subprocess or gRPC<br>
+    <strong style="color:var(--color-text-primary)">Phase 3 (Rust for critical path):</strong> Rewrite the financial pipeline and auth service in Rust · Axum API in front, Python Playwright workers behind · Full rewrite only if scale or security demands it
+  </div>
+  <div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap">
+    <button onclick="sendPrompt('Show me what the teb financial pipeline would look like rewritten in Rust with type-safe amounts')">Rust financial layer ↗</button>
+    <button onclick="sendPrompt('Show me the teb multi-agent architecture rewritten with Go goroutines and channels')">Go agent architecture ↗</button>
+    <button onclick="sendPrompt('What are the Phase 1 Python hardening changes for teb in detail?')">Phase 1 Python hardening ↗</button>
+  </div>
+</div>
