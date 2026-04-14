@@ -33,3 +33,6 @@ from teb.storage._monolith import *  # noqa: F401,F403
 from teb.storage._monolith import (  # noqa: F401,E402
     _detect_goal_type,
 )
+
+# Generic CRUD engine
+from teb.storage.crud import CrudTable  # noqa: F401
