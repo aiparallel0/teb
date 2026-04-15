@@ -332,7 +332,7 @@ async def test_sse_token_query_param_auth():
     """Verify that token query param is accepted by _get_user_id."""
     # Test the auth mechanism directly rather than streaming
     from teb import auth
-    from teb.main import _get_user_id
+    from teb.routers.deps import get_user_id as _get_user_id
     from starlette.testclient import TestClient
     from starlette.requests import Request
     from starlette.datastructures import Headers, QueryParams

@@ -65,11 +65,20 @@ def error_response(
 # ─── Auth helpers ─────────────────────────────────────────────────────────────
 
 def get_user_id(request: Request) -> Optional[int]:
-    """Extract user_id from the request's Authorization header (Bearer token)."""
+    """Extract user_id from the request's Authorization header (Bearer token)
+    or from a ``token`` query parameter (needed for EventSource/SSE which
+    cannot set custom headers).
+
+    Returns None if no valid token is present.
+    """
     header = request.headers.get("authorization", "")
     if header.startswith("Bearer "):
         token = header[7:]
         return auth.decode_token(token)
+    # Fallback: token query parameter (used by EventSource for SSE)
+    token_param = request.query_params.get("token")
+    if token_param:
+        return auth.decode_token(token_param)
     return None
 
 

@@ -5,36 +5,26 @@ import json
 import logging
 import logging.config
 import os
-import re
-import sys
 import time
-import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from fastapi import FastAPI, Form, HTTPException, Query, Request, UploadFile
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 
-from teb import agents, auth, browser, config, decomposer, deployer, executor, intelligence, integrations, messaging, payments, provisioning, scheduler, storage, transcribe
+from teb import agents, auth, config, deployer, executor, intelligence, integrations, messaging, payments, provisioning, storage
 from teb.models import (
-    ActivityFeedEntry, AgentGoalMemory, ApiCredential, AuditEvent, BrandingConfig, BrowserAction, CheckIn,
-    CommentReaction, CustomField, CustomFieldDefinition, DashboardLayout, DashboardWidget, DirectMessage, EmailNotificationConfig,
-    ExecutionLog, Goal, GoalChatMessage, GoalCollaborator,
-    GoalTemplate, IPAllowlist, IntegrationListing, IntegrationTemplate, MessagingConfig, Milestone, Notification, NotificationPreference,
-    NudgeEvent, OAuthConnection, Organization, OutcomeMetric, PersonalApiKey, PluginListing, PluginManifest, PluginView,
-    ProgressSnapshot, PushSubscription, RecurrenceRule, SSOConfig, SavedView, ScheduledReport,
-    SpendingBudget, SpendingRequest,
-    Task, TaskArtifact, TaskBlocker, TaskComment, Theme, TimeEntry, WebhookConfig, WebhookRule,
-    Workspace, WorkspaceMember,
+    ExecutionLog, Goal, GoalCollaborator, Notification, NotificationPreference,
+    PersonalApiKey, SpendingRequest, Task, TaskBlocker,
 )
 
 # ─── Domain routers (extracted from monolith) ─────────────────────────────────
-from teb.routers.health import router as health_router, set_start_time as _set_health_start_time, increment_request_metrics
+from teb.routers.health import router as health_router, set_start_time as _set_health_start_time
 from teb.routers.auth import router as auth_router, set_rate_limiter as _set_auth_rate_limiter
 from teb.routers.settings import router as settings_router
 from teb.routers.notifications import router as notifications_router, set_rate_limiter as _set_notif_rate_limiter
@@ -54,6 +44,7 @@ from teb.routers.plugins import router as plugins_router
 from teb.routers.enterprise import router as enterprise_router
 from teb.routers.community import router as community_router
 from teb.routers.deps import set_api_rate_limiter as _set_api_rate_limiter
+from teb.routers import deps
 
 # ─── Logging ──────────────────────────────────────────────────────────────────
 
@@ -944,170 +935,9 @@ class TelegramUpdate(BaseModel):
     message: Optional[dict] = None
 
 
-# ─── Pagination helper ────────────────────────────────────────────────────────
-
-_DEFAULT_PAGE_SIZE = 50
-_MAX_PAGE_SIZE = 100
-
-
-def _paginate(
-    items: list,
-    page: int = 1,
-    per_page: int = _DEFAULT_PAGE_SIZE,
-) -> Dict[str, Any]:
-    """Apply pagination to a list and return a standardized paginated response.
-
-    Returns:
-        {"data": [...], "pagination": {"page": N, "per_page": N, "total": N, "pages": N}}
-    """
-    page = max(1, page)
-    per_page = max(1, min(per_page, _MAX_PAGE_SIZE))
-    total = len(items)
-    pages = max(1, (total + per_page - 1) // per_page)
-    start = (page - 1) * per_page
-    end = start + per_page
-    return {
-        "data": items[start:end],
-        "pagination": {
-            "page": page,
-            "per_page": per_page,
-            "total": total,
-            "pages": pages,
-        },
-    }
-
-
-# ─── Structured error response helper ────────────────────────────────────────
-
-def _error_response(
-    status_code: int,
-    code: str,
-    message: str,
-    details: Optional[list] = None,
-    request_id: Optional[str] = None,
-) -> JSONResponse:
-    """Return a standardized error response."""
-    body: Dict[str, Any] = {
-        "error": {
-            "code": code,
-            "message": message,
-        }
-    }
-    if details:
-        body["error"]["details"] = details
-    if request_id:
-        body["error"]["request_id"] = request_id
-    return JSONResponse(status_code=status_code, content=body)
-
-
-# ─── Auth helper ──────────────────────────────────────────────────────────────
-
-def _get_user_id(request: Request) -> Optional[int]:
-    """Extract user_id from the request's Authorization header (Bearer token)
-    or from a ``token`` query parameter (needed for EventSource/SSE which
-    cannot set custom headers).
-
-    Returns None if no valid token is present (allows unauthenticated access
-    to legacy endpoints).
-    """
-    header = request.headers.get("authorization", "")
-    if header.startswith("Bearer "):
-        token = header[7:]
-        return auth.decode_token(token)
-    # Fallback: token query parameter (used by EventSource for SSE)
-    token_param = request.query_params.get("token")
-    if token_param:
-        return auth.decode_token(token_param)
-    return None
-
-
-def _require_user(request: Request) -> int:
-    """Extract user_id or raise 401."""
-    uid = _get_user_id(request)
-    if uid is None:
-        raise HTTPException(status_code=401, detail="Authentication required")
-    return uid
-
-
-def _require_admin(request: Request) -> int:
-    """Extract user_id and verify admin role, or raise 401/403."""
-    uid = _require_user(request)
-    user = storage.get_user(uid)
-    if not user or user.role != "admin":
-        raise HTTPException(status_code=403, detail="Admin access required")
-    return uid
-
-
-def _get_collaborator_role(goal_id: int, user_id: int) -> Optional[str]:
-    """Return the collaborator role for a user on a goal, or None if not a collaborator."""
-    collabs = storage.list_collaborators(goal_id)
-    for c in collabs:
-        if c.user_id == user_id:
-            return c.role
-    return None
-
-
-def _get_goal_for_user(goal_id: int, user_id: int, require_role: Optional[str] = None) -> Goal:
-    """Fetch a goal and verify the requesting user owns it or is a collaborator.
-
-    If ``require_role`` is set, the user must be the owner **or** have that
-    collaborator role (or higher).  Role hierarchy: admin > editor > viewer.
-    """
-    goal = storage.get_goal(goal_id)
-    if not goal:
-        raise HTTPException(status_code=404, detail="Goal not found")
-
-    # Owner always has full access
-    if goal.user_id is None or goal.user_id == user_id:
-        return goal
-
-    # Check collaborator access
-    collab_role = _get_collaborator_role(goal_id, user_id)
-    if collab_role is None:
-        raise HTTPException(status_code=403, detail="Not authorized")
-
-    # If a specific role is required, check hierarchy
-    if require_role:
-        _ROLE_LEVEL = {"viewer": 0, "editor": 1, "admin": 2}
-        needed = _ROLE_LEVEL.get(require_role, 0)
-        actual = _ROLE_LEVEL.get(collab_role, 0)
-        if actual < needed:
-            raise HTTPException(status_code=403, detail=f"Requires {require_role} access")
-
-    return goal
-
-
-def _get_task_for_user(task_id: int, user_id: int, require_role: Optional[str] = None) -> Task:
-    """Fetch a task and verify the requesting user owns its goal or is a collaborator."""
-    task = storage.get_task(task_id)
-    if not task:
-        raise HTTPException(status_code=404, detail="Task not found")
-    if task.goal_id is not None:
-        _get_goal_for_user(task.goal_id, user_id, require_role=require_role)
-    return task
-
-
 # ─── Health check & Observability ─────────────────────────────────────────────
 
 _APP_START_TIME: float = time.monotonic()  # Updated in lifespan startup
-
-# Simple in-memory metrics counters (no external dependency required)
-_metrics: Dict[str, Any] = {
-    "requests_total": 0,
-    "requests_by_status": {},  # status_code -> count
-    "errors_total": 0,
-}
-
-
-def _increment_request_metrics(status_code: int) -> None:
-    """Track request metrics (called from middleware or manually)."""
-    _metrics["requests_total"] += 1
-    key = str(status_code)
-    _metrics["requests_by_status"][key] = _metrics["requests_by_status"].get(key, 0) + 1
-    if status_code >= 500:
-        _metrics["errors_total"] += 1
-    # Also update the health router's metrics copy
-    increment_request_metrics(status_code)
 
 
 # Health routes moved to teb/routers/health.py
@@ -1172,8 +1002,8 @@ async def recover_transactions(request: Request):
     Re-checks provider status for each failed transaction with remaining
     retries and reconciles local records accordingly. Admin only.
     """
-    _check_api_rate_limit(request)
-    _require_admin(request)
+    deps.check_api_rate_limit(request)
+    deps.require_admin(request)
     result = payments.recover_failed_transactions()
     return result
 
@@ -1190,8 +1020,8 @@ async def enable_auto_execute(goal_id: int, request: Request):
     When enabled, teb's background loop automatically picks up and executes
     pending tasks for this goal without manual triggering.
     """
-    uid = _require_user(request)
-    goal = _get_goal_for_user(goal_id, uid)
+    uid = deps.require_user(request)
+    goal = deps.get_goal_for_user(goal_id, uid)
     goal.auto_execute = True
     storage.update_goal(goal)
     return {"goal_id": goal_id, "auto_execute": True, "message": "Autonomous execution enabled."}
@@ -1200,8 +1030,8 @@ async def enable_auto_execute(goal_id: int, request: Request):
 @app.delete("/api/goals/{goal_id}/auto-execute")
 async def disable_auto_execute(goal_id: int, request: Request):
     """Disable autonomous execution for a goal."""
-    uid = _require_user(request)
-    goal = _get_goal_for_user(goal_id, uid)
+    uid = deps.require_user(request)
+    goal = deps.get_goal_for_user(goal_id, uid)
     goal.auto_execute = False
     storage.update_goal(goal)
     return {"goal_id": goal_id, "auto_execute": False, "message": "Autonomous execution disabled."}
@@ -1210,7 +1040,7 @@ async def disable_auto_execute(goal_id: int, request: Request):
 @app.get("/api/auto-execute/status")
 async def auto_execute_status(request: Request):
     """Get the status of the autonomous execution loop and pending tasks."""
-    _require_user(request)
+    deps.require_user(request)
     pending = storage.list_auto_execute_tasks()
     return {
         "loop_enabled": config.AUTONOMOUS_EXECUTION_ENABLED,
@@ -1234,8 +1064,8 @@ async def deploy_task(task_id: int, request: Request):
     (Vercel, Railway, Render) and deploys via their API.
     Requires a matching API credential registered via POST /api/credentials.
     """
-    uid = _require_user(request)
-    task = _get_task_for_user(task_id, uid)
+    uid = deps.require_user(request)
+    task = deps.get_task_for_user(task_id, uid)
     credentials = storage.list_credentials(user_id=uid)
     plan = deployer.generate_deployment_plan(task, credentials)
 
@@ -1262,23 +1092,23 @@ async def deploy_task(task_id: int, request: Request):
 @app.get("/api/goals/{goal_id}/deployments")
 async def list_goal_deployments(goal_id: int, request: Request):
     """List all deployments for a goal."""
-    uid = _require_user(request)
-    _get_goal_for_user(goal_id, uid)
+    uid = deps.require_user(request)
+    deps.get_goal_for_user(goal_id, uid)
     return storage.list_deployments(goal_id)
 
 
 @app.get("/api/deployments/{deploy_id}/health")
 async def check_deployment_health(deploy_id: int, request: Request):
     """Run a health check on a deployment."""
-    _require_user(request)
+    deps.require_user(request)
     return deployer.monitor_deployment(deploy_id)
 
 
 @app.get("/api/goals/{goal_id}/deployments/health")
 async def check_all_deployments_health(goal_id: int, request: Request):
     """Run health checks on all active deployments for a goal."""
-    uid = _require_user(request)
-    _get_goal_for_user(goal_id, uid)
+    uid = deps.require_user(request)
+    deps.get_goal_for_user(goal_id, uid)
     return deployer.monitor_all_deployments(goal_id)
 
 
@@ -1295,8 +1125,8 @@ async def provision_task_service(task_id: int, request: Request):
     sign up via browser automation. Without Playwright, returns
     step-by-step manual instructions.
     """
-    uid = _require_user(request)
-    task = _get_task_for_user(task_id, uid)
+    uid = deps.require_user(request)
+    task = deps.get_task_for_user(task_id, uid)
     result = provisioning.provision_service(task)
     return {"task_id": task_id, **result}
 
@@ -1304,15 +1134,15 @@ async def provision_task_service(task_id: int, request: Request):
 @app.get("/api/provision/services")
 async def list_provisionable_services(request: Request):
     """List all services that can be auto-provisioned."""
-    _require_user(request)
+    deps.require_user(request)
     return provisioning.list_provisionable_services()
 
 
 @app.get("/api/tasks/{task_id}/provisioning-logs")
 async def get_provisioning_logs(task_id: int, request: Request):
     """Get provisioning attempt logs for a task."""
-    uid = _require_user(request)
-    _get_task_for_user(task_id, uid)
+    uid = deps.require_user(request)
+    deps.get_task_for_user(task_id, uid)
     return storage.list_provisioning_logs(task_id)
 
 
@@ -1330,7 +1160,7 @@ async def discover_services(request: Request, q: Optional[str] = Query(default=N
     Pass ?q=<goal text> to discover services for a specific goal,
     or omit to discover based on the user's existing goals.
     """
-    uid = _get_user_id(request)
+    uid = deps.get_user_id(request)
     if q:
         return _discovery.discover_for_goal(q)
     if uid:
@@ -1341,7 +1171,7 @@ async def discover_services(request: Request, q: Optional[str] = Query(default=N
 @app.get("/api/discover/services/ai")
 async def ai_discover_services(request: Request, q: str = Query(...)):
     """Use AI to discover new tools/services for a goal (requires AI key)."""
-    _require_user(request)
+    deps.require_user(request)
     return _discovery.ai_discover_services(q)
 
 
@@ -1363,7 +1193,7 @@ async def list_discovery_catalog():
 @app.post("/api/discover/record", status_code=201)
 async def record_discovered_service(request: Request):
     """Record a newly discovered service for future recommendations."""
-    _require_user(request)
+    deps.require_user(request)
     body = await request.json()
     return _discovery.record_discovery(
         service_name=body.get("service_name", ""),
@@ -1384,7 +1214,7 @@ async def record_discovered_service(request: Request):
 @app.get("/api/users/me/behaviors")
 async def list_user_behaviors(request: Request, behavior_type: Optional[str] = Query(default=None)):
     """List behavior patterns detected for the current user."""
-    uid = _require_user(request)
+    uid = deps.require_user(request)
     return storage.list_user_behaviors(uid, behavior_type)
 
 
@@ -1397,7 +1227,7 @@ async def detect_abandonment(request: Request):
     - Tasks stuck in 'in_progress' for 2+ days
     - High skip rates indicating discomfort
     """
-    uid = _require_user(request)
+    uid = deps.require_user(request)
     goals = storage.list_goals(user_id=uid)
     stalled: list[dict] = []
     now = datetime.now(timezone.utc)
@@ -1464,14 +1294,14 @@ async def detect_abandonment(request: Request):
 async def get_agent_memory(agent_type: str, request: Request,
                            goal_type: Optional[str] = Query(default=None)):
     """Get persistent memories for an agent."""
-    _require_user(request)
+    deps.require_user(request)
     return storage.list_agent_memories(agent_type, goal_type or "")
 
 
 @app.post("/api/agents/memory", status_code=201)
 async def store_agent_memory(request: Request):
     """Store a memory for an agent (what worked, what didn't)."""
-    _require_user(request)
+    deps.require_user(request)
     body = await request.json()
     return storage.create_agent_memory(
         agent_type=body.get("agent_type", "coordinator"),
@@ -1494,7 +1324,7 @@ async def list_knowledge_paths(request: Request,
 
     Returns proven paths ranked by reuse count, along with common deviations.
     """
-    _require_user(request)
+    deps.require_user(request)
     try:
         paths = storage.list_success_paths(goal_type=goal_type) if goal_type else storage.list_success_paths()
     except Exception:
@@ -1535,7 +1365,7 @@ async def recommend_path(goal_type: str, request: Request):
     Returns the most-reused success path for this goal type, effectively
     encoding the experience of many users into a recommended plan.
     """
-    _require_user(request)
+    deps.require_user(request)
     try:
         paths = storage.list_success_paths(goal_type=goal_type)
     except Exception:
@@ -1572,8 +1402,8 @@ async def recommend_path(goal_type: str, request: Request):
 @app.post("/api/goals/{goal_id}/collaborators")
 async def add_goal_collaborator(goal_id: int, request: Request):
     """Add a collaborator to a goal."""
-    uid = _require_user(request)
-    _check_api_rate_limit(request)
+    uid = deps.require_user(request)
+    deps.check_api_rate_limit(request)
     goal = storage.get_goal(goal_id)
     if not goal or goal.user_id != uid:
         raise HTTPException(status_code=404, detail="Goal not found")
@@ -1592,7 +1422,7 @@ async def add_goal_collaborator(goal_id: int, request: Request):
 @app.get("/api/goals/{goal_id}/collaborators")
 async def list_goal_collaborators(goal_id: int, request: Request):
     """List collaborators for a goal."""
-    uid = _require_user(request)
+    uid = deps.require_user(request)
     goal = storage.get_goal(goal_id)
     if not goal or goal.user_id != uid:
         raise HTTPException(status_code=404, detail="Goal not found")
@@ -1602,7 +1432,7 @@ async def list_goal_collaborators(goal_id: int, request: Request):
 @app.delete("/api/goals/{goal_id}/collaborators/{collab_user_id}")
 async def remove_goal_collaborator(goal_id: int, collab_user_id: int, request: Request):
     """Remove a collaborator from a goal."""
-    uid = _require_user(request)
+    uid = deps.require_user(request)
     goal = storage.get_goal(goal_id)
     if not goal or goal.user_id != uid:
         raise HTTPException(status_code=404, detail="Goal not found")
@@ -1617,8 +1447,8 @@ async def remove_goal_collaborator(goal_id: int, collab_user_id: int, request: R
 @app.post("/api/goals/{goal_id}/tasks/bulk")
 async def bulk_task_operations(goal_id: int, request: Request):
     """Batch update/delete tasks."""
-    uid = _require_user(request)
-    _check_api_rate_limit(request)
+    uid = deps.require_user(request)
+    deps.check_api_rate_limit(request)
     goal = storage.get_goal(goal_id)
     if not goal or goal.user_id != uid:
         raise HTTPException(status_code=404, detail="Goal not found")
@@ -1659,7 +1489,7 @@ async def bulk_task_operations(goal_id: int, request: Request):
 @app.post("/api/goals/{goal_id}/snapshots")
 async def capture_goal_snapshot(goal_id: int, request: Request):
     """Capture a progress snapshot for a goal."""
-    uid = _require_user(request)
+    uid = deps.require_user(request)
     goal = storage.get_goal(goal_id)
     if not goal or goal.user_id != uid:
         raise HTTPException(status_code=404, detail="Goal not found")
@@ -1670,7 +1500,7 @@ async def capture_goal_snapshot(goal_id: int, request: Request):
 @app.get("/api/goals/{goal_id}/snapshots")
 async def list_goal_snapshots(goal_id: int, request: Request):
     """List progress snapshots for a goal."""
-    uid = _require_user(request)
+    uid = deps.require_user(request)
     goal = storage.get_goal(goal_id)
     if not goal or goal.user_id != uid:
         raise HTTPException(status_code=404, detail="Goal not found")
@@ -1683,7 +1513,7 @@ async def list_goal_snapshots(goal_id: int, request: Request):
 @app.put("/api/tasks/{task_id}/priority")
 async def set_task_priority(task_id: int, request: Request):
     """Set priority on a task (stored as a tag)."""
-    uid = _require_user(request)
+    uid = deps.require_user(request)
     task = storage.get_task(task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
@@ -1704,7 +1534,7 @@ async def set_task_priority(task_id: int, request: Request):
 @app.get("/api/goals/{goal_id}/tasks/by-priority")
 async def list_tasks_by_priority(goal_id: int, request: Request):
     """List tasks grouped by priority level."""
-    uid = _require_user(request)
+    uid = deps.require_user(request)
     goal = storage.get_goal(goal_id)
     if not goal or goal.user_id != uid:
         raise HTTPException(status_code=404, detail="Goal not found")
@@ -1730,14 +1560,14 @@ async def list_tasks_by_priority(goal_id: int, request: Request):
 @app.get("/api/users/me/notifications/preferences")
 async def get_notification_preferences(request: Request):
     """Get notification preferences for current user."""
-    uid = _require_user(request)
+    uid = deps.require_user(request)
     return [p.to_dict() for p in storage.list_notification_preferences(uid)]
 
 
 @app.put("/api/users/me/notifications/preferences")
 async def set_notification_preference_endpoint(request: Request):
     """Set a notification preference."""
-    uid = _require_user(request)
+    uid = deps.require_user(request)
     body = await request.json()
     pref = NotificationPreference(
         user_id=uid,
@@ -1758,8 +1588,8 @@ import secrets  # noqa: E402
 @app.post("/api/users/me/api-keys")
 async def create_api_key(request: Request):
     """Create a personal API key."""
-    uid = _require_user(request)
-    _check_api_rate_limit(request)
+    uid = deps.require_user(request)
+    deps.check_api_rate_limit(request)
     body = await request.json()
     name = body.get("name", "").strip()
     if not name:
@@ -1777,14 +1607,14 @@ async def create_api_key(request: Request):
 @app.get("/api/users/me/api-keys")
 async def list_api_keys(request: Request):
     """List personal API keys."""
-    uid = _require_user(request)
+    uid = deps.require_user(request)
     return [k.to_dict() for k in storage.list_personal_api_keys(uid)]
 
 
 @app.delete("/api/users/me/api-keys/{key_id}")
 async def delete_api_key(key_id: int, request: Request):
     """Revoke a personal API key."""
-    uid = _require_user(request)
+    uid = deps.require_user(request)
     storage.delete_personal_api_key(key_id, uid)
     return {"deleted": True}
 
@@ -1798,8 +1628,8 @@ async def delete_api_key(key_id: int, request: Request):
 @app.post("/api/tasks/{task_id}/blockers")
 async def add_task_blocker(task_id: int, request: Request):
     """Add a blocker to a task."""
-    uid = _require_user(request)
-    _check_api_rate_limit(request)
+    uid = deps.require_user(request)
+    deps.check_api_rate_limit(request)
     task = storage.get_task(task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
@@ -1816,14 +1646,14 @@ async def add_task_blocker(task_id: int, request: Request):
 @app.get("/api/tasks/{task_id}/blockers")
 async def list_task_blockers_endpoint(task_id: int, request: Request, status: Optional[str] = None):
     """List blockers for a task."""
-    uid = _require_user(request)
+    uid = deps.require_user(request)
     return [b.to_dict() for b in storage.list_task_blockers(task_id, status=status)]
 
 
 @app.post("/api/blockers/{blocker_id}/resolve")
 async def resolve_blocker(blocker_id: int, request: Request):
     """Resolve a task blocker."""
-    uid = _require_user(request)
+    uid = deps.require_user(request)
     blocker = storage.resolve_task_blocker(blocker_id)
     if not blocker:
         raise HTTPException(status_code=404, detail="Blocker not found")
@@ -1839,8 +1669,8 @@ async def list_activity_endpoint(request: Request,
                                  workspace_id: Optional[int] = Query(None),
                                  limit: int = Query(50)):
     """List activity feed entries."""
-    uid = _require_user(request)
-    _check_api_rate_limit(request)
+    uid = deps.require_user(request)
+    deps.check_api_rate_limit(request)
     return [e.to_dict() for e in storage.list_activity_feed(
         user_id=uid, goal_id=goal_id, workspace_id=workspace_id, limit=limit,
     )]
@@ -1891,8 +1721,8 @@ class _PrefixMiddleware:
 @app.post("/api/auth/2fa/setup")
 async def setup_2fa(request: Request):
     """Generate TOTP secret and backup codes for 2FA setup."""
-    _check_api_rate_limit(request)
-    uid = _require_user(request)
+    deps.check_api_rate_limit(request)
+    uid = deps.require_user(request)
     from teb import totp as _totp  # noqa: E402
     existing = storage.get_two_factor_config(uid)
     if existing and existing.is_enabled:
@@ -1913,8 +1743,8 @@ async def setup_2fa(request: Request):
 @app.post("/api/auth/2fa/verify")
 async def verify_2fa(request: Request):
     """Verify TOTP code and enable 2FA."""
-    _check_api_rate_limit(request)
-    uid = _require_user(request)
+    deps.check_api_rate_limit(request)
+    uid = deps.require_user(request)
     body = await request.json()
     code = body.get("code", "")
     from teb import totp as _totp  # noqa: E402
@@ -1931,8 +1761,8 @@ async def verify_2fa(request: Request):
 @app.post("/api/auth/2fa/disable")
 async def disable_2fa(request: Request):
     """Disable 2FA (requires current TOTP code)."""
-    _check_api_rate_limit(request)
-    uid = _require_user(request)
+    deps.check_api_rate_limit(request)
+    uid = deps.require_user(request)
     body = await request.json()
     code = body.get("code", "")
     from teb import totp as _totp  # noqa: E402
@@ -1948,7 +1778,7 @@ async def disable_2fa(request: Request):
 @app.get("/api/auth/2fa/status")
 async def get_2fa_status(request: Request):
     """Check 2FA status."""
-    uid = _require_user(request)
+    uid = deps.require_user(request)
     cfg = storage.get_two_factor_config(uid)
     return {"enabled": bool(cfg and cfg.is_enabled)}
 
@@ -1956,7 +1786,7 @@ async def get_2fa_status(request: Request):
 @app.get("/api/auth/sessions")
 async def list_sessions(request: Request):
     """List active sessions."""
-    uid = _require_user(request)
+    uid = deps.require_user(request)
     sessions = storage.list_user_sessions(uid)
     return {"sessions": [s.to_dict() for s in sessions]}
 
@@ -1964,7 +1794,7 @@ async def list_sessions(request: Request):
 @app.delete("/api/auth/sessions/{session_id}")
 async def revoke_session_endpoint(session_id: int, request: Request):
     """Revoke a specific session."""
-    uid = _require_user(request)
+    uid = deps.require_user(request)
     ok = storage.revoke_session(session_id, uid)
     if not ok:
         raise HTTPException(404, "Session not found")
@@ -1974,7 +1804,7 @@ async def revoke_session_endpoint(session_id: int, request: Request):
 @app.delete("/api/auth/sessions")
 async def revoke_all_sessions_endpoint(request: Request):
     """Revoke all other sessions."""
-    uid = _require_user(request)
+    uid = deps.require_user(request)
     count = storage.revoke_all_sessions(uid)
     return {"revoked_count": count}
 
@@ -1988,8 +1818,8 @@ async def revoke_all_sessions_endpoint(request: Request):
 @app.post("/api/goals/{goal_id}/share", status_code=201)
 async def share_goal_endpoint(goal_id: int, request: Request):
     """Share a goal with another user."""
-    uid = _require_user(request)
-    _get_goal_for_user(goal_id, uid)
+    uid = deps.require_user(request)
+    deps.get_goal_for_user(goal_id, uid)
     body = await request.json()
     target_user_id = body.get("user_id")
     if not target_user_id:
@@ -2013,15 +1843,15 @@ async def share_goal_endpoint(goal_id: int, request: Request):
 @app.get("/api/goals/{goal_id}/collaborators")
 async def list_goal_collaborators_endpoint(goal_id: int, request: Request):
     """List collaborators on a goal."""
-    uid = _require_user(request)
+    uid = deps.require_user(request)
     return [c.to_dict() for c in storage.list_goal_collaborators(goal_id)]
 
 
 @app.delete("/api/goals/{goal_id}/share/{target_user_id}")
 async def unshare_goal_endpoint(goal_id: int, target_user_id: int, request: Request):
     """Remove a collaborator from a goal."""
-    uid = _require_user(request)
-    _get_goal_for_user(goal_id, uid)
+    uid = deps.require_user(request)
+    deps.get_goal_for_user(goal_id, uid)
     removed = storage.unshare_goal(goal_id, target_user_id)
     if not removed:
         raise HTTPException(status_code=404, detail="Collaborator not found")
@@ -2033,8 +1863,8 @@ async def unshare_goal_endpoint(goal_id: int, target_user_id: int, request: Requ
 @app.put("/api/tasks/{task_id}/assign")
 async def assign_task_endpoint(task_id: int, request: Request):
     """Assign a task to a user."""
-    uid = _require_user(request)
-    _get_task_for_user(task_id, uid)
+    uid = deps.require_user(request)
+    deps.get_task_for_user(task_id, uid)
     body = await request.json()
     assignee_id = body.get("user_id")
     task = storage.assign_task(task_id, assignee_id)
@@ -2058,7 +1888,7 @@ async def assign_task_endpoint(task_id: int, request: Request):
 @app.get("/api/users/me/assigned-tasks")
 async def list_my_assigned_tasks(request: Request):
     """List tasks assigned to the current user."""
-    uid = _require_user(request)
+    uid = deps.require_user(request)
     tasks = storage.list_tasks_assigned_to(uid)
     return [t.to_dict() for t in tasks]
 
@@ -2074,7 +1904,7 @@ _PRESENCE_TTL = 60  # seconds
 @app.post("/api/presence/heartbeat")
 async def presence_heartbeat(request: Request):
     """Update presence for the current user on a resource."""
-    uid = _require_user(request)
+    uid = deps.require_user(request)
     body = await request.json()
     resource_type = body.get("resource_type", "")
     resource_id = body.get("resource_id", "")
@@ -2093,7 +1923,7 @@ async def presence_heartbeat(request: Request):
 @app.get("/api/presence/{resource_type}/{resource_id}")
 async def get_presence(resource_type: str, resource_id: str, request: Request):
     """Get active users on a resource."""
-    _require_user(request)
+    deps.require_user(request)
     key = f"{resource_type}:{resource_id}"
     now = _time_module.time()
     users = _presence_store.get(key, {})
@@ -2110,8 +1940,8 @@ async def get_presence(resource_type: str, resource_id: str, request: Request):
 @app.get("/api/integrations/rate-limits", tags=["integrations"])
 async def get_rate_limit_usage(request: Request):
     """Get API rate limit usage for the current user."""
-    uid = _require_user(request)
-    _check_api_rate_limit(request)
+    uid = deps.require_user(request)
+    deps.check_api_rate_limit(request)
     usage = storage.get_api_rate_limit_usage(uid)
     return usage
 
