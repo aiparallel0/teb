@@ -22,7 +22,13 @@ def setup_test_db():
 
 @pytest.fixture(autouse=True)
 def fresh_db():
-    """Override conftest fresh_db — this module uses a session-scoped DB."""
+    """Override conftest fresh_db — this module uses a session-scoped DB.
+
+    We still need to reset rate limits between tests so that repeated
+    register/login calls from the ``_auth`` fixture don't trigger 429.
+    """
+    from teb.main import reset_rate_limits
+    reset_rate_limits()
     yield
 
 
