@@ -33,13 +33,13 @@ jobs:
           fi
 
       - name: Deploy via SSH
-        uses: appleboy/ssh-action@v1
+        uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2 # v1.2.5
         with:
           host: ${{ secrets.DEPLOY_HOST }}
           username: ${{ secrets.DEPLOY_USER }}
           key: ${{ secrets.DEPLOY_SSH_KEY }}
           script: |
-            set -e
+            set -eo pipefail
             cd /opt/teb
 
             echo "==> Cleaning local state..."
@@ -59,7 +59,7 @@ jobs:
 
             echo "==> Verifying health..."
             sleep 5
-            curl -sf http://localhost:8000/health | python3 -c '
+            curl -sf http://localhost:8000/health | python3 - <<'EOF'
 import sys, json
 d = json.load(sys.stdin)
 ai = d.get("components", {}).get("ai", {})
@@ -68,9 +68,13 @@ if ai.get("status") == "unconfigured":
     print("WARNING: AI provider is NOT configured — teb is in template-only mode!")
     print("Set ANTHROPIC_API_KEY or OPENAI_API_KEY in /opt/teb/.env")
 sys.exit(0 if d["status"] in ("healthy", "degraded") else 1)
-'
+EOF
 
-            AI_STATUS=$(curl -sf http://localhost:8000/health | python3 -c "import sys,json; print(json.load(sys.stdin).get('ai_active', False))")
+            AI_STATUS=$(curl -sf http://localhost:8000/health | python3 - <<'EOF'
+import sys, json
+print(json.load(sys.stdin).get('ai_active', False))
+EOF
+)
             if [ "$AI_STATUS" != "True" ]; then
               echo "::warning::AI provider is NOT configured. teb is running in template-only mode. Set ANTHROPIC_API_KEY or OPENAI_API_KEY in /opt/teb/.env"
             fi
