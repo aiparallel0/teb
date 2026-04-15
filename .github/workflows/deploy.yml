@@ -61,16 +61,16 @@ jobs:
 
             echo "==> Verifying health..."
             sleep 5
-            curl -sf http://localhost:8000/health | python3 -c "
+            curl -sf http://localhost:8000/health | python3 -c '
 import sys, json
 d = json.load(sys.stdin)
-ai = d.get('components', {}).get('ai', {})
-print(f'Status: {d[\"status\"]}, AI: {ai.get(\"provider\", \"none\")}')
-if ai.get('status') == 'unconfigured':
-    print('WARNING: AI provider is NOT configured — teb is in template-only mode!')
-    print('Set ANTHROPIC_API_KEY or OPENAI_API_KEY in /opt/teb/.env')
-sys.exit(0 if d['status'] in ('healthy', 'degraded') else 1)
-"
+ai = d.get("components", {}).get("ai", {})
+print("Status: {}, AI: {}".format(d["status"], ai.get("provider", "none")))
+if ai.get("status") == "unconfigured":
+    print("WARNING: AI provider is NOT configured — teb is in template-only mode!")
+    print("Set ANTHROPIC_API_KEY or OPENAI_API_KEY in /opt/teb/.env")
+sys.exit(0 if d["status"] in ("healthy", "degraded") else 1)
+'
 
             AI_STATUS=$(curl -sf http://localhost:8000/health | python3 -c "import sys,json; print(json.load(sys.stdin).get('ai_active', False))")
             if [ "$AI_STATUS" != "True" ]; then
