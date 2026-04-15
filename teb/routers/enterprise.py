@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import time
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
@@ -63,7 +64,7 @@ async def get_sso_config(request: Request, org_id: int = Query(default=1)):
 
 @router.post("/api/auth/sso/initiate", tags=["enterprise"])
 async def sso_initiate(request: Request):
-    _check_rate_limit(request)
+    deps.check_api_rate_limit(request)
     body = await request.json()
     org_id = body.get("org_id", 1)
     cfg = storage.get_sso_config(org_id)
@@ -77,7 +78,7 @@ async def sso_initiate(request: Request):
 
 @router.post("/api/auth/sso/callback", tags=["enterprise"])
 async def sso_callback(request: Request):
-    _check_rate_limit(request)
+    deps.check_api_rate_limit(request)
     body = await request.json()
     org_id = body.get("org_id", 1)
     saml_response = body.get("SAMLResponse", "")
@@ -482,6 +483,7 @@ async def admin_metrics(request: Request):
     except Exception:
         pass
 
+    from teb.routers.health import _APP_START_TIME
     uptime = round(time.monotonic() - _APP_START_TIME, 1)
 
     return {
@@ -503,7 +505,6 @@ async def admin_metrics(request: Request):
             "edges": graph_stats.get("edges", 0),
             "observations": graph_stats.get("total_observations", 0),
         },
-        "request_metrics": _metrics,
     }
 
 

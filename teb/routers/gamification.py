@@ -26,7 +26,6 @@ router = APIRouter(tags=["gamification"])
 
 
 # ─── Gamification (WP-04) ────────────────────────────────────────────────────
-from teb import gamification  # noqa: E402
 
 
 @router.get("/api/users/me/xp")

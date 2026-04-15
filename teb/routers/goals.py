@@ -121,7 +121,7 @@ async def list_goals(
     user_id = deps.get_user_id(request)
     all_goals = [g.to_dict() for g in storage.list_goals(user_id=user_id)]
     if page is not None or per_page is not None:
-        return deps.paginate(all_goals, page=page or 1, per_page=per_page or _DEFAULT_PAGE_SIZE)
+        return deps.paginate(all_goals, page=page or 1, per_page=per_page or deps._DEFAULT_PAGE_SIZE)
     return all_goals
 
 

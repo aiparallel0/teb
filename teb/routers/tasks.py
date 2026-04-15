@@ -16,7 +16,7 @@ from teb import storage
 from teb.routers import deps
 from teb import decomposer
 from teb import messaging
-from teb import executor, decomposer
+from teb import executor
 from teb import dag
 from teb.models import (
     ExecutionLog, Task, TaskArtifact, TaskComment,
@@ -97,7 +97,7 @@ async def list_tasks(
         deps.get_goal_for_user(goal_id, uid)  # ownership check
     all_tasks = [t.to_dict() for t in storage.list_tasks(goal_id=goal_id, status=status)]
     if page is not None or per_page is not None:
-        return deps.paginate(all_tasks, page=page or 1, per_page=per_page or _DEFAULT_PAGE_SIZE)
+        return deps.paginate(all_tasks, page=page or 1, per_page=per_page or deps._DEFAULT_PAGE_SIZE)
     return all_tasks
 
 
