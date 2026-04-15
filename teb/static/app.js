@@ -531,9 +531,19 @@ function initSidebar() {
     }
   });
 
-  // Close sidebar on mobile when clicking a link
+  // Close sidebar on mobile when clicking a link and intercept fragment-only
+  // href links (e.g. href="#/kanban") so the browser uses Router.navigate()
+  // instead of resolving the href against <base href="/teb/">.  Without this,
+  // clicking a sidebar link while at path /teb (no trailing slash) would
+  // produce a different URL (/teb/#/kanban vs /teb#/kanban) and trigger a full
+  // page reload that resets all JavaScript state.
   document.querySelectorAll('.sidebar-link, .sidebar-goal-link').forEach(el => {
-    el.addEventListener('click', () => {
+    el.addEventListener('click', (e) => {
+      const href = el.getAttribute('href');
+      if (href && href.startsWith('#')) {
+        e.preventDefault();
+        Router.navigate(href);
+      }
       const sidebar = document.getElementById('sidebar');
       if (sidebar) { sidebar.classList.remove('mobile-open', 'sidebar--open'); }
       const overlay = document.querySelector('.sidebar-overlay');

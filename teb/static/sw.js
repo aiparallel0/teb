@@ -1,10 +1,15 @@
 // teb Service Worker — offline support + API caching + offline queue
 const CACHE_NAME = 'teb-v4';
+// Resolve static asset URLs from the SW registration scope so they are
+// correct regardless of which sub-path the SW script lives at.
+// Using bare relative paths like './static/style.css' would resolve
+// relative to the SW script URL (e.g. /teb/static/sw.js), producing
+// double-nested paths such as /teb/static/static/style.css which 404.
 const STATIC_ASSETS = [
-  './',
-  './static/style.css',
-  './static/app.js',
-  './static/manifest.json',
+  self.registration.scope,                               // e.g. https://host/teb/
+  self.registration.scope + 'static/style.css',
+  self.registration.scope + 'static/app.js',
+  self.registration.scope + 'static/manifest.json',
 ];
 
 const DB_NAME = 'teb-offline';
@@ -127,9 +132,10 @@ async function replayQueue() {
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => cache.addAll(STATIC_ASSETS))
+    caches.open(CACHE_NAME)
+      .then((cache) => cache.addAll(STATIC_ASSETS))
+      .then(() => self.skipWaiting())  // only activate after successful cache
   );
-  self.skipWaiting();
 });
 
 // ─── Activate — clean old caches ─────────────────────────────────────────────
@@ -152,6 +158,16 @@ self.addEventListener('fetch', (event) => {
 
   // API requests
   if (url.pathname.includes('/api/')) {
+    // Auth requests must never be queued — failing offline should surface
+    // immediately to the UI so it can show a real error.  Queuing auth
+    // requests and returning a synthetic 202 causes the registration/login
+    // handler to store `undefined` as the JWT token, which makes every
+    // subsequent authenticated API call return 401 while the UI shows the
+    // user as logged-in.
+    if (url.pathname.includes('/api/auth/')) {
+      return; // fall through to default browser fetch behaviour
+    }
+
     // Mutating requests (POST/PATCH/PUT/DELETE): queue when offline
     if (event.request.method !== 'GET') {
       event.respondWith(

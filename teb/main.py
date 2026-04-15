@@ -1714,6 +1714,14 @@ class _PrefixMiddleware:
         await self._inner(scope, receive, send)
 
 
+# Wire up the production ASGI entry-point.  Uvicorn is pointed at
+# ``teb.main:asgi_app`` in the Dockerfile.  When BASE_PATH is set (e.g.
+# "/teb"), the middleware strips the prefix before the inner app sees it.
+# Tests import ``app`` directly (BASE_PATH defaults to ""), so they are
+# unaffected.
+asgi_app = _PrefixMiddleware(app, config.BASE_PATH) if config.BASE_PATH else app
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # Phase 6 — Enterprise: 2FA & Session Management
 # ═══════════════════════════════════════════════════════════════════════════════
