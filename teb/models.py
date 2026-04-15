@@ -5,8 +5,99 @@ from typing import Any, Dict, List, Optional
 
 # ─── User / Auth ─────────────────────────────────────────────────────────────
 
+import dataclasses
+import json as _json_mod
+from datetime import date
+
+
+class TebModel:
+    """Base mixin for all teb dataclasses. Provides auto-serialization.
+
+    Subclasses can customise serialisation via class-level attributes:
+
+    * ``_exclude_fields``       – field names omitted from ``to_dict()``
+    * ``_sensitive_fields``     – field names replaced by ``{name}_set: bool``
+    * ``_json_fields``          – ``{field: (output_key, empty_default)}``
+    * ``_tag_fields``           – comma-separated string fields → lists
+    * ``_empty_to_none_fields`` – empty strings become ``None``
+    """
+
+    _exclude_fields: frozenset = frozenset()
+    _sensitive_fields: frozenset = frozenset()
+    _json_fields: dict = {}
+    _tag_fields: frozenset = frozenset()
+    _empty_to_none_fields: frozenset = frozenset()
+
+    def to_dict(self) -> dict:
+        result: dict = {}
+        for f in dataclasses.fields(self):
+            name = f.name
+            # JSON fields take priority (they may rename the key)
+            if name in self._json_fields:
+                out_key, empty_default = self._json_fields[name]
+                val = getattr(self, name)
+                if val:
+                    try:
+                        result[out_key] = _json_mod.loads(val)
+                    except (ValueError, TypeError):
+                        result[out_key] = val
+                else:
+                    result[out_key] = type(empty_default)()  # fresh copy
+                continue
+            if name in self._exclude_fields:
+                continue
+            if name in self._sensitive_fields:
+                result[f"{name}_set"] = bool(getattr(self, name))
+                continue
+
+            val = getattr(self, name)
+
+            if name in self._tag_fields:
+                result[name] = (
+                    [t.strip() for t in val.split(",") if t.strip()] if val else []
+                )
+                continue
+
+            if name in self._empty_to_none_fields:
+                result[name] = val if val else None
+                continue
+
+            if isinstance(val, datetime):
+                result[name] = val.isoformat()
+            elif isinstance(val, date) and not isinstance(val, datetime):
+                result[name] = val.isoformat()
+            else:
+                result[name] = val
+
+        return result
+
+    @classmethod
+    def from_row(cls, row) -> "TebModel":
+        """Create instance from ``sqlite3.Row`` with type coercion."""
+        field_map = {f.name: f for f in dataclasses.fields(cls)}
+        available = set(row.keys())
+        kwargs: dict = {}
+        for name, fld in field_map.items():
+            if name not in available:
+                continue
+            val = row[name]
+            type_str = str(fld.type)
+            if fld.type is bool or type_str == "bool":
+                val = bool(val) if val is not None else False
+            elif "datetime" in type_str.lower():
+                if val is not None and isinstance(val, str):
+                    try:
+                        val = datetime.fromisoformat(val)
+                    except ValueError:
+                        pass
+            kwargs[name] = val
+        return cls(**kwargs)
+
+
 @dataclass
-class User:
+class User(TebModel):
+    _exclude_fields = frozenset({'password_hash', 'failed_login_attempts', 'locked_until'})
+
     email: str
     password_hash: str = ""
     id: Optional[int] = None
@@ -16,18 +107,12 @@ class User:
     locked_until: Optional[datetime] = None
     created_at: Optional[datetime] = None
 
-    def to_dict(self) -> dict:
-        return {
-            "id": self.id,
-            "email": self.email,
-            "role": self.role,
-            "email_verified": self.email_verified,
-            "created_at": self.created_at.isoformat() if self.created_at else None,
-        }
 
 
 @dataclass
-class Goal:
+class Goal(TebModel):
+    _tag_fields = frozenset({'tags'})
+
     title: str
     description: str
     id: Optional[int] = None
@@ -41,25 +126,14 @@ class Goal:
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
-    def to_dict(self) -> dict:
-        return {
-            "id": self.id,
-            "user_id": self.user_id,
-            "parent_goal_id": self.parent_goal_id,
-            "title": self.title,
-            "description": self.description,
-            "status": self.status,
-            "answers": self.answers,
-            "auto_execute": self.auto_execute,
-            "tags": [t.strip() for t in self.tags.split(",") if t.strip()] if self.tags else [],
-            "version": self.version,
-            "created_at": self.created_at.isoformat() if self.created_at else None,
-            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
-        }
 
 
 @dataclass
-class Task:
+class Task(TebModel):
+    _json_fields = {'depends_on': ('depends_on', [])}
+    _tag_fields = frozenset({'tags'})
+    _empty_to_none_fields = frozenset({'due_date'})
+
     goal_id: int
     title: str
     description: str
@@ -77,31 +151,14 @@ class Task:
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
-    def to_dict(self) -> dict:
-        import json as _json
-        return {
-            "id": self.id,
-            "goal_id": self.goal_id,
-            "parent_id": self.parent_id,
-            "title": self.title,
-            "description": self.description,
-            "estimated_minutes": self.estimated_minutes,
-            "status": self.status,
-            "order_index": self.order_index,
-            "due_date": self.due_date if self.due_date else None,
-            "depends_on": _json.loads(self.depends_on) if self.depends_on else [],
-            "tags": [t.strip() for t in self.tags.split(",") if t.strip()] if self.tags else [],
-            "assigned_to": self.assigned_to,
-            "priority": self.priority,
-            "version": self.version,
-            "created_at": self.created_at.isoformat() if self.created_at else None,
-            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
-        }
 
 
 @dataclass
-class ApiCredential:
+class ApiCredential(TebModel):
     """An external API registered by the user for automated task execution."""
+    _exclude_fields = frozenset({'user_id'})
+    _sensitive_fields = frozenset({'auth_value'})
+
     name: str                          # human-readable name, e.g. "Namecheap", "Stripe"
     base_url: str                      # e.g. "https://api.namecheap.com"
     auth_header: str = "Authorization" # header name for auth
@@ -111,20 +168,10 @@ class ApiCredential:
     user_id: Optional[int] = None      # FK to users; None for legacy/unscoped credentials
     created_at: Optional[datetime] = None
 
-    def to_dict(self) -> dict:
-        return {
-            "id": self.id,
-            "name": self.name,
-            "base_url": self.base_url,
-            "auth_header": self.auth_header,
-            "auth_value_set": bool(self.auth_value),  # never expose the raw secret
-            "description": self.description,
-            "created_at": self.created_at.isoformat() if self.created_at else None,
-        }
 
 
 @dataclass
-class ExecutionLog:
+class ExecutionLog(TebModel):
     """A record of an automated action performed on behalf of the user."""
     task_id: int
     credential_id: Optional[int]       # which API credential was used (None for non-API actions)
@@ -135,23 +182,12 @@ class ExecutionLog:
     id: Optional[int] = None
     created_at: Optional[datetime] = None
 
-    def to_dict(self) -> dict:
-        return {
-            "id": self.id,
-            "task_id": self.task_id,
-            "credential_id": self.credential_id,
-            "action": self.action,
-            "request_summary": self.request_summary,
-            "response_summary": self.response_summary,
-            "status": self.status,
-            "created_at": self.created_at.isoformat() if self.created_at else None,
-        }
 
 
 # ─── Active Coaching Models ──────────────────────────────────────────────────
 
 @dataclass
-class CheckIn:
+class CheckIn(TebModel):
     """A daily check-in: what the user accomplished and any blockers."""
     goal_id: int
     done_summary: str = ""
@@ -161,20 +197,10 @@ class CheckIn:
     id: Optional[int] = None
     created_at: Optional[datetime] = None
 
-    def to_dict(self) -> dict:
-        return {
-            "id": self.id,
-            "goal_id": self.goal_id,
-            "done_summary": self.done_summary,
-            "blockers": self.blockers,
-            "mood": self.mood,
-            "feedback": self.feedback,
-            "created_at": self.created_at.isoformat() if self.created_at else None,
-        }
 
 
 @dataclass
-class OutcomeMetric:
+class OutcomeMetric(TebModel):
     """A measurable outcome metric attached to a goal (e.g. revenue earned)."""
     goal_id: int
     label: str
@@ -185,26 +211,18 @@ class OutcomeMetric:
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
+
     def to_dict(self) -> dict:
+        d = super().to_dict()
         if self.target_value > 0:
-            pct = min(100, round((self.current_value / self.target_value) * 100))
+            d["achievement_pct"] = min(100, round((self.current_value / self.target_value) * 100))
         else:
-            pct = 0
-        return {
-            "id": self.id,
-            "goal_id": self.goal_id,
-            "label": self.label,
-            "target_value": self.target_value,
-            "current_value": self.current_value,
-            "unit": self.unit,
-            "achievement_pct": pct,
-            "created_at": self.created_at.isoformat() if self.created_at else None,
-            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
-        }
+            d["achievement_pct"] = 0
+        return d
 
 
 @dataclass
-class NudgeEvent:
+class NudgeEvent(TebModel):
     """A nudge or alert triggered by stagnation detection."""
     goal_id: int
     nudge_type: str                    # stagnation | reminder | encouragement | blocker_help
@@ -213,22 +231,15 @@ class NudgeEvent:
     id: Optional[int] = None
     created_at: Optional[datetime] = None
 
-    def to_dict(self) -> dict:
-        return {
-            "id": self.id,
-            "goal_id": self.goal_id,
-            "nudge_type": self.nudge_type,
-            "message": self.message,
-            "acknowledged": self.acknowledged,
-            "created_at": self.created_at.isoformat() if self.created_at else None,
-        }
 
 
 # ─── Persistent User Profile ─────────────────────────────────────────────────
 
 @dataclass
-class UserProfile:
+class UserProfile(TebModel):
     """Persistent user profile that accumulates across goals."""
+    _exclude_fields = frozenset({'user_id'})
+
     id: Optional[int] = None
     user_id: Optional[int] = None     # FK to users; legacy profiles have None
     skills: str = ""                   # comma-separated list of skills
@@ -241,26 +252,15 @@ class UserProfile:
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
-    def to_dict(self) -> dict:
-        return {
-            "id": self.id,
-            "skills": self.skills,
-            "available_hours_per_day": self.available_hours_per_day,
-            "experience_level": self.experience_level,
-            "interests": self.interests,
-            "preferred_learning_style": self.preferred_learning_style,
-            "goals_completed": self.goals_completed,
-            "total_tasks_completed": self.total_tasks_completed,
-            "created_at": self.created_at.isoformat() if self.created_at else None,
-            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
-        }
 
 
 # ─── Knowledge Base ──────────────────────────────────────────────────────────
 
 @dataclass
-class SuccessPath:
+class SuccessPath(TebModel):
     """A recorded successful execution path that can be reused for similar goals."""
+    _json_fields = {'steps_json': ('steps', [])}
+
     goal_type: str                     # template name that succeeded
     steps_json: str = "[]"             # JSON array of step summaries
     outcome_summary: str = ""          # what was achieved
@@ -269,23 +269,12 @@ class SuccessPath:
     id: Optional[int] = None
     created_at: Optional[datetime] = None
 
-    def to_dict(self) -> dict:
-        import json
-        return {
-            "id": self.id,
-            "goal_type": self.goal_type,
-            "steps": json.loads(self.steps_json) if self.steps_json else [],
-            "outcome_summary": self.outcome_summary,
-            "source_goal_id": self.source_goal_id,
-            "times_reused": self.times_reused,
-            "created_at": self.created_at.isoformat() if self.created_at else None,
-        }
 
 
 # ─── Proactive Suggestions ───────────────────────────────────────────────────
 
 @dataclass
-class ProactiveSuggestion:
+class ProactiveSuggestion(TebModel):
     """An AI- or rule-generated suggestion for actions the user didn't think of."""
     goal_id: int
     suggestion: str
@@ -295,22 +284,12 @@ class ProactiveSuggestion:
     id: Optional[int] = None
     created_at: Optional[datetime] = None
 
-    def to_dict(self) -> dict:
-        return {
-            "id": self.id,
-            "goal_id": self.goal_id,
-            "suggestion": self.suggestion,
-            "rationale": self.rationale,
-            "category": self.category,
-            "status": self.status,
-            "created_at": self.created_at.isoformat() if self.created_at else None,
-        }
 
 
 # ─── Multi-Agent Delegation ─────────────────────────────────────────────────
 
 @dataclass
-class AgentHandoff:
+class AgentHandoff(TebModel):
     """A record of one agent delegating work to another in a goal's orchestration."""
     goal_id: int
     from_agent: str                    # agent type that delegated (e.g. "coordinator")
@@ -322,24 +301,12 @@ class AgentHandoff:
     id: Optional[int] = None
     created_at: Optional[datetime] = None
 
-    def to_dict(self) -> dict:
-        return {
-            "id": self.id,
-            "goal_id": self.goal_id,
-            "from_agent": self.from_agent,
-            "to_agent": self.to_agent,
-            "task_id": self.task_id,
-            "input_summary": self.input_summary,
-            "output_summary": self.output_summary,
-            "status": self.status,
-            "created_at": self.created_at.isoformat() if self.created_at else None,
-        }
 
 
 # ─── Agent Activity ─────────────────────────────────────────────────────────
 
 @dataclass
-class AgentActivity:
+class AgentActivity(TebModel):
     """A record of agent execution activity for a goal."""
     id: int
     goal_id: int
@@ -349,22 +316,12 @@ class AgentActivity:
     status: str  # "running" | "done" | "error"
     created_at: str
 
-    def to_dict(self) -> dict:
-        return {
-            "id": self.id,
-            "goal_id": self.goal_id,
-            "agent_type": self.agent_type,
-            "action": self.action,
-            "detail": self.detail,
-            "status": self.status,
-            "created_at": self.created_at,
-        }
 
 
 # ─── Agent Messages (inter-agent collaboration) ────────────────────────────
 
 @dataclass
-class AgentMessage:
+class AgentMessage(TebModel):
     """A message exchanged between agents during orchestration for deeper collaboration."""
     goal_id: int
     from_agent: str
@@ -375,23 +332,12 @@ class AgentMessage:
     id: Optional[int] = None
     created_at: Optional[datetime] = None
 
-    def to_dict(self) -> dict:
-        return {
-            "id": self.id,
-            "goal_id": self.goal_id,
-            "from_agent": self.from_agent,
-            "to_agent": self.to_agent,
-            "message_type": self.message_type,
-            "content": self.content,
-            "in_reply_to": self.in_reply_to,
-            "created_at": self.created_at.isoformat() if self.created_at else None,
-        }
 
 
 # ─── Browser Actions ────────────────────────────────────────────────────────
 
 @dataclass
-class BrowserAction:
+class BrowserAction(TebModel):
     """A record of a browser automation action performed on behalf of the user."""
     task_id: int
     action_type: str                   # navigate | click | type | extract | screenshot | wait
@@ -403,25 +349,15 @@ class BrowserAction:
     id: Optional[int] = None
     created_at: Optional[datetime] = None
 
-    def to_dict(self) -> dict:
-        return {
-            "id": self.id,
-            "task_id": self.task_id,
-            "action_type": self.action_type,
-            "target": self.target,
-            "value": self.value,
-            "status": self.status,
-            "error": self.error,
-            "screenshot_path": self.screenshot_path,
-            "created_at": self.created_at.isoformat() if self.created_at else None,
-        }
 
 
 # ─── Integration Registry ───────────────────────────────────────────────────
 
 @dataclass
-class Integration:
+class Integration(TebModel):
     """A pre-built integration with a known service (Stripe, Namecheap, etc.)."""
+    _json_fields = {'capabilities': ('capabilities', []), 'common_endpoints': ('common_endpoints', [])}
+
     service_name: str                  # e.g. "stripe", "namecheap", "vercel"
     category: str = "general"          # payment | hosting | domain | email | social | analytics | ai
     base_url: str = ""
@@ -433,26 +369,12 @@ class Integration:
     id: Optional[int] = None
     created_at: Optional[datetime] = None
 
-    def to_dict(self) -> dict:
-        import json as _json
-        return {
-            "id": self.id,
-            "service_name": self.service_name,
-            "category": self.category,
-            "base_url": self.base_url,
-            "auth_type": self.auth_type,
-            "auth_header": self.auth_header,
-            "docs_url": self.docs_url,
-            "capabilities": _json.loads(self.capabilities) if self.capabilities else [],
-            "common_endpoints": _json.loads(self.common_endpoints) if self.common_endpoints else [],
-            "created_at": self.created_at.isoformat() if self.created_at else None,
-        }
 
 
 # ─── Financial Execution ────────────────────────────────────────────────────
 
 @dataclass
-class SpendingBudget:
+class SpendingBudget(TebModel):
     """Budget configuration for autonomous financial execution."""
     goal_id: int
     daily_limit: float = 0.0           # max spend per day in dollars
@@ -467,27 +389,16 @@ class SpendingBudget:
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
+
     def to_dict(self) -> dict:
-        return {
-            "id": self.id,
-            "goal_id": self.goal_id,
-            "daily_limit": self.daily_limit,
-            "total_limit": self.total_limit,
-            "category": self.category,
-            "require_approval": self.require_approval,
-            "spent_today": self.spent_today,
-            "spent_total": self.spent_total,
-            "autopilot_enabled": self.autopilot_enabled,
-            "autopilot_threshold": self.autopilot_threshold,
-            "remaining_daily": max(0, self.daily_limit - self.spent_today),
-            "remaining_total": max(0, self.total_limit - self.spent_total),
-            "created_at": self.created_at.isoformat() if self.created_at else None,
-            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
-        }
+        d = super().to_dict()
+        d["remaining_daily"] = max(0, self.daily_limit - self.spent_today)
+        d["remaining_total"] = max(0, self.total_limit - self.spent_total)
+        return d
 
 
 @dataclass
-class SpendingRequest:
+class SpendingRequest(TebModel):
     """A request to spend money as part of task execution."""
     task_id: int
     budget_id: int
@@ -500,26 +411,15 @@ class SpendingRequest:
     id: Optional[int] = None
     created_at: Optional[datetime] = None
 
-    def to_dict(self) -> dict:
-        return {
-            "id": self.id,
-            "task_id": self.task_id,
-            "budget_id": self.budget_id,
-            "amount": self.amount,
-            "currency": self.currency,
-            "description": self.description,
-            "service": self.service,
-            "status": self.status,
-            "denial_reason": self.denial_reason,
-            "created_at": self.created_at.isoformat() if self.created_at else None,
-        }
 
 
 # ─── Messaging Configuration ────────────────────────────────────────────────
 
 @dataclass
-class MessagingConfig:
+class MessagingConfig(TebModel):
     """Configuration for external messaging channels (Telegram, webhooks)."""
+    _json_fields = {'config_json': ('config', {})}
+
     channel: str                       # telegram | webhook
     config_json: str = "{}"            # channel-specific config (bot token, chat id, webhook url, etc.)
     enabled: bool = True
@@ -532,27 +432,12 @@ class MessagingConfig:
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
-    def to_dict(self) -> dict:
-        import json as _json
-        return {
-            "id": self.id,
-            "channel": self.channel,
-            "config": _json.loads(self.config_json) if self.config_json else {},
-            "enabled": self.enabled,
-            "notify_nudges": self.notify_nudges,
-            "notify_tasks": self.notify_tasks,
-            "notify_spending": self.notify_spending,
-            "notify_checkins": self.notify_checkins,
-            "user_id": self.user_id,
-            "created_at": self.created_at.isoformat() if self.created_at else None,
-            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
-        }
 
 
 # ─── Goal Milestone ──────────────────────────────────────────────────────────
 
 @dataclass
-class Milestone:
+class Milestone(TebModel):
     """A measurable milestone within a goal hierarchy."""
     goal_id: int
     title: str
@@ -565,25 +450,12 @@ class Milestone:
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
-    def to_dict(self) -> dict:
-        return {
-            "id": self.id,
-            "goal_id": self.goal_id,
-            "title": self.title,
-            "target_metric": self.target_metric,
-            "target_value": self.target_value,
-            "current_value": self.current_value,
-            "deadline": self.deadline,
-            "status": self.status,
-            "created_at": self.created_at.isoformat() if self.created_at else None,
-            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
-        }
 
 
 # ─── Agent Goal Memory ──────────────────────────────────────────────────────
 
 @dataclass
-class AgentGoalMemory:
+class AgentGoalMemory(TebModel):
     """Per-goal working memory for a specialist agent — persists across invocations."""
     agent_type: str
     goal_id: int
@@ -594,23 +466,12 @@ class AgentGoalMemory:
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
-    def to_dict(self) -> dict:
-        return {
-            "id": self.id,
-            "agent_type": self.agent_type,
-            "goal_id": self.goal_id,
-            "context_json": self.context_json,
-            "summary": self.summary,
-            "invocation_count": self.invocation_count,
-            "created_at": self.created_at.isoformat() if self.created_at else None,
-            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
-        }
 
 
 # ─── Audit Event ─────────────────────────────────────────────────────────────
 
 @dataclass
-class AuditEvent:
+class AuditEvent(TebModel):
     """Immutable audit trail event for full lifecycle tracing."""
     goal_id: Optional[int]
     event_type: str                    # goal_created | clarifying_answered | decomposed |
@@ -623,22 +484,12 @@ class AuditEvent:
     id: Optional[int] = None
     created_at: Optional[datetime] = None
 
-    def to_dict(self) -> dict:
-        return {
-            "id": self.id,
-            "goal_id": self.goal_id,
-            "event_type": self.event_type,
-            "actor_type": self.actor_type,
-            "actor_id": self.actor_id,
-            "context_json": self.context_json,
-            "created_at": self.created_at.isoformat() if self.created_at else None,
-        }
 
 
 # ─── Goal Template ───────────────────────────────────────────────────────────
 
 @dataclass
-class GoalTemplate:
+class GoalTemplate(TebModel):
     """A shareable goal template — sanitized success path for re-use."""
     title: str
     description: str = ""
@@ -658,32 +509,18 @@ class GoalTemplate:
     id: Optional[int] = None
     created_at: Optional[datetime] = None
 
+
     def to_dict(self) -> dict:
-        return {
-            "id": self.id,
-            "title": self.title,
-            "description": self.description,
-            "goal_type": self.goal_type,
-            "category": self.category,
-            "skill_level": self.skill_level,
-            "tasks_json": self.tasks_json,
-            "milestones_json": self.milestones_json,
-            "services_json": self.services_json,
-            "outcome_type": self.outcome_type,
-            "estimated_days": self.estimated_days,
-            "rating": round(self.rating_sum / self.rating_count, 1) if self.rating_count > 0 else 0,
-            "rating_count": self.rating_count,
-            "times_used": self.times_used,
-            "source_goal_id": self.source_goal_id,
-            "author_id": self.author_id,
-            "created_at": self.created_at.isoformat() if self.created_at else None,
-        }
+        d = super().to_dict()
+        d["rating"] = round(self.rating_sum / self.rating_count, 1) if self.rating_count > 0 else 0
+        del d["rating_sum"]
+        return d
 
 
 # ─── Execution Context (Sandbox) ─────────────────────────────────────────────
 
 @dataclass
-class ExecutionContext:
+class ExecutionContext(TebModel):
     """Isolated execution sandbox for a goal."""
     goal_id: int
     browser_profile_dir: str = ""
@@ -694,23 +531,12 @@ class ExecutionContext:
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
-    def to_dict(self) -> dict:
-        return {
-            "id": self.id,
-            "goal_id": self.goal_id,
-            "browser_profile_dir": self.browser_profile_dir,
-            "temp_dir": self.temp_dir,
-            "credential_scope": self.credential_scope,
-            "status": self.status,
-            "created_at": self.created_at.isoformat() if self.created_at else None,
-            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
-        }
 
 
 # ─── Plugin Manifest ─────────────────────────────────────────────────────────
 
 @dataclass
-class PluginManifest:
+class PluginManifest(TebModel):
     """Registered execution plugin."""
     name: str
     version: str = "0.1.0"
@@ -722,24 +548,12 @@ class PluginManifest:
     id: Optional[int] = None
     created_at: Optional[datetime] = None
 
-    def to_dict(self) -> dict:
-        return {
-            "id": self.id,
-            "name": self.name,
-            "version": self.version,
-            "description": self.description,
-            "task_types": self.task_types,
-            "required_credentials": self.required_credentials,
-            "module_path": self.module_path,
-            "enabled": self.enabled,
-            "created_at": self.created_at.isoformat() if self.created_at else None,
-        }
 
 
 # ─── Task Comments (agent transparency) ─────────────────────────────────────
 
 @dataclass
-class TaskComment:
+class TaskComment(TebModel):
     """A comment on a task — from a human, agent, or system."""
     task_id: int
     content: str
@@ -748,22 +562,15 @@ class TaskComment:
     id: Optional[int] = None
     created_at: Optional[datetime] = None
 
-    def to_dict(self) -> dict:
-        return {
-            "id": self.id,
-            "task_id": self.task_id,
-            "content": self.content,
-            "author_type": self.author_type,
-            "author_id": self.author_id,
-            "created_at": self.created_at.isoformat() if self.created_at else None,
-        }
 
 
 # ─── Task Artifacts (execution outputs) ─────────────────────────────────────
 
 @dataclass
-class TaskArtifact:
+class TaskArtifact(TebModel):
     """A file, URL, screenshot, or code artifact produced during task execution."""
+    _json_fields = {'metadata_json': ('metadata', {})}
+
     task_id: int
     artifact_type: str                 # file | url | screenshot | code | api_response
     title: str = ""
@@ -772,24 +579,16 @@ class TaskArtifact:
     id: Optional[int] = None
     created_at: Optional[datetime] = None
 
-    def to_dict(self) -> dict:
-        import json as _json
-        return {
-            "id": self.id,
-            "task_id": self.task_id,
-            "artifact_type": self.artifact_type,
-            "title": self.title,
-            "content_url": self.content_url,
-            "metadata": _json.loads(self.metadata_json) if self.metadata_json else {},
-            "created_at": self.created_at.isoformat() if self.created_at else None,
-        }
 
 
 # ─── Webhook Configuration ──────────────────────────────────────────────────
 
 @dataclass
-class WebhookConfig:
+class WebhookConfig(TebModel):
     """Webhook that fires on goal/task/milestone events for external systems."""
+    _sensitive_fields = frozenset({'secret'})
+    _json_fields = {'events': ('events', [])}
+
     user_id: int
     url: str
     events: str = "[]"                 # JSON array of event types to listen for
@@ -799,25 +598,15 @@ class WebhookConfig:
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
-    def to_dict(self) -> dict:
-        import json as _json
-        return {
-            "id": self.id,
-            "user_id": self.user_id,
-            "url": self.url,
-            "events": _json.loads(self.events) if self.events else [],
-            "secret_set": bool(self.secret),
-            "enabled": self.enabled,
-            "created_at": self.created_at.isoformat() if self.created_at else None,
-            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
-        }
 
 
 # ─── Execution Checkpoints ──────────────────────────────────────────────────
 
 @dataclass
-class ExecutionCheckpoint:
+class ExecutionCheckpoint(TebModel):
     """Persistent checkpoint for resumable goal execution."""
+    _json_fields = {'state_json': ('state', {})}
+
     goal_id: int
     task_id: int
     step_index: int = 0
@@ -826,24 +615,15 @@ class ExecutionCheckpoint:
     id: Optional[int] = None
     created_at: Optional[datetime] = None
 
-    def to_dict(self) -> dict:
-        import json as _json
-        return {
-            "id": self.id,
-            "goal_id": self.goal_id,
-            "task_id": self.task_id,
-            "step_index": self.step_index,
-            "state": _json.loads(self.state_json) if self.state_json else {},
-            "status": self.status,
-            "created_at": self.created_at.isoformat() if self.created_at else None,
-        }
 
 
 # ─── Gamification (WP-04) ───────────────────────────────────────────────────
 
 @dataclass
-class UserXP:
+class UserXP(TebModel):
     """User experience points, level, and streak tracking."""
+    _empty_to_none_fields = frozenset({'last_activity_date'})
+
     user_id: int
     total_xp: int = 0
     level: int = 1
@@ -858,22 +638,16 @@ class UserXP:
     def xp_to_next_level(self) -> int:
         return (self.level * 100) - (self.total_xp % (self.level * 100))
 
+
     def to_dict(self) -> dict:
-        return {
-            "id": self.id,
-            "user_id": self.user_id,
-            "total_xp": self.total_xp,
-            "level": self.level,
-            "current_streak": self.current_streak,
-            "longest_streak": self.longest_streak,
-            "last_activity_date": self.last_activity_date or None,
-            "xp_to_next_level": self.xp_to_next_level,
-            "created_at": self.created_at.isoformat() if self.created_at else None,
-        }
+        d = super().to_dict()
+        d["xp_to_next_level"] = self.xp_to_next_level
+        del d["updated_at"]
+        return d
 
 
 @dataclass
-class Achievement:
+class Achievement(TebModel):
     """User achievement / badge."""
     user_id: int
     achievement_type: str
@@ -882,22 +656,15 @@ class Achievement:
     id: Optional[int] = None
     earned_at: Optional[datetime] = None
 
-    def to_dict(self) -> dict:
-        return {
-            "id": self.id,
-            "user_id": self.user_id,
-            "achievement_type": self.achievement_type,
-            "title": self.title,
-            "description": self.description,
-            "earned_at": self.earned_at.isoformat() if self.earned_at else None,
-        }
 
 
 # ─── Agent Scheduling & Flows (WP-02) ───────────────────────────────────────
 
 @dataclass
-class AgentSchedule:
+class AgentSchedule(TebModel):
     """Configurable heartbeat schedule for an agent on a specific goal."""
+    _empty_to_none_fields = frozenset({'next_run_at'})
+
     agent_type: str
     goal_id: int
     interval_hours: int = 8
@@ -906,21 +673,13 @@ class AgentSchedule:
     id: Optional[int] = None
     created_at: Optional[datetime] = None
 
-    def to_dict(self) -> dict:
-        return {
-            "id": self.id,
-            "agent_type": self.agent_type,
-            "goal_id": self.goal_id,
-            "interval_hours": self.interval_hours,
-            "next_run_at": self.next_run_at if self.next_run_at else None,
-            "paused": self.paused,
-            "created_at": self.created_at.isoformat() if self.created_at else None,
-        }
 
 
 @dataclass
-class AgentFlow:
+class AgentFlow(TebModel):
     """Event-driven agent pipeline: when one agent completes, trigger the next."""
+    _json_fields = {'steps_json': ('steps', [])}
+
     goal_id: int
     steps_json: str = "[]"
     current_step: int = 0
@@ -928,23 +687,15 @@ class AgentFlow:
     id: Optional[int] = None
     created_at: Optional[datetime] = None
 
-    def to_dict(self) -> dict:
-        import json as _json
-        return {
-            "id": self.id,
-            "goal_id": self.goal_id,
-            "steps": _json.loads(self.steps_json) if self.steps_json else [],
-            "current_step": self.current_step,
-            "status": self.status,
-            "created_at": self.created_at.isoformat() if self.created_at else None,
-        }
 
 
 # ─── Time Tracking (WP-08) ──────────────────────────────────────────────────
 
 @dataclass
-class TimeEntry:
+class TimeEntry(TebModel):
     """Time tracking entry for a task."""
+    _empty_to_none_fields = frozenset({'started_at', 'ended_at'})
+
     task_id: int
     user_id: int
     started_at: str = ""
@@ -954,24 +705,15 @@ class TimeEntry:
     id: Optional[int] = None
     created_at: Optional[datetime] = None
 
-    def to_dict(self) -> dict:
-        return {
-            "id": self.id,
-            "task_id": self.task_id,
-            "user_id": self.user_id,
-            "started_at": self.started_at or None,
-            "ended_at": self.ended_at or None,
-            "duration_minutes": self.duration_minutes,
-            "note": self.note,
-            "created_at": self.created_at.isoformat() if self.created_at else None,
-        }
 
 
 # ─── Task Recurrence (WP-10) ────────────────────────────────────────────────
 
 @dataclass
-class RecurrenceRule:
+class RecurrenceRule(TebModel):
     """Repeating task rule — daily, weekly, or monthly."""
+    _empty_to_none_fields = frozenset({'next_due', 'end_date'})
+
     task_id: int
     frequency: str = "weekly"          # daily | weekly | monthly
     interval: int = 1                  # every N frequency units
@@ -980,22 +722,12 @@ class RecurrenceRule:
     id: Optional[int] = None
     created_at: Optional[datetime] = None
 
-    def to_dict(self) -> dict:
-        return {
-            "id": self.id,
-            "task_id": self.task_id,
-            "frequency": self.frequency,
-            "interval": self.interval,
-            "next_due": self.next_due or None,
-            "end_date": self.end_date or None,
-            "created_at": self.created_at.isoformat() if self.created_at else None,
-        }
 
 
 # ─── Goal Collaboration (WP-11) ─────────────────────────────────────────────
 
 @dataclass
-class GoalCollaborator:
+class GoalCollaborator(TebModel):
     """User collaboration on a shared goal."""
     goal_id: int
     user_id: int
@@ -1003,20 +735,12 @@ class GoalCollaborator:
     id: Optional[int] = None
     created_at: Optional[datetime] = None
 
-    def to_dict(self) -> dict:
-        return {
-            "id": self.id,
-            "goal_id": self.goal_id,
-            "user_id": self.user_id,
-            "role": self.role,
-            "created_at": self.created_at.isoformat() if self.created_at else None,
-        }
 
 
 # ─── Custom Fields (WP-12) ──────────────────────────────────────────────────
 
 @dataclass
-class CustomField:
+class CustomField(TebModel):
     """User-defined metadata on a task.
 
     Supports basic types (text, number, date, url) and relational types:
@@ -1028,6 +752,8 @@ class CustomField:
       ``field_value`` stores the expression string (e.g. ``"days_until_due"``).
       ``config_json`` stores ``{"formula_type": "days_until_due|field_diff|concat", ...}``
     """
+    _json_fields = {'config_json': ('config', {})}
+
     task_id: int
     field_name: str
     field_value: str = ""
@@ -1036,24 +762,12 @@ class CustomField:
     id: Optional[int] = None
     created_at: Optional[datetime] = None
 
-    def to_dict(self) -> dict:
-        import json as _json
-        base = {
-            "id": self.id,
-            "task_id": self.task_id,
-            "field_name": self.field_name,
-            "field_value": self.field_value,
-            "field_type": self.field_type,
-            "config": _json.loads(self.config_json) if self.config_json else {},
-            "created_at": self.created_at.isoformat() if self.created_at else None,
-        }
-        return base
 
 
 # ─── Goal Progress Snapshots (WP-14) ────────────────────────────────────────
 
 @dataclass
-class ProgressSnapshot:
+class ProgressSnapshot(TebModel):
     """Periodic snapshot of goal completion percentage."""
     goal_id: int
     total_tasks: int = 0
@@ -1062,21 +776,12 @@ class ProgressSnapshot:
     id: Optional[int] = None
     captured_at: Optional[datetime] = None
 
-    def to_dict(self) -> dict:
-        return {
-            "id": self.id,
-            "goal_id": self.goal_id,
-            "total_tasks": self.total_tasks,
-            "completed_tasks": self.completed_tasks,
-            "percentage": self.percentage,
-            "captured_at": self.captured_at.isoformat() if self.captured_at else None,
-        }
 
 
 # ─── Notification Preferences (WP-16) ───────────────────────────────────────
 
 @dataclass
-class NotificationPreference:
+class NotificationPreference(TebModel):
     """Per-user notification settings."""
     user_id: int
     channel: str = "in_app"            # in_app | email | slack | telegram
@@ -1085,22 +790,16 @@ class NotificationPreference:
     id: Optional[int] = None
     created_at: Optional[datetime] = None
 
-    def to_dict(self) -> dict:
-        return {
-            "id": self.id,
-            "user_id": self.user_id,
-            "channel": self.channel,
-            "event_type": self.event_type,
-            "enabled": self.enabled,
-            "created_at": self.created_at.isoformat() if self.created_at else None,
-        }
 
 
 # ─── API Key Management (WP-17) ─────────────────────────────────────────────
 
 @dataclass
-class PersonalApiKey:
+class PersonalApiKey(TebModel):
     """Personal API key for programmatic access."""
+    _exclude_fields = frozenset({'key_hash'})
+    _empty_to_none_fields = frozenset({'last_used_at'})
+
     user_id: int
     name: str
     key_hash: str = ""
@@ -1109,22 +808,15 @@ class PersonalApiKey:
     id: Optional[int] = None
     created_at: Optional[datetime] = None
 
-    def to_dict(self) -> dict:
-        return {
-            "id": self.id,
-            "user_id": self.user_id,
-            "name": self.name,
-            "key_prefix": self.key_prefix,
-            "last_used_at": self.last_used_at or None,
-            "created_at": self.created_at.isoformat() if self.created_at else None,
-        }
 
 
 # ─── Task Blockers (WP-19) ──────────────────────────────────────────────────
 
 @dataclass
-class TaskBlocker:
+class TaskBlocker(TebModel):
     """Explicit blocker on a task with resolution tracking."""
+    _empty_to_none_fields = frozenset({'resolved_at'})
+
     task_id: int
     description: str
     blocker_type: str = "internal"     # internal | external | dependency | resource
@@ -1133,23 +825,15 @@ class TaskBlocker:
     id: Optional[int] = None
     created_at: Optional[datetime] = None
 
-    def to_dict(self) -> dict:
-        return {
-            "id": self.id,
-            "task_id": self.task_id,
-            "description": self.description,
-            "blocker_type": self.blocker_type,
-            "status": self.status,
-            "resolved_at": self.resolved_at or None,
-            "created_at": self.created_at.isoformat() if self.created_at else None,
-        }
 
 
 # ─── Dashboard Widgets (WP-20) ──────────────────────────────────────────────
 
 @dataclass
-class DashboardWidget:
+class DashboardWidget(TebModel):
     """User-configurable dashboard widget."""
+    _json_fields = {'config_json': ('config', {})}
+
     user_id: int
     widget_type: str                   # progress_chart | recent_tasks | streak | xp_bar | activity_feed | calendar
     position: int = 0
@@ -1158,23 +842,12 @@ class DashboardWidget:
     id: Optional[int] = None
     created_at: Optional[datetime] = None
 
-    def to_dict(self) -> dict:
-        import json as _json
-        return {
-            "id": self.id,
-            "user_id": self.user_id,
-            "widget_type": self.widget_type,
-            "position": self.position,
-            "config": _json.loads(self.config_json) if self.config_json else {},
-            "enabled": self.enabled,
-            "created_at": self.created_at.isoformat() if self.created_at else None,
-        }
 
 
 # ─── Phase 2: Collaboration ────────────────────────────────────────────────
 
 @dataclass
-class Workspace:
+class Workspace(TebModel):
     """Team workspace container."""
     name: str
     owner_id: int
@@ -1184,20 +857,10 @@ class Workspace:
     id: Optional[int] = None
     created_at: Optional[datetime] = None
 
-    def to_dict(self) -> dict:
-        return {
-            "id": self.id,
-            "name": self.name,
-            "owner_id": self.owner_id,
-            "description": self.description,
-            "invite_code": self.invite_code,
-            "plan": self.plan,
-            "created_at": self.created_at.isoformat() if self.created_at else None,
-        }
 
 
 @dataclass
-class WorkspaceMember:
+class WorkspaceMember(TebModel):
     """User membership in a workspace."""
     workspace_id: int
     user_id: int
@@ -1205,18 +868,10 @@ class WorkspaceMember:
     id: Optional[int] = None
     joined_at: Optional[datetime] = None
 
-    def to_dict(self) -> dict:
-        return {
-            "id": self.id,
-            "workspace_id": self.workspace_id,
-            "user_id": self.user_id,
-            "role": self.role,
-            "joined_at": self.joined_at.isoformat() if self.joined_at else None,
-        }
 
 
 @dataclass
-class Notification:
+class Notification(TebModel):
     """In-app notification for a user."""
     user_id: int
     title: str
@@ -1228,22 +883,10 @@ class Notification:
     id: Optional[int] = None
     created_at: Optional[datetime] = None
 
-    def to_dict(self) -> dict:
-        return {
-            "id": self.id,
-            "user_id": self.user_id,
-            "title": self.title,
-            "body": self.body,
-            "notification_type": self.notification_type,
-            "source_type": self.source_type,
-            "source_id": self.source_id,
-            "read": self.read,
-            "created_at": self.created_at.isoformat() if self.created_at else None,
-        }
 
 
 @dataclass
-class ActivityFeedEntry:
+class ActivityFeedEntry(TebModel):
     """Activity feed entry for team visibility."""
     user_id: int
     action: str                        # created | updated | completed | commented | assigned
@@ -1256,23 +899,10 @@ class ActivityFeedEntry:
     id: Optional[int] = None
     created_at: Optional[datetime] = None
 
-    def to_dict(self) -> dict:
-        return {
-            "id": self.id,
-            "user_id": self.user_id,
-            "action": self.action,
-            "entity_type": self.entity_type,
-            "entity_id": self.entity_id,
-            "entity_title": self.entity_title,
-            "details": self.details,
-            "workspace_id": self.workspace_id,
-            "goal_id": self.goal_id,
-            "created_at": self.created_at.isoformat() if self.created_at else None,
-        }
 
 
 @dataclass
-class CommentReaction:
+class CommentReaction(TebModel):
     """Emoji reaction on a comment."""
     comment_id: int
     user_id: int
@@ -1280,20 +910,12 @@ class CommentReaction:
     id: Optional[int] = None
     created_at: Optional[datetime] = None
 
-    def to_dict(self) -> dict:
-        return {
-            "id": self.id,
-            "comment_id": self.comment_id,
-            "user_id": self.user_id,
-            "emoji": self.emoji,
-            "created_at": self.created_at.isoformat() if self.created_at else None,
-        }
 
 
 # ─── Phase 2: Direct Messaging ─────────────────────────────────────────────
 
 @dataclass
-class DirectMessage:
+class DirectMessage(TebModel):
     """Direct message between two users."""
     sender_id: int
     recipient_id: int
@@ -1302,21 +924,12 @@ class DirectMessage:
     id: Optional[int] = None
     created_at: Optional[datetime] = None
 
-    def to_dict(self) -> dict:
-        return {
-            "id": self.id,
-            "sender_id": self.sender_id,
-            "recipient_id": self.recipient_id,
-            "content": self.content,
-            "read": self.read,
-            "created_at": self.created_at.isoformat() if self.created_at else None,
-        }
 
 
 # ─── Phase 2: Goal-Scoped Chat ─────────────────────────────────────────────
 
 @dataclass
-class GoalChatMessage:
+class GoalChatMessage(TebModel):
     """Chat message scoped to a goal."""
     goal_id: int
     user_id: int
@@ -1324,20 +937,12 @@ class GoalChatMessage:
     id: Optional[int] = None
     created_at: Optional[datetime] = None
 
-    def to_dict(self) -> dict:
-        return {
-            "id": self.id,
-            "goal_id": self.goal_id,
-            "user_id": self.user_id,
-            "content": self.content,
-            "created_at": self.created_at.isoformat() if self.created_at else None,
-        }
 
 
 # ─── Phase 2: Email Notification Preferences ───────────────────────────────
 
 @dataclass
-class EmailNotificationConfig:
+class EmailNotificationConfig(TebModel):
     """Email notification preferences for a user."""
     user_id: int
     digest_frequency: str = "none"     # none | daily | weekly
@@ -1346,21 +951,12 @@ class EmailNotificationConfig:
     notify_on_comment: bool = True
     id: Optional[int] = None
 
-    def to_dict(self) -> dict:
-        return {
-            "id": self.id,
-            "user_id": self.user_id,
-            "digest_frequency": self.digest_frequency,
-            "notify_on_mention": self.notify_on_mention,
-            "notify_on_assignment": self.notify_on_assignment,
-            "notify_on_comment": self.notify_on_comment,
-        }
 
 
 # ─── Phase 2: Push Subscriptions ───────────────────────────────────────────
 
 @dataclass
-class PushSubscription:
+class PushSubscription(TebModel):
     """Web push notification subscription."""
     user_id: int
     endpoint: str
@@ -1369,22 +965,15 @@ class PushSubscription:
     id: Optional[int] = None
     created_at: Optional[datetime] = None
 
-    def to_dict(self) -> dict:
-        return {
-            "id": self.id,
-            "user_id": self.user_id,
-            "endpoint": self.endpoint,
-            "p256dh": self.p256dh,
-            "auth": self.auth,
-            "created_at": self.created_at.isoformat() if self.created_at else None,
-        }
 
 
 # ─── Phase 6: Enterprise Security ──────────────────────────────────────────
 
 @dataclass
-class SSOConfig:
+class SSOConfig(TebModel):
     """SSO/SAML configuration for an organization."""
+    _sensitive_fields = frozenset({'certificate'})
+
     org_id: int
     provider: str = ""                 # okta | azure_ad | google | onelogin | custom
     entity_id: str = ""
@@ -1393,20 +982,10 @@ class SSOConfig:
     id: Optional[int] = None
     created_at: Optional[datetime] = None
 
-    def to_dict(self) -> dict:
-        return {
-            "id": self.id,
-            "org_id": self.org_id,
-            "provider": self.provider,
-            "entity_id": self.entity_id,
-            "sso_url": self.sso_url,
-            "certificate_set": bool(self.certificate),
-            "created_at": self.created_at.isoformat() if self.created_at else None,
-        }
 
 
 @dataclass
-class IPAllowlist:
+class IPAllowlist(TebModel):
     """IP allowlist entry for an organization."""
     org_id: int
     cidr_range: str = ""
@@ -1414,19 +993,13 @@ class IPAllowlist:
     id: Optional[int] = None
     created_at: Optional[datetime] = None
 
-    def to_dict(self) -> dict:
-        return {
-            "id": self.id,
-            "org_id": self.org_id,
-            "cidr_range": self.cidr_range,
-            "description": self.description,
-            "created_at": self.created_at.isoformat() if self.created_at else None,
-        }
 
 
 @dataclass
-class Organization:
+class Organization(TebModel):
     """Organization / tenant for multi-org enterprise support."""
+    _json_fields = {'settings_json': ('settings', {})}
+
     name: str
     slug: str = ""
     owner_id: Optional[int] = None
@@ -1434,20 +1007,10 @@ class Organization:
     id: Optional[int] = None
     created_at: Optional[datetime] = None
 
-    def to_dict(self) -> dict:
-        import json as _json
-        return {
-            "id": self.id,
-            "name": self.name,
-            "slug": self.slug,
-            "owner_id": self.owner_id,
-            "settings": _json.loads(self.settings_json) if self.settings_json else {},
-            "created_at": self.created_at.isoformat() if self.created_at else None,
-        }
 
 
 @dataclass
-class BrandingConfig:
+class BrandingConfig(TebModel):
     """Custom branding configuration for an organization."""
     org_id: int
     logo_url: str = ""
@@ -1458,22 +1021,14 @@ class BrandingConfig:
     id: Optional[int] = None
     created_at: Optional[datetime] = None
 
-    def to_dict(self) -> dict:
-        return {
-            "id": self.id,
-            "org_id": self.org_id,
-            "logo_url": self.logo_url,
-            "primary_color": self.primary_color,
-            "secondary_color": self.secondary_color,
-            "app_name": self.app_name,
-            "favicon_url": self.favicon_url,
-            "created_at": self.created_at.isoformat() if self.created_at else None,
-        }
 
 
 @dataclass
-class UserSession:
+class UserSession(TebModel):
     """Active user session tracking."""
+    _exclude_fields = frozenset({'session_token'})
+    _empty_to_none_fields = frozenset({'last_activity'})
+
     user_id: int
     session_token: str
     ip_address: str = ""
@@ -1483,21 +1038,13 @@ class UserSession:
     id: Optional[int] = None
     created_at: Optional[datetime] = None
 
-    def to_dict(self) -> dict:
-        return {
-            "id": self.id,
-            "user_id": self.user_id,
-            "ip_address": self.ip_address,
-            "user_agent": self.user_agent,
-            "is_active": self.is_active,
-            "last_activity": self.last_activity or None,
-            "created_at": self.created_at.isoformat() if self.created_at else None,
-        }
 
 
 @dataclass
-class TwoFactorConfig:
+class TwoFactorConfig(TebModel):
     """2FA configuration per user."""
+    _exclude_fields = frozenset({'totp_secret', 'backup_codes_hash'})
+
     user_id: int
     totp_secret: str = ""
     is_enabled: bool = False
@@ -1505,20 +1052,16 @@ class TwoFactorConfig:
     id: Optional[int] = None
     created_at: Optional[datetime] = None
 
-    def to_dict(self) -> dict:
-        return {
-            "id": self.id,
-            "user_id": self.user_id,
-            "is_enabled": self.is_enabled,
-            "created_at": self.created_at.isoformat() if self.created_at else None,
-        }
 
 
 # ─── Phase 3: Saved Views ───────────────────────────────────────────────────
 
 @dataclass
-class SavedView:
+class SavedView(TebModel):
     """User-saved view configuration (filters, sort, group-by)."""
+    _json_fields = {'filters_json': ('filters', {}), 'sort_json': ('sort', {})}
+    _empty_to_none_fields = frozenset({'group_by'})
+
     user_id: int
     name: str
     view_type: str = "list"            # list | kanban | table | gantt | workload | timeline | calendar | mindmap
@@ -1528,47 +1071,30 @@ class SavedView:
     id: Optional[int] = None
     created_at: Optional[datetime] = None
 
-    def to_dict(self) -> dict:
-        import json as _json
-        return {
-            "id": self.id,
-            "user_id": self.user_id,
-            "name": self.name,
-            "view_type": self.view_type,
-            "filters": _json.loads(self.filters_json) if self.filters_json else {},
-            "sort": _json.loads(self.sort_json) if self.sort_json else {},
-            "group_by": self.group_by or None,
-            "created_at": self.created_at.isoformat() if self.created_at else None,
-        }
 
 
 # ─── Phase 3: Dashboard Layouts ─────────────────────────────────────────────
 
 @dataclass
-class DashboardLayout:
+class DashboardLayout(TebModel):
     """User-configurable dashboard layout with positioned widgets."""
+    _json_fields = {'widgets_json': ('widgets', [])}
+
     user_id: int
     name: str
     widgets_json: str = "[]"
     id: Optional[int] = None
     created_at: Optional[datetime] = None
 
-    def to_dict(self) -> dict:
-        import json as _json
-        return {
-            "id": self.id,
-            "user_id": self.user_id,
-            "name": self.name,
-            "widgets": _json.loads(self.widgets_json) if self.widgets_json else [],
-            "created_at": self.created_at.isoformat() if self.created_at else None,
-        }
 
 
 # ─── Phase 3: Scheduled Reports ─────────────────────────────────────────────
 
 @dataclass
-class ScheduledReport:
+class ScheduledReport(TebModel):
     """Configuration for a scheduled report delivery."""
+    _json_fields = {'recipients_json': ('recipients', [])}
+
     user_id: int
     report_type: str = "progress"      # progress | burndown | time_tracking
     frequency: str = "weekly"           # daily | weekly | monthly
@@ -1577,23 +1103,12 @@ class ScheduledReport:
     created_at: Optional[datetime] = None
     last_sent_at: Optional[datetime] = None
 
-    def to_dict(self) -> dict:
-        import json as _json
-        return {
-            "id": self.id,
-            "user_id": self.user_id,
-            "report_type": self.report_type,
-            "frequency": self.frequency,
-            "recipients": _json.loads(self.recipients_json) if self.recipients_json else [],
-            "created_at": self.created_at.isoformat() if self.created_at else None,
-            "last_sent_at": self.last_sent_at.isoformat() if self.last_sent_at else None,
-        }
 
 
 # ─── Phase 5: Ecosystem ──────────────────────────────────────────────────────
 
 @dataclass
-class IntegrationListing:
+class IntegrationListing(TebModel):
     """A published integration in the integration directory/marketplace."""
     name: str
     category: str = ""
@@ -1604,22 +1119,13 @@ class IntegrationListing:
     id: Optional[int] = None
     created_at: Optional[datetime] = None
 
-    def to_dict(self) -> dict:
-        return {
-            "id": self.id,
-            "name": self.name,
-            "category": self.category,
-            "description": self.description,
-            "icon_url": self.icon_url,
-            "auth_type": self.auth_type,
-            "enabled": self.enabled,
-            "created_at": self.created_at.isoformat() if self.created_at else None,
-        }
 
 
 @dataclass
-class OAuthConnection:
+class OAuthConnection(TebModel):
     """Stored OAuth connection for a user+provider pair."""
+    _exclude_fields = frozenset({'access_token_encrypted', 'refresh_token_encrypted'})
+
     user_id: int
     provider: str
     access_token_encrypted: str = ""
@@ -1628,20 +1134,18 @@ class OAuthConnection:
     id: Optional[int] = None
     created_at: Optional[datetime] = None
 
+
     def to_dict(self) -> dict:
-        return {
-            "id": self.id,
-            "user_id": self.user_id,
-            "provider": self.provider,
-            "connected": bool(self.access_token_encrypted),
-            "expires_at": self.expires_at.isoformat() if self.expires_at else None,
-            "created_at": self.created_at.isoformat() if self.created_at else None,
-        }
+        d = super().to_dict()
+        d["connected"] = bool(self.access_token_encrypted)
+        return d
 
 
 @dataclass
-class IntegrationTemplate:
+class IntegrationTemplate(TebModel):
     """Pre-built integration mapping between two services."""
+    _json_fields = {'mapping_json': ('mapping', {})}
+
     name: str
     description: str = ""
     source_service: str = ""
@@ -1650,22 +1154,13 @@ class IntegrationTemplate:
     id: Optional[int] = None
     created_at: Optional[datetime] = None
 
-    def to_dict(self) -> dict:
-        import json as _json
-        return {
-            "id": self.id,
-            "name": self.name,
-            "description": self.description,
-            "source_service": self.source_service,
-            "target_service": self.target_service,
-            "mapping": _json.loads(self.mapping_json) if self.mapping_json else {},
-            "created_at": self.created_at.isoformat() if self.created_at else None,
-        }
 
 
 @dataclass
-class WebhookRule:
+class WebhookRule(TebModel):
     """User-defined webhook routing rule with filters."""
+    _json_fields = {'filter_json': ('filter', {}), 'headers_json': ('headers', {})}
+
     user_id: int
     name: str = ""
     event_type: str = ""
@@ -1676,24 +1171,13 @@ class WebhookRule:
     id: Optional[int] = None
     created_at: Optional[datetime] = None
 
-    def to_dict(self) -> dict:
-        import json as _json
-        return {
-            "id": self.id,
-            "user_id": self.user_id,
-            "name": self.name,
-            "event_type": self.event_type,
-            "filter": _json.loads(self.filter_json) if self.filter_json else {},
-            "target_url": self.target_url,
-            "headers": _json.loads(self.headers_json) if self.headers_json else {},
-            "active": self.active,
-            "created_at": self.created_at.isoformat() if self.created_at else None,
-        }
 
 
 @dataclass
-class PluginListing:
+class PluginListing(TebModel):
     """A plugin available in the plugin marketplace."""
+    _json_fields = {'manifest_json': ('manifest', {})}
+
     name: str
     description: str = ""
     author: str = ""
@@ -1704,24 +1188,13 @@ class PluginListing:
     id: Optional[int] = None
     created_at: Optional[datetime] = None
 
-    def to_dict(self) -> dict:
-        import json as _json
-        return {
-            "id": self.id,
-            "name": self.name,
-            "description": self.description,
-            "author": self.author,
-            "version": self.version,
-            "downloads": self.downloads,
-            "rating": self.rating,
-            "manifest": _json.loads(self.manifest_json) if self.manifest_json else {},
-            "created_at": self.created_at.isoformat() if self.created_at else None,
-        }
 
 
 @dataclass
-class CustomFieldDefinition:
+class CustomFieldDefinition(TebModel):
     """Plugin-defined custom field type."""
+    _json_fields = {'options_json': ('options', [])}
+
     plugin_id: int
     field_type: str = "text"
     label: str = ""
@@ -1729,21 +1202,13 @@ class CustomFieldDefinition:
     id: Optional[int] = None
     created_at: Optional[datetime] = None
 
-    def to_dict(self) -> dict:
-        import json as _json
-        return {
-            "id": self.id,
-            "plugin_id": self.plugin_id,
-            "field_type": self.field_type,
-            "label": self.label,
-            "options": _json.loads(self.options_json) if self.options_json else [],
-            "created_at": self.created_at.isoformat() if self.created_at else None,
-        }
 
 
 @dataclass
-class PluginView:
+class PluginView(TebModel):
     """Custom view provided by a plugin."""
+    _json_fields = {'config_json': ('config', {})}
+
     plugin_id: int
     name: str = ""
     view_type: str = "board"
@@ -1751,21 +1216,13 @@ class PluginView:
     id: Optional[int] = None
     created_at: Optional[datetime] = None
 
-    def to_dict(self) -> dict:
-        import json as _json
-        return {
-            "id": self.id,
-            "plugin_id": self.plugin_id,
-            "name": self.name,
-            "view_type": self.view_type,
-            "config": _json.loads(self.config_json) if self.config_json else {},
-            "created_at": self.created_at.isoformat() if self.created_at else None,
-        }
 
 
 @dataclass
-class Theme:
+class Theme(TebModel):
     """UI theme with customizable CSS variables."""
+    _json_fields = {'css_variables_json': ('css_variables', {})}
+
     name: str
     author: str = ""
     css_variables_json: str = "{}"
@@ -1773,26 +1230,17 @@ class Theme:
     id: Optional[int] = None
     created_at: Optional[datetime] = None
 
-    def to_dict(self) -> dict:
-        import json as _json
-        return {
-            "id": self.id,
-            "name": self.name,
-            "author": self.author,
-            "css_variables": _json.loads(self.css_variables_json) if self.css_variables_json else {},
-            "is_active": self.is_active,
-            "created_at": self.created_at.isoformat() if self.created_at else None,
-        }
 
 
 # ─── Phase 7: Community models ───────────────────────────────────────────────
 
-import json as _json_std
 
 
 @dataclass
-class TemplateGalleryEntry:
+class TemplateGalleryEntry(TebModel):
     """User-contributed goal/project template."""
+    _json_fields = {'template_json': ('template', {})}
+
     name: str
     description: str = ""
     author: str = ""
@@ -1803,18 +1251,10 @@ class TemplateGalleryEntry:
     id: Optional[int] = None
     created_at: Optional[datetime] = None
 
-    def to_dict(self) -> dict:
-        return {
-            "id": self.id, "name": self.name, "description": self.description,
-            "author": self.author, "category": self.category,
-            "template": _json_std.loads(self.template_json) if self.template_json else {},
-            "downloads": self.downloads, "rating": self.rating,
-            "created_at": self.created_at.isoformat() if self.created_at else None,
-        }
 
 
 @dataclass
-class BlogPost:
+class BlogPost(TebModel):
     """Blog post for product updates and tutorials."""
     title: str
     slug: str
@@ -1824,17 +1264,10 @@ class BlogPost:
     id: Optional[int] = None
     created_at: Optional[datetime] = None
 
-    def to_dict(self) -> dict:
-        return {
-            "id": self.id, "title": self.title, "slug": self.slug,
-            "content": self.content, "author": self.author,
-            "published": self.published,
-            "created_at": self.created_at.isoformat() if self.created_at else None,
-        }
 
 
 @dataclass
-class RoadmapItem:
+class RoadmapItem(TebModel):
     """Public roadmap feature item."""
     title: str
     description: str = ""
@@ -1845,36 +1278,26 @@ class RoadmapItem:
     id: Optional[int] = None
     created_at: Optional[datetime] = None
 
-    def to_dict(self) -> dict:
-        return {
-            "id": self.id, "title": self.title, "description": self.description,
-            "status": self.status, "votes": self.votes, "category": self.category,
-            "target_date": self.target_date,
-            "created_at": self.created_at.isoformat() if self.created_at else None,
-        }
 
 
 @dataclass
-class FeatureVote:
+class FeatureVote(TebModel):
     """User vote on a roadmap item."""
     user_id: int
     roadmap_item_id: int
     id: Optional[int] = None
     created_at: Optional[datetime] = None
 
-    def to_dict(self) -> dict:
-        return {
-            "id": self.id, "user_id": self.user_id,
-            "roadmap_item_id": self.roadmap_item_id,
-            "created_at": self.created_at.isoformat() if self.created_at else None,
-        }
 
 
 # ─── Phase 1: Risk Assessment ───────────────────────────────────────────────
 
 @dataclass
-class TaskRisk:
+class TaskRisk(TebModel):
     """Risk assessment for a task."""
+    _json_fields = {'risk_factors': ('risk_factors', [])}
+    _empty_to_none_fields = frozenset({'assessed_at'})
+
     task_id: int
     goal_id: int
     risk_score: float = 0.0            # 0.0 (no risk) to 1.0 (critical)
@@ -1884,25 +1307,15 @@ class TaskRisk:
     id: Optional[int] = None
     created_at: Optional[datetime] = None
 
-    def to_dict(self) -> dict:
-        import json as _json
-        return {
-            "id": self.id,
-            "task_id": self.task_id,
-            "goal_id": self.goal_id,
-            "risk_score": self.risk_score,
-            "risk_factors": _json.loads(self.risk_factors) if self.risk_factors else [],
-            "estimated_delay": self.estimated_delay,
-            "assessed_at": self.assessed_at or None,
-            "created_at": self.created_at.isoformat() if self.created_at else None,
-        }
 
 
 # ─── Phase 2: Task Scheduling ───────────────────────────────────────────────
 
 @dataclass
-class TaskSchedule:
+class TaskSchedule(TebModel):
     """Persistent schedule for a task."""
+    _empty_to_none_fields = frozenset({'scheduled_start', 'scheduled_end'})
+
     task_id: int
     goal_id: int
     user_id: int
@@ -1912,24 +1325,15 @@ class TaskSchedule:
     id: Optional[int] = None
     created_at: Optional[datetime] = None
 
-    def to_dict(self) -> dict:
-        return {
-            "id": self.id,
-            "task_id": self.task_id,
-            "goal_id": self.goal_id,
-            "user_id": self.user_id,
-            "scheduled_start": self.scheduled_start or None,
-            "scheduled_end": self.scheduled_end or None,
-            "calendar_slot": self.calendar_slot,
-            "created_at": self.created_at.isoformat() if self.created_at else None,
-        }
 
 
 # ─── Phase 3: Progress Reports ──────────────────────────────────────────────
 
 @dataclass
-class ProgressReport:
+class ProgressReport(TebModel):
     """Auto-generated progress report for a goal."""
+    _json_fields = {'metrics_json': ('metrics', []), 'blockers_json': ('blockers', []), 'next_actions_json': ('next_actions', [])}
+
     goal_id: int
     user_id: int
     summary: str = ""
@@ -1939,25 +1343,15 @@ class ProgressReport:
     id: Optional[int] = None
     created_at: Optional[datetime] = None
 
-    def to_dict(self) -> dict:
-        import json as _json
-        return {
-            "id": self.id,
-            "goal_id": self.goal_id,
-            "user_id": self.user_id,
-            "summary": self.summary,
-            "metrics": _json.loads(self.metrics_json) if self.metrics_json else {},
-            "blockers": _json.loads(self.blockers_json) if self.blockers_json else [],
-            "next_actions": _json.loads(self.next_actions_json) if self.next_actions_json else [],
-            "created_at": self.created_at.isoformat() if self.created_at else None,
-        }
 
 
 # ─── Phase 6: Social Gamification ───────────────────────────────────────────
 
 @dataclass
-class Streak:
+class Streak(TebModel):
     """User completion streak tracking."""
+    _empty_to_none_fields = frozenset({'last_activity_date'})
+
     user_id: int
     current_streak: int = 0
     longest_streak: int = 0
@@ -1967,21 +1361,10 @@ class Streak:
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
-    def to_dict(self) -> dict:
-        return {
-            "id": self.id,
-            "user_id": self.user_id,
-            "current_streak": self.current_streak,
-            "longest_streak": self.longest_streak,
-            "last_activity_date": self.last_activity_date or None,
-            "streak_type": self.streak_type,
-            "created_at": self.created_at.isoformat() if self.created_at else None,
-            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
-        }
 
 
 @dataclass
-class LeaderboardEntry:
+class LeaderboardEntry(TebModel):
     """User position on a leaderboard."""
     user_id: int
     score: int = 0
@@ -1990,20 +1373,14 @@ class LeaderboardEntry:
     id: Optional[int] = None
     created_at: Optional[datetime] = None
 
-    def to_dict(self) -> dict:
-        return {
-            "id": self.id,
-            "user_id": self.user_id,
-            "score": self.score,
-            "rank": self.rank,
-            "period": self.period,
-            "created_at": self.created_at.isoformat() if self.created_at else None,
-        }
 
 
 @dataclass
-class TeamChallenge:
+class TeamChallenge(TebModel):
     """Team challenge for social accountability."""
+    _json_fields = {'participants_json': ('participants', [])}
+    _empty_to_none_fields = frozenset({'start_date', 'end_date'})
+
     title: str
     description: str = ""
     goal_type: str = "tasks_completed" # tasks_completed | xp_earned | streak_days
@@ -2017,28 +1394,12 @@ class TeamChallenge:
     id: Optional[int] = None
     created_at: Optional[datetime] = None
 
-    def to_dict(self) -> dict:
-        import json as _json
-        return {
-            "id": self.id,
-            "title": self.title,
-            "description": self.description,
-            "goal_type": self.goal_type,
-            "target_value": self.target_value,
-            "current_value": self.current_value,
-            "status": self.status,
-            "creator_id": self.creator_id,
-            "participants": _json.loads(self.participants_json) if self.participants_json else [],
-            "start_date": self.start_date or None,
-            "end_date": self.end_date or None,
-            "created_at": self.created_at.isoformat() if self.created_at else None,
-        }
 
 
 # ─── Content Blocks (recursive block-based content) ─────────────────────────
 
 @dataclass
-class ContentBlock:
+class ContentBlock(TebModel):
     """A single block in a recursive content tree.
 
     Every task or goal description can be represented as a tree of typed blocks,
@@ -2056,6 +1417,8 @@ class ContentBlock:
         - color: callout/highlight color
         - caption: image/embed caption
     """
+    _json_fields = {'properties_json': ('properties', {})}
+
     entity_type: str                    # "task" | "goal" | "comment"
     entity_id: int                      # FK to tasks.id, goals.id, or comments.id
     block_type: str = "paragraph"       # paragraph | heading | code | quote | callout | checklist_item | bullet_list | numbered_list | image | embed | divider | toggle
@@ -2067,17 +1430,3 @@ class ContentBlock:
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
 
-    def to_dict(self) -> dict:
-        import json as _json
-        return {
-            "id": self.id,
-            "entity_type": self.entity_type,
-            "entity_id": self.entity_id,
-            "block_type": self.block_type,
-            "content": self.content,
-            "properties": _json.loads(self.properties_json) if self.properties_json else {},
-            "parent_block_id": self.parent_block_id,
-            "order_index": self.order_index,
-            "created_at": self.created_at.isoformat() if self.created_at else None,
-            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
-        }

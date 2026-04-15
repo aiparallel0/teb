@@ -1,23 +1,7 @@
 """Tests for architectural improvements: content blocks, cross-goal views, and SSE integration."""
-import os
 import pytest
 import pytest_asyncio
 from httpx import AsyncClient, ASGITransport
-
-TEST_DB = "test_arch_features.db"
-
-
-@pytest.fixture(autouse=True, scope="session")
-def setup_test_db():
-    """Point storage at a separate test database."""
-    from teb import storage
-    storage.set_db_path(TEST_DB)
-    storage.init_db()
-    yield
-    try:
-        os.remove(TEST_DB)
-    except FileNotFoundError:
-        pass
 
 
 @pytest.fixture
@@ -348,7 +332,7 @@ async def test_sse_token_query_param_auth():
     """Verify that token query param is accepted by _get_user_id."""
     # Test the auth mechanism directly rather than streaming
     from teb import auth
-    from teb.main import _get_user_id
+    from teb.routers.deps import get_user_id as _get_user_id
     from starlette.testclient import TestClient
     from starlette.requests import Request
     from starlette.datastructures import Headers, QueryParams

@@ -8,15 +8,6 @@ from teb.main import app, reset_rate_limits
 _counter = 0
 
 
-@pytest.fixture(autouse=True)
-def _fresh_db(tmp_path):
-    db = str(tmp_path / "test_phase6.db")
-    storage.set_db_path(db)
-    storage.init_db()
-    yield
-    storage.set_db_path(None)
-
-
 @pytest.fixture()
 def client():
     return TestClient(app, raise_server_exceptions=False)

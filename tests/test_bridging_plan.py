@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
@@ -24,22 +23,7 @@ from teb.models import (
     PluginManifest, Task,
 )
 
-TEST_DB = "test_bridging_plan.db"
-
-
 # ─── Fixtures ───────────────────────────────────────────────────────────────────
-
-@pytest.fixture(autouse=True, scope="session")
-def setup_test_db():
-    """Point storage at a separate test database."""
-    storage.set_db_path(TEST_DB)
-    storage.init_db()
-    yield
-    try:
-        os.remove(TEST_DB)
-    except FileNotFoundError:
-        pass
-
 
 @pytest.fixture
 def anyio_backend():

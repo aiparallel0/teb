@@ -4,7 +4,6 @@ Telegram webhook, budget-executor wiring, daily reset, success path learning.
 """
 
 import json
-import os
 import time
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
@@ -13,8 +12,6 @@ import pytest
 from fastapi.testclient import TestClient
 
 # ─── Env setup (no real AI) ──────────────────────────────────────────────────
-
-TEST_DB = "test_plan_features.db"
 
 from teb import auth, config, storage
 from teb.decomposer import (
@@ -33,33 +30,6 @@ client = TestClient(app)
 
 
 # ─── Helpers ──────────────────────────────────────────────────────────────────
-
-@pytest.fixture(autouse=True, scope="session")
-def setup_test_db():
-    storage.set_db_path(TEST_DB)
-    storage.init_db()
-    yield
-    try:
-        os.remove(TEST_DB)
-    except FileNotFoundError:
-        pass
-
-
-@pytest.fixture(autouse=True)
-def clean_tables():
-    """Clean all tables between tests."""
-    with storage._conn() as con:
-        for table in [
-            "spending_requests", "spending_budgets", "execution_logs",
-            "tasks", "goals", "users", "user_profiles", "messaging_configs",
-            "api_credentials", "success_paths", "telegram_sessions",
-        ]:
-            try:
-                con.execute(f"DELETE FROM {table}")
-            except Exception:
-                pass
-    yield
-
 
 def _make_goal(title="test goal", desc="", user_id=None):
     g = Goal(title=title, description=desc)

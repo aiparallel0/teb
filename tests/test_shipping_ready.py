@@ -1,22 +1,7 @@
 """Tests for shipping-ready features: goal deletion, API endpoint fixes, and UI wiring."""
-import os
 import pytest
 import pytest_asyncio
 from httpx import AsyncClient, ASGITransport
-
-TEST_DB = "test_shipping.db"
-
-
-@pytest.fixture(autouse=True, scope="session")
-def setup_test_db():
-    from teb import storage
-    storage.set_db_path(TEST_DB)
-    storage.init_db()
-    yield
-    try:
-        os.remove(TEST_DB)
-    except FileNotFoundError:
-        pass
 
 
 @pytest.fixture

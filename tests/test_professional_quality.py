@@ -11,29 +11,15 @@ Covers:
 - Structured error responses
 """
 
-import os
 import pytest
 from fastapi.testclient import TestClient
 
 from teb import storage
-from teb.main import app, _paginate, _DEFAULT_PAGE_SIZE, _MAX_PAGE_SIZE, reset_rate_limits
+from teb.main import app, reset_rate_limits
+from teb.routers.deps import paginate as _paginate, _MAX_PAGE_SIZE
 
 
 # ─── Test Setup ───────────────────────────────────────────────────────────────
-
-TEST_DB = "test_professional_quality.db"
-
-
-@pytest.fixture(autouse=True, scope="module")
-def setup_test_db():
-    storage.set_db_path(TEST_DB)
-    storage.init_db()
-    reset_rate_limits()
-    yield
-    try:
-        os.remove(TEST_DB)
-    except FileNotFoundError:
-        pass
 
 
 client = TestClient(app)
@@ -434,7 +420,7 @@ class TestStructuredErrors:
         assert r.status_code == 401
 
     def test_error_response_helper(self):
-        from teb.main import _error_response
+        from teb.routers.deps import error_response as _error_response
         import json
         resp = _error_response(400, "INVALID_INPUT", "Bad data", details=["field1"], request_id="abc123")
         data = json.loads(resp.body.decode())

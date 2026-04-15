@@ -31,17 +31,6 @@ from teb.models import (
 
 # ─── Fixtures ────────────────────────────────────────────────────────────────
 
-@pytest.fixture(autouse=True)
-def _fresh_db(tmp_path):
-    db = str(tmp_path / "test_grade_bridging.db")
-    storage.set_db_path(db)
-    storage.init_db()
-    # Reset the bridging tables flag so each test gets fresh tables
-    storage._bridging_tables_ensured = False
-    yield
-    storage.set_db_path(None)
-
-
 @pytest.fixture()
 def client():
     from teb.main import app

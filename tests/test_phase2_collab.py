@@ -2,17 +2,7 @@
 import pytest
 from starlette.testclient import TestClient
 
-from teb import storage
 from teb.main import app, reset_rate_limits
-
-
-@pytest.fixture(autouse=True)
-def _fresh_db(tmp_path):
-    db = str(tmp_path / "test_phase2_collab.db")
-    storage.set_db_path(db)
-    storage.init_db()
-    yield
-    storage.set_db_path(None)
 
 
 @pytest.fixture()

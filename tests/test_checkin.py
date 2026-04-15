@@ -18,15 +18,6 @@ from teb.models import CheckIn, Goal, NudgeEvent, OutcomeMetric, Task
 
 # ─── Fixtures ──────────────────────────────────────────────────────────────────
 
-@pytest.fixture(autouse=True)
-def _fresh_db(tmp_path):
-    db = str(tmp_path / "test.db")
-    storage.set_db_path(db)
-    storage.init_db()
-    yield
-    storage.set_db_path(None)
-
-
 @pytest.fixture()
 def _goal_with_tasks():
     """Create a goal with a few tasks for testing."""
