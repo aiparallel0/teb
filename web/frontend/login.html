@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Sign In — Image to Text</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/uswds@3/dist/css/uswds.min.css" />
+</head>
+<body>
+  <header class="usa-header usa-header--basic">
+    <div class="usa-nav-container">
+      <div class="usa-navbar">
+        <div class="usa-logo">
+          <a href="index.html" class="usa-logo__text">Image to Text</a>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <main class="usa-section">
+    <div class="grid-container">
+      <div class="grid-row grid-gap">
+        <div class="tablet:grid-col-6 tablet:grid-offset-3">
+          <h1 class="font-heading-xl">Sign In</h1>
+          <p id="error-msg" class="usa-error-message" style="display:none"></p>
+
+          <form id="login-form" class="usa-form" novalidate>
+            <div class="usa-form-group">
+              <label class="usa-label" for="email">Email address</label>
+              <input class="usa-input" id="email" name="email" type="email" autocomplete="email" required />
+            </div>
+            <div class="usa-form-group">
+              <label class="usa-label" for="password">Password</label>
+              <input class="usa-input" id="password" name="password" type="password" autocomplete="current-password" required />
+            </div>
+            <button class="usa-button" id="submitBtn" type="submit">Sign In</button>
+          </form>
+
+          <p class="margin-top-3">
+            Don't have an account?
+            <a href="register.html">Register</a>
+          </p>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <script>
+    document.getElementById('login-form').addEventListener('submit', async function (e) {
+      e.preventDefault();
+      const errorMsg = document.getElementById('error-msg');
+      const submitBtn = document.getElementById('submitBtn');
+      const email = document.getElementById('email').value.trim();
+      const password = document.getElementById('password').value;
+
+      errorMsg.style.display = 'none';
+      submitBtn.disabled = true;
+      submitBtn.textContent = 'Signing in…';
+
+      try {
+        const res = await fetch('/api/auth/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email, password }),
+        });
+        if (!res.ok) {
+          let msg = 'Login failed';
+          try { const err = await res.json(); msg = err.detail || err.message || msg; } catch (_) {}
+          throw new Error(msg);
+        }
+        const data = await res.json();
+        localStorage.setItem('access_token', data.access_token);
+        localStorage.setItem('refresh_token', data.refresh_token);
+        window.location.href = 'index.html';
+      } catch (err) {
+        errorMsg.textContent = err.message;
+        errorMsg.style.display = 'block';
+        submitBtn.disabled = false;
+        submitBtn.textContent = 'Sign In';
+      }
+    });
+  </script>
+</body>
+</html>
